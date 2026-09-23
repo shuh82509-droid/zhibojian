@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { Readable } from 'node:stream';
+import {createCalendarUserReader} from './calendar-user-reader.mjs';
 import {
   chinaDateFor,
   isLifecycleRefreshDue,
@@ -119,6 +120,13 @@ const communicationBroadcastModes = Object.freeze(['单播', '双播']);
 const communicationPlatforms = Object.freeze(['抖音', '视频号']);
 const recruitmentReviewerOpenId = process.env.RECRUITMENT_REVIEWER_OPEN_ID || 'ou_308a92748ac8b66de306a99b2010d755';
 const recruitmentCalendarId = String(process.env.RECRUITMENT_CALENDAR_ID || '').trim();
+const recruitmentCalendarReader = createCalendarUserReader({
+  appId, appSecret, calendarId:recruitmentCalendarId,
+  expectedOpenId:String(process.env.RECRUITMENT_CALENDAR_READER_OPEN_ID || '').trim(),
+  redirectUri:String(process.env.RECRUITMENT_CALENDAR_OAUTH_REDIRECT_URI || '').trim(),
+  storePath:String(process.env.RECRUITMENT_CALENDAR_OAUTH_STORE_PATH || '').trim(),
+  encryptionKey:String(process.env.RECRUITMENT_CALENDAR_OAUTH_KEY || '').trim(),
+});
 const communicationProductSources = Object.freeze({
   '水润面膜': [
     'https://jqx28l0j4lx.feishu.cn/wiki/Jejow2SyBiEeHXkm2WGcGTXwnkc',
@@ -1519,11 +1527,14 @@ function recruitmentCycleRange(month) {
   };
 }
 async function readRecruitmentCalendar(cycle) {
-  if (!recruitmentCalendarId) return {events:{},status:'待授权：请把指定招聘面试日历以“可查看详情”共享给直播中枢飞书应用，并由维护人配置 RECRUITMENT_CALENDAR_ID；当前群聊记录不冒充正式日历。'};
-  const query = new URLSearchParams({start_time:String(cycle.startTime),end_time:String(cycle.endTime),page_size:'100'});
-  const data = await feishuGet(`/calendar/v4/calendars/${encodeURIComponent(recruitmentCalendarId)}/events?${query}`);
+  const authStatus = await recruitmentCalendarReader.status();
+  if (!authStatus.authorized) return {events:{},status:`待授权：${authStatus.reason || '舒豪用户授权未生效'}；群聊记录不冒充正式面试日历。`};
+  const query = new URLSearchParams({start_time:String(cycle.startTime),end_time:String(cycle.endTime),page_size:'1000'});
+  const data = await recruitmentCalendarReader.get(`/calendar/v4/calendars/${encodeURIComponent(recruitmentCalendarId)}/events?${query}`);
+  if (data.has_more) throw new FeishuError('正式面试日历时段查询超过上限，已停止展示。', 502, 'calendar_range_incomplete');
   const events = {};
   materialArray(data.items).forEach(item => {
+    if (item?.status === 'cancelled' || !/(?:面试|初试|复试|试播)/u.test(String(item?.summary || ''))) return;
     const timestamp = Number(item?.start_time?.timestamp || 0);
     const date = item?.start_time?.date || (timestamp ? new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(timestamp * 1000)) : '');
     if (!/^20\d{2}-\d{2}-\d{2}$/u.test(String(date))) return;
@@ -1549,7 +1560,7 @@ async function recruitmentCycleSnapshot(month) {
     hiredCount:candidates.filter(item => item.inSubmissionCohort && item.stage === 'hired').length,
     assessmentPassedCount:candidates.filter(item => item.inSubmissionCohort && item.assessmentPassed).length,
   };
-  const calendar = calendarResult.status === 'fulfilled' ? calendarResult.value : {events:{},status:`待授权：正式面试日历读取失败（${truncateForModel(calendarResult.reason?.message || '权限不足', 120)}）；请确认已向直播中枢飞书应用开放详情读取。`};
+  const calendar = calendarResult.status === 'fulfilled' ? calendarResult.value : {events:{},status:`待核验：正式面试日历读取失败（${truncateForModel(calendarResult.reason?.message || '用户授权无效', 120)}）；请核验舒豪授权及倪梦萍日历的订阅者权限。`};
   const interviewEvents = structuredClone(parsed.interviewEvents || {});
   Object.entries(calendar.events || {}).forEach(([date, items]) => { interviewEvents[date] = [...(interviewEvents[date] || []), ...items]; });
   return {
@@ -1871,6 +1882,35 @@ function canRefreshLifecycle(auth) {
   const permissions = auth?.permissions || {};
   return auth?.mode === 'internal' || permissions.super_admin || permissions.operation_admin || permissions.manage_permissions;
 }
+const calendarOAuthCookie = 'live_calendar_oauth_state';
+function calendarOAuthCookieValue(req) {
+  const cookie = String(req.headers.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith(`${calendarOAuthCookie}=`));
+  return cookie ? cookie.slice(calendarOAuthCookie.length + 1) : '';
+}
+function calendarOAuthCookieHeader(state, maxAge) {
+  return `${calendarOAuthCookie}=${state}; Max-Age=${maxAge}; Path=${basePath}/api/lifecycle/calendar-auth/callback; HttpOnly; Secure; SameSite=Lax`;
+}
+async function calendarAuthApi(req, res, url, routePath, auth) {
+  if (routePath === '/api/lifecycle/calendar-auth/callback') {
+    res.setHeader('Set-Cookie', calendarOAuthCookieHeader('', 0));
+    try {
+      if (url.searchParams.get('error')) return json(res, 400, {ok:false,error:'飞书日历授权被取消，未保存凭据。'});
+      const result = await recruitmentCalendarReader.complete({code:url.searchParams.get('code'),state:url.searchParams.get('state'),cookieState:calendarOAuthCookieValue(req)});
+      return json(res, 200, {ok:true,message:'正式面试日历用户授权已保存。',authorized:result.authorized});
+    } catch (error) {
+      return json(res, 400, {ok:false,error:error?.message || '日历授权失败。',code:error?.code || 'calendar_auth_failed'});
+    }
+  }
+  if (auth?.mode !== 'internal' && !auth?.permissions?.super_admin && !auth?.permissions?.manage_permissions) return json(res, 403, {ok:false,error:'仅中枢管理员可管理正式面试日历授权。'});
+  if (req.method === 'GET' && routePath === '/api/lifecycle/calendar-auth/status') return json(res, 200, {ok:true,calendar:await recruitmentCalendarReader.status()});
+  if (req.method === 'POST' && routePath === '/api/lifecycle/calendar-auth/start') {
+    if (req.headers['x-requested-with'] !== 'XMLHttpRequest') return json(res, 403, {ok:false,error:'缺少授权请求标识。'});
+    const attempt = recruitmentCalendarReader.begin();
+    res.setHeader('Set-Cookie', calendarOAuthCookieHeader(attempt.state, 600));
+    return json(res, 200, {ok:true,authorizeUrl:attempt.url});
+  }
+  return json(res, 405, {ok:false,error:'Method not allowed'});
+}
 async function lifecycleApi(req, res, url, routePath, auth) {
   try {
     if (req.method === 'GET' && routePath === '/api/lifecycle/status') return json(res, 200, await lifecycleStatus());
@@ -2075,6 +2115,10 @@ async function handleRequest(req, res) {
   if (url.pathname === '/healthz') { res.writeHead(200, {'Content-Type':'text/plain'}); return res.end('ok'); }
   const routePath = url.pathname.startsWith(basePath) ? (url.pathname.slice(basePath.length) || '/') : url.pathname;
   if (routePath === '/auth/login' || routePath === '/auth/callback') return redirect(res, marketingHubUrl);
+  if (routePath === '/api/lifecycle/calendar-auth/callback') {
+    if (recoveryReadOnly) return json(res, 423, {ok:false,error:recoveryMessage,code:'recovery_read_only'});
+    return calendarAuthApi(req,res,url,routePath,null);
+  }
   const auth = await authorizeCentral(req);
   if (!auth.ok) {
     if (routePath.startsWith('/api/')) return json(res, auth.status, { error: auth.detail });
@@ -2092,6 +2136,7 @@ async function handleRequest(req, res) {
   if (routePath.startsWith('/api/calendar-overrides')) return calendarOverridesApi(req,res,routePath,auth);
   if (routePath.startsWith('/api/script-generator/')) return scriptGeneratorApi(req,res,routePath,auth);
   if (routePath.startsWith('/api/anchor-development')) return anchorDevelopmentApi(req,res,routePath,auth);
+  if (routePath.startsWith('/api/lifecycle/calendar-auth/')) return calendarAuthApi(req,res,url,routePath,auth);
   if (routePath.startsWith('/api/lifecycle/')) return lifecycleApi(req,res,url,routePath,auth);
   if (routePath === '/modules/tasks' || routePath.startsWith('/modules/tasks/')) return proxyCollaboration(req,res,routePath,url.search);
   return serveStatic(res,routePath);

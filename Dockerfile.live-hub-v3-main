@@ -3,6 +3,7 @@ USER root
 RUN rm -rf /app/public/modules/recruitment /app/public/modules/anchors /app/public/modules/materials /app/collaboration/dist
 COPY site/ /app/public/
 COPY server.js /app/server.js
+COPY calendar-user-reader.mjs /app/calendar-user-reader.mjs
 COPY lifecycle-engine.mjs /app/lifecycle-engine.mjs
 COPY container-entrypoint.sh /app/container-entrypoint.sh
 COPY exports/recruitment-pool/ /app/public/modules/recruitment/
