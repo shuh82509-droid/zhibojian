@@ -6,7 +6,7 @@ const requiredScopes = ['calendar:calendar:read', 'calendar:calendar.event:read'
 const tokenEndpoint = 'https://accounts.feishu.cn/oauth/v3/token';
 const userInfoEndpoint = 'https://open.feishu.cn/open-apis/authen/v1/user_info';
 
-export function createCalendarUserReader({appId, appSecret, calendarId, expectedOpenId, redirectUri, storePath, encryptionKey, fetchImpl = fetch, now = Date.now}) {
+export function createCalendarUserReader({appId, appSecret, calendarId, expectedOpenId, redirectUri, storePath, encryptionKey, fetchImpl = fetch, now = Date.now, diagnostic = item => console.warn('[calendar-oauth]', JSON.stringify(item))}) {
   const key = /^[A-Za-z0-9+/]{43}=$/u.test(encryptionKey || '') ? Buffer.from(encryptionKey, 'base64') : Buffer.alloc(0);
   const configured = Boolean(appId && appSecret && calendarId && expectedOpenId && redirectUri && storePath && key.length === 32);
   const pending = new Map();
@@ -72,15 +72,27 @@ export function createCalendarUserReader({appId, appSecret, calendarId, expected
     const challenge = createHash('sha256').update(verifier).digest('base64url');
     const createdAt = now();
     for (const [id, value] of pending) if (createdAt - value.createdAt > 600_000) pending.delete(id);
-    pending.set(state, {verifier, createdAt});
+    pending.set(state, {verifier, challenge, createdAt});
     const url = new URL('https://accounts.feishu.cn/open-apis/authen/v1/authorize');
     for (const [name, value] of Object.entries({client_id:appId,response_type:'code',redirect_uri:redirectUri,scope:requiredScopes.join(' '),state,code_challenge:challenge,code_challenge_method:'S256'})) url.searchParams.set(name, value);
     return {url:url.toString(), state};
   }
   async function tokenRequest(body) {
-    const response = await fetchImpl(tokenEndpoint, {method:'POST',redirect:'error',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify({client_id:appId,client_secret:appSecret,...body}),signal:AbortSignal.timeout(12_000)});
+    // v3 recommends RFC 6749 form encoding. Preserve PKCE and scope narrowing.
+    const requestBody = new URLSearchParams({client_id:appId,client_secret:appSecret,...body});
+    const response = await fetchImpl(tokenEndpoint, {method:'POST',redirect:'error',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:requestBody.toString(),signal:AbortSignal.timeout(12_000)});
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || data.code !== 0 || !data.access_token || !data.refresh_token) throw error('calendar_oauth_exchange_failed', '飞书日历授权换取失败，请重新授权。');
+    if (!response.ok || data.code !== 0 || !data.access_token || !data.refresh_token) {
+      // Never expose the response body, authorization code, verifier, or tokens.
+      const upstreamCode = Number.isSafeInteger(data.code) ? data.code : null;
+      const rawId = response.headers?.get?.('x-tt-logid') || '';
+      const requestId = /^[A-Za-z0-9_-]{1,96}$/u.test(rawId) ? rawId : null;
+      const detail = {stage:'token_exchange',grant:body.grant_type === 'refresh_token' ? 'refresh_token' : 'authorization_code',encoding:'form',httpStatus:response.status,upstreamCode,requestId,hasAccessToken:Boolean(data.access_token),hasRefreshToken:Boolean(data.refresh_token),...(body.grant_type === 'authorization_code' ? {pkceMethod:'S256',verifierLength:body.code_verifier.length,pkceLocallyVerified:true} : {})};
+      diagnostic(detail);
+      const hints = {20002:'应用凭据校验失败',20003:'授权码无效或已使用',20004:'授权码已过期',20049:'PKCE 安全校验未通过',20065:'授权码已使用',20068:'授权范围不匹配',20071:'回调地址不匹配'};
+      const hint = hints[upstreamCode] || (!data.refresh_token && data.access_token ? '未返回可续期的只读授权' : '授权接口返回异常');
+      throw Object.assign(error('calendar_oauth_exchange_failed', `飞书日历授权换取失败：${hint}${upstreamCode === null ? '' : `（飞书错误码 ${upstreamCode}）`}。请勿刷新回调页，请返回中枢重新发起。`), {diagnostic:detail});
+    }
     const scopes = String(data.scope || '').split(/\s+/u).filter(Boolean);
     if (!requiredScopes.every(scope => scopes.includes(scope))) throw error('calendar_scope_missing', '飞书日历授权未包含所需的只读与离线权限。');
     if (![data.expires_in, data.refresh_token_expires_in].every(v => Number.isFinite(Number(v)) && Number(v) > 0)) throw error('calendar_token_expiry_invalid', '日历授权有效期无法核验，凭据未保存。');
@@ -106,6 +118,7 @@ export function createCalendarUserReader({appId, appSecret, calendarId, expected
     const attempt = pending.get(state);
     pending.delete(state);
     if (!attempt || now() - attempt.createdAt > 600_000 || !same(state, cookieState) || !code) throw error('calendar_oauth_state_invalid', '日历授权校验失败或已过期，请重新发起。');
+    if (!/^[A-Za-z0-9._~-]{43,128}$/u.test(attempt.verifier) || !same(createHash('sha256').update(attempt.verifier).digest('base64url'),attempt.challenge)) throw error('calendar_pkce_local_invalid','日历授权安全参数校验失败，未提交凭据请求。');
     return exclusive(async () => {
     const data = await tokenRequest({grant_type:'authorization_code',code,redirect_uri:redirectUri,code_verifier:attempt.verifier,scope:requiredScopes.join(' ')});
     const openId = await getUserInfo(data.access_token);
