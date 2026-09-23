@@ -1,0 +1,19 @@
+.shared-makeup-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(180px, .8fr) minmax(0, 2fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid #dfe8e3;
+  border-radius: 9px;
+  background: #f3f8f5;
+}
+
+.shared-makeup-row span { color: #607068; font-size: 11px; font-weight: 800; }
+.shared-makeup-row b { min-width: 0; color: var(--ink); font-size: 12px; overflow-wrap: anywhere; }
+.shared-makeup-row small { color: #77867e; font-size: 10px; white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .shared-makeup-row { grid-template-columns: 1fr; gap: 5px; }
+}

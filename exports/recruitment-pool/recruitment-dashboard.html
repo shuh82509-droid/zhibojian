@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>主播招聘工作台 · 每日更新</title>
+  <style>
+    :root{--bg:#f5f7fb;--panel:#fff;--ink:#172033;--muted:#6d778b;--line:#e7eaf0;--blue:#3668f5;--blue-weak:#edf2ff;--green:#159b68;--green-weak:#eaf8f2;--amber:#c77a0a;--amber-weak:#fff5df;--red:#d84949;--red-weak:#fff0f0;--purple:#7655e8;--purple-weak:#f2efff;--shadow:0 12px 30px rgba(28,45,90,.08);--radius:18px}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 Inter,"PingFang SC","Microsoft YaHei",sans-serif} button,input,select{font:inherit} button{cursor:pointer}
+    .shell{max-width:1680px;margin:auto;padding:28px}.topbar{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:22px}.eyebrow{color:var(--blue);font-weight:750;font-size:12px;letter-spacing:.12em}.title{margin:5px 0 4px;font-size:30px;line-height:1.2}.sub{color:var(--muted)}.snapshot{padding:9px 13px;border:1px solid #dfe5f5;background:#fff;border-radius:999px;color:#59657c;white-space:nowrap}
+    .metrics{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:12px;margin-bottom:18px}.metric{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:15px 16px;box-shadow:0 5px 16px rgba(28,45,90,.035)}.metric b{display:block;font-size:25px;margin-top:5px}.metric span{color:var(--muted);font-size:12px}.metric.accent{background:linear-gradient(145deg,#315ee9,#6c84ff);color:#fff;border:0}.metric.accent span{color:#dfe6ff}
+    .notice-grid{display:grid;grid-template-columns:1.3fr 1fr;gap:14px;margin-bottom:18px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}.panel-head{padding:17px 19px 13px;display:flex;justify-content:space-between;gap:16px;align-items:center}.panel-head h2{font-size:17px;margin:0}.panel-head small{color:var(--muted)}
+    .alerts{padding:0 18px 18px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.alert{border:1px solid var(--line);border-radius:13px;padding:13px;background:#fbfcff}.alert strong{display:block;font-size:21px}.alert span{color:var(--muted);font-size:12px}.alert.warn{border-color:#f3dcab;background:#fffaf0}.alert.ok{border-color:#cdebdc;background:#f5fcf8}
+    .rules{padding:0 18px 18px;display:grid;gap:9px}.rule{display:flex;gap:10px;color:#505b71}.rule i{width:7px;height:7px;margin-top:7px;flex:0 0 auto;border-radius:50%;background:var(--blue)}
+    .funnel-panel{margin-bottom:18px;overflow:hidden}.funnel-shell{display:grid;grid-template-columns:minmax(520px,1.05fr) minmax(500px,.95fr);gap:22px;padding:0 20px 20px;align-items:start}.funnel-column{min-width:0}.funnel{display:grid;gap:6px;justify-items:center}.funnel-step{min-height:48px;padding:0 18px;display:flex;align-items:center;justify-content:space-between;color:#fff;clip-path:polygon(3% 0,97% 0,100% 50%,97% 100%,3% 100%,0 50%);font-weight:720}.funnel-step span{font-size:12px;opacity:.95}.funnel-step b{font-size:21px}.funnel-step:nth-child(1){width:100%;background:#315ee9}.funnel-step:nth-child(2){width:90%;background:#4774ef}.funnel-step:nth-child(3){width:80%;background:#5d88f1}.funnel-step:nth-child(4){width:70%;background:#1489a7}.funnel-step:nth-child(5){width:60%;background:#ef8d2f}.funnel-step:nth-child(6){width:50%;background:#20a46f}.conversion-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:14px}.conversion-card{border:1px solid var(--line);border-radius:13px;background:#fbfcff;padding:11px}.conversion-card span{display:block;color:var(--muted);font-size:11px}.conversion-card b{display:block;font-size:20px;margin-top:3px}.conversion-card.pending{background:#fff9eb;border-color:#f2d9a2}.conversion-card.pending small{display:block;margin-top:5px;color:#8f6b27;font-size:10px}.conversion-note{grid-column:1/-1;color:#687387;font-size:11px;line-height:1.55;padding:2px}.month-panel{min-width:0;border:1px solid var(--line);border-radius:15px;overflow:hidden;background:#fbfcff}.month-head{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line)}.month-head h3{margin:0;font-size:15px}.month-head span{color:var(--muted);font-size:11px}.month-weekdays,.month-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}.month-weekdays b{padding:7px 3px;background:#f1f3f8;color:#727d90;text-align:center;font-size:10px}.month-day{min-height:76px;padding:6px;border-top:1px solid var(--line);border-right:1px solid var(--line);background:#fff}.month-day:nth-child(7n){border-right:0}.month-day.outside{background:#f7f8fb}.month-day.today{box-shadow:inset 0 0 0 2px #6e8df7;background:#f3f6ff}.month-day .date{font-size:11px;font-weight:800}.event{margin-top:4px;padding:3px 5px;border-radius:6px;background:var(--blue-weak);color:#3158c7;font-size:9px;line-height:1.25}.event.done{background:var(--green-weak);color:#147450}.event.fail{background:var(--red-weak);color:#a43d3d}.empty{margin-top:12px;color:#a5adbc;font-size:10px}.trend-panel{margin-bottom:18px}.resume-trend{padding:0 18px 18px}.resume-chart{width:100%;height:190px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(180deg,#fbfcff,#f5f8ff)}.resume-chart .grid{stroke:#e6eaf3;stroke-width:1}.resume-chart .area{fill:rgba(54,104,245,.12)}.resume-chart .line{fill:none;stroke:#3668f5;stroke-width:3}.resume-chart .point{fill:#fff;stroke:#3668f5;stroke-width:2}.resume-labels{display:grid;grid-template-columns:repeat(14,1fr);gap:2px;margin-top:7px;color:#7d8799;font-size:9px;text-align:center}
+    .toolbar{display:flex;gap:10px;align-items:center;padding:0 18px 16px}.toolbar input{min-width:260px;flex:1;border:1px solid var(--line);border-radius:11px;padding:10px 12px;outline:none}.toolbar input:focus{border-color:#8aa0f4;box-shadow:0 0 0 3px #edf1ff}.toolbar select{border:1px solid var(--line);background:#fff;border-radius:11px;padding:10px 32px 10px 11px;color:#525e73}.cycle-picker{display:grid;grid-template-columns:auto 150px;gap:4px 10px;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:12px;background:#fff;color:#536078;font-size:12px;font-weight:750}.cycle-picker input{grid-row:1/3;grid-column:2;width:150px;border:1px solid #d9deea;border-radius:8px;padding:7px 8px;color:#25324a}.cycle-picker small{color:var(--muted);font-size:10px;font-weight:500}.topbar-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end}.unmapped-note{margin:0 18px 16px;padding:10px 12px;border:1px dashed #e4c47e;border-radius:10px;background:#fffaf0;color:#805e1b;font-size:11px}
+    .board-wrap{overflow-x:auto;padding:0 16px 17px}.board{display:grid;grid-template-columns:repeat(5,minmax(245px,1fr)) minmax(285px,1.12fr);gap:12px;min-width:1560px;align-items:start}.lane{border:1px solid var(--line);border-radius:15px;background:#f8f9fc;min-height:260px;overflow:hidden}.lane.progress{border:2px solid #8da1ff;background:linear-gradient(180deg,#f1f4ff,#fbfcff);box-shadow:0 10px 24px rgba(54,104,245,.13)}.lane-head{padding:13px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;font-weight:760}.lane.progress .lane-head{color:#244fd0;background:#e9eeff;border-bottom-color:#cdd7ff}.count{display:grid;place-items:center;min-width:25px;height:25px;padding:0 7px;border-radius:999px;background:#e9ecf3;color:#626d80;font-size:12px}.lane.progress .count{background:#3868f5;color:white}.cards{padding:10px;display:grid;gap:9px}.card{border:1px solid var(--line);background:#fff;border-radius:12px;padding:12px;text-align:left;width:100%;color:inherit;transition:.16s;box-shadow:0 2px 8px rgba(27,39,75,.03)}.card:hover{transform:translateY(-1px);border-color:#b8c5f3;box-shadow:0 7px 18px rgba(27,39,75,.08)}.card-top{display:flex;justify-content:space-between;gap:8px}.card-name{font-weight:780;font-size:15px}.tag{border-radius:999px;padding:2px 7px;font-size:10px;white-space:nowrap}.tag.blue{background:var(--blue-weak);color:#3158c7}.tag.red{background:var(--red-weak);color:#b43e3e}.tag.green{background:var(--green-weak);color:#13754e}.tag.amber{background:var(--amber-weak);color:#9a650e}.tag.purple{background:var(--purple-weak);color:#6344cb}.meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:7px;color:var(--muted);font-size:11px}.note{margin-top:8px;color:#4f5b70;font-size:12px}.empty-lane{padding:26px 8px;text-align:center;color:#9aa3b3;font-size:12px}
+    .foot{display:flex;justify-content:space-between;gap:16px;color:var(--muted);font-size:12px;padding:14px 4px 0}.dialog{width:min(760px,calc(100vw - 30px));border:0;border-radius:20px;padding:0;box-shadow:0 30px 90px rgba(20,30,60,.25)}.dialog::backdrop{background:rgba(20,29,48,.44);backdrop-filter:blur(3px)}.dialog-head{padding:21px 22px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}.dialog-head h3{margin:0;font-size:21px}.close{border:0;background:#f0f2f7;border-radius:9px;width:34px;height:34px;color:#667085}.dialog-body{padding:20px 22px 24px}.detail-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.detail{background:#f7f8fb;border-radius:11px;padding:10px}.detail label{display:block;color:var(--muted);font-size:11px}.timeline{margin-top:18px;border-left:2px solid #dfe4f3;padding-left:17px;display:grid;gap:13px}.timeline-item{position:relative}.timeline-item:before{content:"";position:absolute;left:-23px;top:5px;width:10px;height:10px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 3px #edf1ff}.timeline-item b{font-size:13px}.timeline-item p{margin:3px 0;color:#596478;font-size:12px}.timeline-media{display:grid;gap:8px;margin-top:9px}.timeline-media video{display:block;width:100%;max-height:320px;background:#111827;border-radius:11px}.timeline-media a{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:9px 10px;color:#3158c7;text-decoration:none;font-size:12px}.timeline-media .pending{border:1px dashed #cbd3e4;border-radius:10px;padding:9px 10px;color:#8a94a6;font-size:12px}.hidden{display:none!important}
+    .refresh-panel{margin:-4px 0 18px;padding:13px 15px;display:flex;gap:14px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 6px 22px rgba(23,32,51,.045)}.state-dot{width:10px;height:10px;border-radius:50%;background:#aab2c0;box-shadow:0 0 0 5px #f0f2f5;flex:0 0 auto}.state-dot.current{background:#22a675;box-shadow:0 0 0 5px #e7f7f0}.state-dot.stale,.state-dot.error{background:#e39928;box-shadow:0 0 0 5px #fff3de}.refresh-copy{min-width:0;flex:1}.refresh-copy b{display:block}.refresh-copy span{display:block;color:var(--muted);font-size:12px}.refresh-action{border:0;border-radius:10px;padding:9px 13px;background:#315ee9;color:#fff;font-weight:750;white-space:nowrap}.refresh-action:disabled{opacity:.55;cursor:wait}.refresh-log summary{color:#69758a;font-size:12px;cursor:pointer;white-space:nowrap}.log-list{position:absolute;z-index:20;right:28px;width:min(520px,calc(100vw - 32px));margin-top:10px;padding:12px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 52px rgba(24,35,62,.18)}.log-row{display:grid;grid-template-columns:92px 1fr auto;gap:10px;padding:8px 5px;border-bottom:1px solid #eef0f4;font-size:11px}.log-row:last-child{border:0}.log-ok{color:var(--green)}.log-fail{color:var(--red)}
+    .lane .cards{max-height:544px;overflow-y:auto;align-content:start;scrollbar-gutter:stable}.lane .card{min-height:120px}.calendar-source-status{margin:0;padding:9px 14px;border-top:1px solid var(--line);border-bottom:1px solid #f0dfb8;background:#fffaf0;color:#7b5c1d;font-size:11px;line-height:1.55}
+    @media(max-width:1050px){.metrics{grid-template-columns:repeat(3,1fr)}.notice-grid{grid-template-columns:1fr}.alerts{grid-template-columns:repeat(3,1fr)}.funnel-shell{grid-template-columns:1fr}.conversion-grid{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:650px){.shell{padding:18px 12px}.topbar{display:block}.snapshot{display:inline-block;margin-top:12px}.refresh-panel{align-items:flex-start;flex-wrap:wrap}.refresh-copy{flex:1 0 calc(100% - 28px);min-width:0}.refresh-action{margin-left:24px}.refresh-log{margin-left:0}.log-list{right:12px}.metrics{grid-template-columns:repeat(2,1fr)}.notice-grid{grid-template-columns:1fr}.alerts{grid-template-columns:1fr}.toolbar{align-items:stretch;flex-direction:column}.toolbar input{min-width:0}.detail-grid{grid-template-columns:1fr}.foot{display:block}.foot span{display:block;margin-top:4px}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div><div class="eyebrow">LIVE CENTER · RECRUITMENT</div><h1 class="title">主播招聘工作台</h1><div class="sub">招聘漏斗、面试日历、面评、录屏与入职考核时间线</div></div>
+      <div class="topbar-actions"><label class="cycle-picker">招聘月<input id="recruitmentMonth" type="month"><small id="recruitmentCycleRange">按上月 25 日至本月 25 日</small></label><div class="snapshot" id="snapshotBadge">最近更新 · 待同步</div></div>
+    </header>
+
+    <section class="refresh-panel" aria-live="polite"><i class="state-dot" id="stateDot"></i><div class="refresh-copy"><b id="refreshTitle">读取每日招聘状态</b><span id="refreshMeta">每天 09:30、18:00（北京时间）自动更新；无法核验的消息不会改变候选人阶段。</span></div><button class="refresh-action" id="refreshButton">立即更新</button><details class="refresh-log"><summary>更新记录</summary><div class="log-list" id="refreshLogs"><div class="log-row"><span>—</span><span>暂无更新记录</span><span></span></div></div></details></section>
+
+    <section class="metrics" aria-label="招聘指标">
+      <div class="metric accent"><span>周期送审候选人</span><b id="metricCandidates">待读取</b></div>
+      <div class="metric"><span>初审通过</span><b id="metricScreened">待核验</b></div>
+      <div class="metric"><span>群面评人数</span><b id="metricInterview">待核验</b></div>
+      <div class="metric"><span>群面评通过</span><b id="metricInterviewPassed">待核验</b></div>
+      <div class="metric"><span>已入职</span><b id="metricHired">待核验</b></div>
+      <div class="metric"><span>初审不通过</span><b id="metricAssessment">待核验</b></div>
+    </section>
+
+    <section class="notice-grid">
+      <article class="panel">
+        <div class="panel-head"><h2>当前提醒</h2><small id="reminderSource">按历史基线计算</small></div>
+        <div class="alerts">
+          <div class="alert ok"><strong id="alertReview">待核验</strong><span>待审核</span></div>
+          <div class="alert warn"><strong id="alertFeedback">3</strong><span>待面评</span></div>
+          <div class="alert"><strong id="alertResume">7</strong><span id="alertResumeLabel">8 月 13 日新增简历</span></div>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>恢复口径</h2><small>已固化</small></div>
+        <div class="rules">
+          <div class="rule"><i></i><span>正式面试日历待授权；当前仅展示授权群聊中明确记录的面试信息。</span></div>
+          <div class="rule"><i></i><span>未匹配本周期送审姓名的面评和 Offer 单独保留，待身份核验，不计入送审漏斗。</span></div>
+          <div class="rule"><i></i><span>初审仅按指定审核人在送审消息上的 OK / No 计数，不从面评或 Offer 反推。</span></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel funnel-panel">
+      <div class="panel-head"><div><h2>招聘转化漏斗</h2><small>仅本周期送审姓名构成漏斗；群面评不是正式面试日历；送审人次单独统计</small></div><span class="tag blue">有证据阶段</span></div>
+      <div class="funnel-shell">
+        <div class="funnel-column"><div class="funnel" aria-label="招聘转化漏斗">
+          <div class="funnel-step"><span>送审候选人</span><b id="funnelCandidates">待读取</b></div>
+          <div class="funnel-step"><span>初审通过</span><b id="funnelScreened">待读取</b></div>
+          <div class="funnel-step"><span>群面评人数</span><b id="funnelInterview">待读取</b></div>
+          <div class="funnel-step"><span>群面评通过</span><b id="funnelInterviewPassed">待读取</b></div>
+          <div class="funnel-step"><span>已入职</span><b id="funnelHired">待读取</b></div>
+          <div class="funnel-step"><span>考核通过</span><b id="funnelAssessment">待读取</b></div>
+        </div>
+        <div class="conversion-grid">
+          <div class="conversion-card"><span>候选人 → 初审通过</span><b id="conversionScreened">待核验</b></div>
+          <div class="conversion-card"><span>初审通过 → 群面评人数</span><b id="conversionInterview">待核验</b></div>
+          <div class="conversion-card"><span>群面评人数 → 面试通过</span><b id="conversionInterviewPassed">待核验</b></div>
+          <div class="conversion-card"><span>当前已入职</span><b id="hiredCount">待读取</b></div>
+          <div class="conversion-card pending"><span>待入职人数</span><b id="pendingHireCount">待读取</b><small id="pendingHireDetail">暂无待入职主播</small></div>
+          <div class="conversion-note">流程口径：面试通过后先办理入职，再进入三日考核；预计入职日期不代表实际到岗。已入职与考核通过仅采用 WIS直播战队中倪梦萍的可核验日报。</div>
+        </div></div>
+        <div class="month-panel"><div class="month-head"><h3>群内面试记录 · 正式日历待授权</h3><span id="calendarMonth"></span></div><p class="calendar-source-status" id="calendarSourceStatus" role="status">待授权：请把指定招聘面试日历以“可查看详情”共享给直播中枢飞书应用，并配置日历 ID；当前群聊记录不冒充正式日历。</p><div class="month-weekdays"><b>周一</b><b>周二</b><b>周三</b><b>周四</b><b>周五</b><b>周六</b><b>周日</b></div><div class="month-grid" id="calendar"></div></div>
+      </div>
+    </section>
+
+    <details class="panel" id="unmatchedHistory" style="margin-bottom:18px;padding:18px"><summary>未匹配送审记录 · 待读取</summary><div id="unmatchedRecords"></div></details>
+    <section class="panel trend-panel">
+      <div class="panel-head"><h2>招聘周期每日送审简历数量趋势</h2><small id="resumeTrendRange">按招聘群“求职者是否符合主播邀约标准”送审消息统计</small></div>
+      <div class="resume-trend" id="resumeTrend"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>候选人阶段</h2><small>按定稿阶段横排 · 点击卡片查看详情</small></div>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="搜索姓名、阶段、日期或备注" aria-label="搜索候选人">
+        <select id="sourceFilter" aria-label="来源筛选"><option value="">全部来源</option><option>招聘群</option><option>WIS直播战队</option><option>日历</option><option>指定私聊</option></select>
+        <select id="processFilter" aria-label="流程结果筛选"><option value="">全部结果</option><option value="pass">通过此流程</option><option value="fail">未通过</option></select>
+      </div>
+      <p class="unmapped-note" id="unmappedNote" hidden></p>
+      <div class="board-wrap"><div class="board" id="board"></div></div>
+    </section>
+    <footer class="foot"><span>候选人、面试与录屏仅在来源可验证时更新到对应阶段。</span><span>无法确认的群聊内容不会覆盖已有招聘档案。</span></footer>
+  </main>
+
+  <dialog class="dialog" id="detailDialog">
+    <div class="dialog-head"><div><div class="eyebrow" id="dialogStage"></div><h3 id="dialogName"></h3></div><button class="close" id="closeDialog" aria-label="关闭">×</button></div>
+    <div class="dialog-body" id="dialogBody"></div>
+  </dialog>
+
+  <script>
+    const SNAPSHOT="";
+    const TODAY=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    function defaultRecruitmentMonth(){const date=new Date(`${TODAY}T12:00:00+08:00`);if(Number(TODAY.slice(8,10))>25)date.setMonth(date.getMonth()+1);return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit'}).format(date)}
+    function cycleForMonth(month){const [year,value]=String(month).split('-').map(Number),prior=value===1?`${year-1}-12`:`${year}-${String(value-1).padStart(2,'0')}`;return {month,startDate:`${prior}-25`,endDate:`${month}-25`}}
+    let activeCycle=cycleForMonth(defaultRecruitmentMonth());
+    const stages=[
+      {id:'initial_pass',label:'初审通过'},
+      {id:'initial_fail',label:'初审不通过'},
+      {id:'pending_feedback',label:'待面评'},
+      {id:'interview_fail',label:'面试不通过'},
+      {id:'interview_pass',label:'面试通过'},
+      {id:'hired',label:'已入职',progress:true}
+    ];
+    let cohortReady=false;
+    let liveResumeCounts=null;
+    let liveResumeNames={};
+    let lifecycleSnapshot=null;
+    let candidates=[];
+    const archivedCandidates=structuredClone(candidates);
+    candidates=[];
+    let interviewEvents={}; interviewEvents={};
+    const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+    const recruitmentMonth=document.querySelector('#recruitmentMonth');recruitmentMonth.value=activeCycle.month;
+    function renderCycleLabel(){document.querySelector('#recruitmentCycleRange').textContent=`${activeCycle.startDate} — ${activeCycle.endDate}`}
+    function candidateDateKey(candidate){const exact=String(candidate.date||'').match(/^20\d{2}-\d{2}-\d{2}/)?.[0];return exact||resumeDate(candidate)}
+    function legacyStage(stage){return ({passed:'initial_pass',failed:'initial_fail',feedback:'pending_feedback',interviewed:'interview_fail',progress:'hired',review:'unmapped'})[stage]||stage}
+    const tagClass=s=>s.includes('不通过')?'red':s.includes('已入职')||s.includes('通过')?'green':s.includes('待')?'amber':'blue';
+    function applyAutomaticHire(candidate){ return candidate; }
+    candidates=candidates.map(applyAutomaticHire);
+    function renderKeyData(){
+      if(!cohortReady){
+        for(const id of ['hiredCount','metricHired','metricAssessment','funnelHired','funnelAssessment','pendingHireCount','alertReview','alertFeedback','alertResume'])document.getElementById(id).textContent='待核验';
+        document.querySelector('#pendingHireDetail').textContent='等待本周期授权记录';
+        document.querySelector('#alertResumeLabel').textContent='最近送审记录待读取';
+        document.querySelector('#reminderSource').textContent='来源待读取';return;
+      }
+      const pending=candidates.filter(candidate=>candidate.startDate&&legacyStage(candidate.stage)!=='hired');
+      const hired=candidates.filter(candidate=>legacyStage(candidate.stage)==='hired');
+      const initialFailed=candidates.filter(candidate=>legacyStage(candidate.stage)==='initial_fail');
+      document.querySelector('#hiredCount').textContent=`${hired.length} 人`;
+      document.querySelector('#metricHired').textContent=hired.length;
+      document.querySelector('#metricAssessment').textContent=initialFailed.length;
+      document.querySelector('#funnelHired').textContent=hired.length;
+      document.querySelector('#funnelAssessment').textContent=lifecycleSnapshot?.coverage?.employmentStatus==='已读取'?candidates.filter(candidate=>candidate.assessmentPassed).length:'待授权';
+      document.querySelector('#pendingHireCount').textContent=`${pending.length} 人`;
+      document.querySelector('#pendingHireDetail').textContent=pending.length?pending.map(candidate=>`${candidate.name} · 预计 ${candidate.startDate} · 实际到岗待核验`).join('；'):'暂无待入职主播';
+      document.querySelector('#alertReview').textContent=candidates.filter(candidate=>legacyStage(candidate.stage)==='unmapped').length;
+      document.querySelector('#alertFeedback').textContent=candidates.filter(candidate=>legacyStage(candidate.stage)==='pending_feedback').length;
+    }
+    function renderCalendar(){
+      const root=document.querySelector('#calendar');
+      const month=activeCycle?.month||TODAY.slice(0,7);const [year,monthNumber]=month.split('-').map(Number);
+      const firstOffset=(new Date(Date.UTC(year,monthNumber-1,1)).getUTCDay()+6)%7;const days=new Date(Date.UTC(year,monthNumber,0)).getUTCDate();const cells=Math.ceil((firstOffset+days)/7)*7;
+      document.querySelector('#calendarMonth').textContent=`${year}年${monthNumber}月`;
+      root.innerHTML=Array.from({length:cells},(_,index)=>{const day=index-firstOffset+1;if(day<1||day>days)return '<div class="month-day outside"></div>';const key=`${month}-${String(day).padStart(2,'0')}`,events=interviewEvents[key]||[];return `<div class="month-day ${key===TODAY?'today':''}"><span class="date">${day}</span>${events.length?events.map(event=>{const name=Array.isArray(event)?event[0]:event.name,kind=Array.isArray(event)?event[1]:event.status==='interview_pass'?'done':event.status==='interview_fail'?'fail':'';return `<div class="event ${kind}">${esc(name)}</div>`}).join(''):'<div class="empty">—</div>'}</div>`}).join('');
+    }
+    function resumeDate(candidate){const match=String(candidate.date||'').match(/(\d{1,2})月(\d{1,2})日/);return match?`2026-${String(Number(match[1])).padStart(2,'0')}-${String(Number(match[2])).padStart(2,'0')}`:''}
+    function resumeSubmissionName(text){
+      const normalized=String(text||'').replace(/\s+/g,' ').trim();
+      const match=normalized.match(/求职者\s+(.{1,20}?)\s+是否符合\s*[【\[]?\s*主播\s*[】\]]?\s*的邀约标准/);
+      return match?match[1].trim():'';
+    }
+    function renderResumeTrend(){
+      if(liveResumeCounts===null){document.querySelector('#resumeTrend').textContent='等待本周期授权送审记录；未读取不按 0 绘图。';return}
+      const start=new Date(`${activeCycle.startDate}T12:00:00+08:00`),end=new Date(`${activeCycle.endDate}T12:00:00+08:00`),days=[];for(let cursor=new Date(start);cursor<=end&&cursor<=new Date(`${TODAY}T23:59:59+08:00`);cursor.setDate(cursor.getDate()+1))days.push(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(cursor));
+      if(!days.length){document.querySelector('#resumeTrend').textContent='该招聘周期尚未开始，暂无统计。';return}
+      const counts=days.map(date=>liveResumeCounts===null
+        ? candidates.filter(candidate=>candidate.source==='招聘群'&&resumeDate(candidate)===date).length
+        : (liveResumeCounts[date]||0));
+      const max=Math.max(1,...counts),width=Math.max(1000,days.length*62),height=170,padding=34;const points=counts.map((count,index)=>`${padding+(width-padding*2)*index/Math.max(1,days.length-1)},${height-padding-(height-padding*2)*count/max}`);
+      const area=`${padding},${height-padding} ${points.join(' ')} ${width-padding},${height-padding}`;
+      document.querySelector('#resumeTrend').innerHTML=`<div style="overflow-x:auto"><svg class="resume-chart" style="min-width:${width}px" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="所选招聘周期每日送审简历数量折线图"><path class="grid" d="M${padding} 42H${width-padding}M${padding} 85H${width-padding}M${padding} 128H${width-padding}"/><polygon class="area" points="${area}"/><polyline class="line" points="${points.join(' ')}"/>${points.map((point,index)=>{const [x,y]=point.split(','),names=liveResumeNames[days[index]]||[];return `<circle class="point" cx="${x}" cy="${y}" r="5"><title>${days[index]}：${counts[index]} 份${names.length?`（${names.join('、')}）`:''}</title></circle>`}).join('')}</svg><div class="resume-labels" style="min-width:${width}px;grid-template-columns:repeat(${days.length},1fr)">${days.map((date,index)=>`<span title="${esc((liveResumeNames[date]||[]).join('、'))}">${date.slice(5).replace('-','/')}<br><b>${counts[index]}</b></span>`).join('')}</div></div>`;
+      document.querySelector('#resumeTrendRange').textContent=`${days[0]} — ${days.at(-1)} · 按邀约标准送审消息逐人去重`;
+    }
+    function card(c,index){const dateLabel=c.actualStartDate?`实际到岗 ${c.actualStartDate}`:c.startDate?`预计入职 ${c.startDate}`:c.date;return `<button class="card" data-index="${index}"><div class="card-top"><span class="card-name">${esc(c.name)}</span><span class="tag ${tagClass(c.status)}">${esc(c.status)}</span></div><div class="meta"><span>${esc(c.source)}</span><span>·</span><span>${esc(dateLabel)}</span></div><div class="note">${esc(c.note||'暂无补充说明')}</div></button>`}
+    function renderBoard(){
+      if(!cohortReady){document.querySelector('#board').textContent='本周期候选记录待读取。';return}
+      const q=document.querySelector('#search').value.trim().toLowerCase();const src=document.querySelector('#sourceFilter').value,process=document.querySelector('#processFilter').value;
+      const filtered=candidates.map((c,index)=>({...c,index,stage:legacyStage(c.stage)})).filter(c=>stages.some(stage=>stage.id===c.stage)&&(!src||c.source===src)&&(!process||(process==='fail'?String(c.status).includes('不通过'):!String(c.status).includes('不通过')))&&(!q||Object.values(c).flat(2).join(' ').toLowerCase().includes(q)));
+      const unmapped=candidates.filter(c=>legacyStage(c.stage)==='unmapped').length;const note=document.querySelector('#unmappedNote');note.hidden=!unmapped;note.textContent=unmapped?`${unmapped} 名候选人的送审记录已计入周期人数，但当前授权消息中没有可核验的阶段结论；未将其伪造为“待审核”。`:'';
+      document.querySelector('#board').innerHTML=stages.map(s=>{const list=filtered.filter(c=>c.stage===s.id);return `<section class="lane ${s.progress?'progress':''}"><div class="lane-head"><span>${s.label}</span><span class="count">${list.length}</span></div><div class="cards">${list.length?list.map(c=>card(c,c.index)).join(''):'<div class="empty-lane">暂无候选人</div>'}</div></section>`}).join('');
+      document.querySelectorAll('#board .card').forEach(el=>el.addEventListener('click',()=>openDetail(candidates[Number(el.dataset.index)])));
+    }
+    function openDetail(c){
+      const stage=stages.find(s=>s.id===c.stage)?.label||'';document.querySelector('#dialogStage').textContent=stage;document.querySelector('#dialogName').textContent=c.name;
+      const allMedia=(c.media||[]).map(item=>typeof item==='string'?{name:item}:item).filter(item=>item.url||item.name);
+      let timelineItems=[...(c.timeline||[[c.date,c.note||c.status]])];
+      if(c.stage==='progress'&&!timelineItems.some(item=>String(item[1]).includes('初审通过'))) timelineItems.unshift(['流程起点','初审通过']);
+      const mediaKey=name=>String(name||'').replace(c.name,'').replace(/[-_. ]/g,'').replace(/\.(mp4|mov|webm|pdf|png|jpg|jpeg)$/i,'');
+      const isVideo=name=>/\.(mp4|mov|webm)$/i.test(String(name||''));
+      const renderMedia=item=>item.url?(isVideo(item.name)?`<div><video controls preload="metadata" playsinline src="${esc(item.url)}"></video><a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.name||'打开录屏')} ↗</a></div>`:`<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">▸ ${esc(item.name||'群聊附件')}</a>`):`<div class="pending">${esc(item.name||'历史附件')} · 等待 Coco 从原群聊补齐可播放地址</div>`;
+      const used=new Set();
+      const timeline=[...timelineItems].reverse().map(t=>{
+        const label=String(t[0]||'')+' '+String(t[1]||'');
+        const matching=allMedia.filter((item,index)=>{const key=mediaKey(item.name);const hit=(key.includes('第一天')&&label.includes('第一天'))||(key.includes('第二天')&&label.includes('第二天'))||(key.includes('第三天')&&label.includes('第三天'))||(key.includes('面试')&&label.includes('面试'))||(key.includes('招聘原始')&&label.includes('初审'));if(hit)used.add(index);return hit});
+        return `<div class="timeline-item"><b>${esc(t[0])}</b><p>${esc(t[1])}</p>${matching.length?`<div class="timeline-media">${matching.map(renderMedia).join('')}</div>`:''}</div>`;
+      });
+      const remaining=allMedia.filter((_,index)=>!used.has(index));
+      if(remaining.length) timeline.push(`<div class="timeline-item"><b>其他已归档材料</b><p>无法可靠归入某一天的材料保留在时间线内。</p><div class="timeline-media">${remaining.map(renderMedia).join('')}</div></div>`);
+      document.querySelector('#dialogBody').innerHTML=`<div class="detail-grid"><div class="detail"><label>当前状态</label><b>${esc(c.status)}</b></div><div class="detail"><label>数据来源</label><b>${esc(c.source)}</b></div><div class="detail"><label>预计入职</label><b>${esc(c.startDate||'待核验')}</b></div><div class="detail"><label>实际到岗</label><b>${esc(c.actualStartDate?`${c.actualStartDate}${c.actualStartDateBasis?`（${c.actualStartDateBasis}）`:''}`:'待核验')}</b></div></div><div class="timeline">${timeline.join('')}</div>`;
+      document.querySelector('#detailDialog').showModal();
+    }
+    document.querySelector('#search').addEventListener('input',renderBoard);document.querySelector('#sourceFilter').addEventListener('change',renderBoard);document.querySelector('#processFilter').addEventListener('change',renderBoard);document.querySelector('#closeDialog').addEventListener('click',()=>document.querySelector('#detailDialog').close());document.querySelector('#detailDialog').addEventListener('click',e=>{if(e.target===e.currentTarget)e.currentTarget.close()});
+    renderKeyData();renderCalendar();renderResumeTrend();renderBoard();
+  </script>
+  <script>
+    document.addEventListener('livehub:module-data', ({detail}) => {
+      const chat=(detail?.chats||[]).find(item=>item.key==='recruitment');
+      if(!chat) return;
+      liveResumeCounts={};
+      const submitted=new Set();
+      chat.messages.forEach(message=>{
+        const name=resumeSubmissionName(message.text);
+        const createdAt=new Date(message.createdAt);
+        if(!name||Number.isNaN(createdAt.getTime())) return;
+        const date=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(createdAt);
+        const submissionKey=`${date}|${name}`;
+        if(submitted.has(submissionKey)) return;
+        submitted.add(submissionKey);
+        liveResumeCounts[date]=(liveResumeCounts[date]||0)+1;
+      });
+      const resourcesByText=chat.messages.map(message=>({text:String(message.text||''),resources:(message.resources||[]).filter(resource=>resource.url)}));
+      let changed=false;
+      candidates=candidates.map(candidate=>{
+        const matches=resourcesByText.filter(item=>item.text.includes(candidate.name)).flatMap(item=>item.resources);
+        if(!matches.length) return candidate;
+        changed=true;
+        return {...candidate,source:'招聘群',media:matches.map(item=>({name:item.name||'群聊录屏/附件',url:item.url}))};
+      });
+      renderResumeTrend();
+      if(changed){ renderKeyData();renderCalendar();renderBoard(); }
+    });
+  </script>
+  <script>
+    function lifecycleBase(){return location.pathname.split('/modules/')[0]}
+    function mergeLifecycleCandidates(updates,cycle=activeCycle){
+      const merged=new Map();
+      (updates||[]).forEach(update=>{
+        const current=merged.get(update.name)||{};
+        const timeline=[...(current.timeline||[])];
+        (update.timeline||[]).forEach(item=>{if(!timeline.some(row=>row[0]===item[0]&&row[1]===item[1]))timeline.push(item)});
+        const incomingInitialStage=['unmapped','initial_pass','initial_fail'].includes(update.stage);
+        const currentAdvancedStage=['pending_feedback','interview_fail','interview_pass','hired'].includes(legacyStage(current.stage));
+        const safeUpdate=currentAdvancedStage&&incomingInitialStage
+          ? {...update,stage:current.stage,status:current.status,note:current.note,date:current.date,startDate:current.startDate}
+          : update;
+        merged.set(update.name,{...current,...safeUpdate,media:current.media||update.media,timeline});
+      });
+      candidates=[...merged.values()].filter(item=>item.inSubmissionCohort===true).map(applyAutomaticHire);
+    }
+    function updateDynamicFunnel(snapshot){
+      const facts=snapshot.funnel;
+      const verified=Boolean(facts)&&snapshot.coverage?.reactionStatus==='已核验'&&!snapshot.coverage?.capped;
+      const value=key=>facts?.[key]??'待核验';
+      metricCandidates.textContent=funnelCandidates.textContent=facts?.candidateCount??'待核验';
+      metricScreened.textContent=funnelScreened.textContent=value('initialPassedCount');
+      metricInterview.textContent=funnelInterview.textContent=facts?.groupEvaluatedCount??'待核验';
+      metricInterviewPassed.textContent=funnelInterviewPassed.textContent=facts?.groupPassedCount??'待核验';
+      metricAssessment.textContent=value('initialFailedCount');
+      alertReview.textContent=facts?.initialPendingCount??'待核验';
+      const ratio=(a,b)=>b>0?`${(a/b*100).toFixed(1)}%`:'待核验';
+      conversionScreened.textContent=facts&&facts.initialPendingCount===0?ratio(facts.initialPassedCount,facts.candidateCount):'待核验';
+      conversionScreened.title=verified?'初审表情已核验':'已显示源表解析计数；表情核验仍待完成';
+      conversionInterview.textContent='待日历授权';
+      conversionInterviewPassed.textContent=facts?ratio(facts.groupPassedCount,facts.groupEvaluatedCount):'待核验';
+      const unmatched=(snapshot.candidates||[]).filter(item=>item.inSubmissionCohort===false);
+      document.querySelector('#unmatchedHistory summary').textContent=`未匹配送审的面评 / Offer · ${unmatched.length} 名（不计入漏斗）`;
+      document.querySelector('#unmatchedRecords').innerHTML='<p>可能涉及跨期或姓名未匹配；没有身份依据时不合并。原记录与时间线完整保留。</p>'+unmatched.map((item,i)=>`<button class="card" data-unmatched="${i}"><b>${esc(item.name)}</b> · ${esc(item.date)}</button>`).join('');
+      document.querySelectorAll('[data-unmatched]').forEach(button=>button.onclick=()=>openDetail(unmatched[Number(button.dataset.unmatched)]));
+    }
+    function applyLifecycleSnapshot(snapshot){
+      if(!snapshot?.cycle)return;
+      lifecycleSnapshot=snapshot;cohortReady=true;
+      if(!snapshot.cycle&&recruitmentMonth.value!==defaultRecruitmentMonth())return;
+      activeCycle=snapshot.cycle||activeCycle;recruitmentMonth.value=activeCycle.month;renderCycleLabel();
+      mergeLifecycleCandidates(snapshot.candidates,activeCycle);
+      liveResumeCounts=snapshot.dailyCounts||{};
+      liveResumeNames=snapshot.dailyNames||{};
+      interviewEvents=snapshot.interviewEvents||{};
+      calendarSourceStatus.textContent=snapshot.calendarStatus||'正式面试日历待授权；当前群聊记录不冒充正式日历。';
+
+      const summary=snapshot.summary;
+      const latestCount=summary?.yesterdaySubmitted??liveResumeCounts[snapshot.sourceDate]??0;
+      alertResume.textContent=latestCount;
+      alertResumeLabel.textContent=summary?.yesterdaySubmitted!=null?'昨日新增简历':`${String(snapshot.sourceDate||'最新').slice(5).replace('-','月')} 日新增简历`;
+      reminderSource.textContent=`来源最新 ${snapshot.sourceDate||'待核验'}`;
+      snapshotBadge.textContent=`最近更新 · ${formatChinaTime(snapshot.generatedAt)}`;
+      renderKeyData();renderCalendar();renderResumeTrend();renderBoard();updateDynamicFunnel(snapshot);
+    }
+    async function loadRecruitmentCycle(){
+      const month=recruitmentMonth.value||defaultRecruitmentMonth();cohortReady=false;liveResumeCounts=null;candidates=[];renderKeyData();renderResumeTrend();renderBoard();activeCycle=cycleForMonth(month);renderCycleLabel();stateDot.className='state-dot stale';refreshTitle.textContent='正在读取所选招聘周期…';
+      try{const response=await fetch(`${lifecycleBase()}/api/lifecycle/recruitment-cycle?month=${encodeURIComponent(month)}`,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(25000)}),payload=await response.json();if(!response.ok||!payload?.ok)throw new Error(payload?.error||'招聘周期读取失败');applyLifecycleSnapshot(payload.data);reminderSource.textContent=`招聘周期 ${activeCycle.startDate} — ${activeCycle.endDate}`;refreshTitle.textContent='所选招聘周期已读取';const reactions=payload.data.coverage?.reactionStatus||'待核验',employment=payload.data.coverage?.employmentStatus||'待授权';refreshMeta.textContent=`已读取 ${payload.data.coverage?.chatMessages||0} 条招聘群授权消息；OK/No 表情 ${reactions}；战队日报入职/考核 ${employment}；送审 ${payload.data.submittedCount||0} 人次；周期送审候选人 ${payload.data.funnel?.candidateCount??'待核验'} 名；未匹配送审 ${payload.data.funnel?.unmatchedCount??'待核验'} 名单列；${payload.data.unmappedCount?`${payload.data.unmappedCount} 名结果待核验`:'已映射可核验阶段'}。`;stateDot.className=reactions==='已核验'?'state-dot current':'state-dot stale'}catch(error){stateDot.className='state-dot error';refreshTitle.textContent='所选招聘周期读取失败';refreshMeta.textContent=`${error.message}；未把缺失数据记为 0。`}}
+    function formatChinaTime(iso){if(!iso)return'—';const date=new Date(iso);return Number.isNaN(date.getTime())?'—':new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date)}
+    function renderLifecycleStatus(status){
+      const module=status?.modules?.recruitment,snapshot=lifecycleSnapshot||module,isCurrent=snapshot?.sourceDate===TODAY,summary=lifecycleSnapshot?.summary;
+      stateDot.className=`state-dot ${status?.running?'stale':isCurrent?'current':snapshot?'stale':''}`;
+      refreshTitle.textContent=status?.running?'正在读取招聘群与教练日报…':isCurrent?'招聘池已更新':'招聘池待核验';
+      snapshotBadge.textContent=snapshot?`最近更新 · ${formatChinaTime(snapshot.generatedAt)}`:'最近更新 · 待同步';
+      refreshMeta.textContent=snapshot?`最近更新 ${formatChinaTime(snapshot.generatedAt)} · 来源最新 ${snapshot.sourceDate||'未返回日期'}${summary?` · 编制 ${summary.projectHeadcount??'待核验'} · 新人池 ${summary.inTraining??'待核验'} · 待考核 ${summary.pendingAssessment??'待核验'}`:''} · 每天 09:30、18:00 自动更新`:'尚无每日快照，当前显示 8 月 13 日历史基线；每天 09:30、18:00 自动更新';
+      const logs=(status?.logs||[]).filter(item=>item.module==='recruitment').slice(0,8);
+      refreshLogs.innerHTML=logs.length?logs.map(item=>`<div class="log-row"><span>${formatChinaTime(item.at)}</span><span>${item.ok?`来源 ${esc(item.sourceDate||'待核验')}`:esc(item.error||'刷新失败，已保留旧数据')}</span><b class="${item.ok?'log-ok':'log-fail'}">${item.ok?'成功':'失败'}</b></div>`).join(''):'<div class="log-row"><span>—</span><span>暂无更新记录</span><span></span></div>';
+    }
+    async function loadLifecycle(){
+      try{
+        const base=lifecycleBase(),[snapshotResponse,statusResponse]=await Promise.all([fetch(`${base}/api/lifecycle/snapshot?module=recruitment`,{credentials:'same-origin'}),fetch(`${base}/api/lifecycle/status`,{credentials:'same-origin'})]);
+        const snapshotPayload=await snapshotResponse.json(),statusPayload=await statusResponse.json();
+        // The period endpoint is authoritative. A cached daily snapshot must not race
+        // with it and overwrite the verified reaction-based period results.
+        renderLifecycleStatus(statusPayload);
+      }catch(error){stateDot.className='state-dot error';refreshTitle.textContent='招聘状态读取失败';refreshMeta.textContent='当前保留上一次有效档案；请稍后重试。'}
+    }
+    async function manualRefresh(){
+      refreshButton.disabled=true;refreshButton.textContent='启动中…';
+      try{
+        const response=await fetch(`${lifecycleBase()}/api/lifecycle/refresh?module=recruitment`,{method:'POST',credentials:'same-origin',headers:{'X-Lifecycle-Refresh':'manual','Accept':'application/json'}}),payload=await response.json();
+        if(!response.ok||!payload?.accepted)throw new Error(payload?.error||'刷新任务启动失败');
+        refreshButton.textContent='更新中…';refreshTitle.textContent=payload.message||'刷新任务已启动';
+        for(let attempt=0;attempt<60;attempt+=1){
+          await new Promise(resolve=>setTimeout(resolve,2000));
+          const statusResponse=await fetch(`${lifecycleBase()}/api/lifecycle/status?_=${Date.now()}`,{credentials:'same-origin',cache:'no-store'}),status=await statusResponse.json();
+          renderLifecycleStatus(status);
+          if(!status?.running){await loadLifecycle();await loadRecruitmentCycle();return}
+        }
+        throw new Error('刷新仍在后台执行，请稍后查看更新记录。');
+      }catch(error){stateDot.className='state-dot error';refreshTitle.textContent='本次更新失败，已保留旧招聘档案';refreshMeta.textContent=error.message||'请稍后重试'}
+      finally{refreshButton.disabled=false;refreshButton.textContent='立即更新'}
+    }
+    recruitmentMonth.addEventListener('change',loadRecruitmentCycle);refreshButton.onclick=manualRefresh;renderCycleLabel();loadLifecycle();loadRecruitmentCycle();setInterval(()=>{loadLifecycle();loadRecruitmentCycle()},5*60*1000);
+  </script>
+  <script src="../../module-data.js" defer></script>
+</body>
+</html>

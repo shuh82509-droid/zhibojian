@@ -1,0 +1,4 @@
+FROM fd-027340-live-center-workbench:latest
+USER root
+RUN rm -rf /app/collaboration/dist
+COPY runtime/collaboration-center/dist/ /app/collaboration/dist/

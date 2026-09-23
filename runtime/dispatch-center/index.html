@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>调度中心 · 直播中心中枢系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css?v=20260907a" />
+  <link rel="stylesheet" href="live-status.css" />
+  <link rel="stylesheet" href="live-status-shared.css?v=20260902a" />
+  <link rel="stylesheet" href="schedule-timeline.css" />
+  <link rel="stylesheet" href="font-scale.css" />
+  <link rel="stylesheet" href="schedule-role-colors.css" />
+  <link rel="stylesheet" href="schedule-room-labels.css" />
+  <link rel="stylesheet" href="dispatch-enhancements.css" />
+  <link rel="stylesheet" href="planning-workbench.css?v=20260828d" />
+  <link rel="stylesheet" href="planning-room-labels.css?v=20260828d" />
+  <link rel="stylesheet" href="planning-workbench-20260829.css?v=20260829a" />
+  <link rel="stylesheet" href="dispatch-views.css?v=20260907a" />
+</head>
+<body class="module-view" data-dispatch-page="current">
+  <div class="app-shell">
+    <main>
+      <header class="topbar">
+        <div><p class="eyebrow">DISPATCH CENTER</p><h1>调度中心</h1></div>
+        <div class="top-actions" data-dispatch-view="current"><button class="secondary" id="todayButton">回到今天</button><button class="primary" id="newShiftButton">新增 / 删除排班</button></div>
+      </header>
+
+      <nav class="dispatch-view-tabs" aria-label="调度中心页面">
+        <button type="button" data-view-tab="current" aria-current="page"><b>当前排班</b><span>班表当班安排、直播间班次与支援线索</span></button>
+        <button type="button" data-view-tab="workbench"><b>排班工作台</b><span>主播与助理预排、化妆师月排班和休息预警</span></button>
+      </nav>
+
+      <section class="toolbar" id="overview" data-dispatch-view="current">
+        <div class="date-switcher"><button id="prevDay" aria-label="前一天">‹</button><button class="date-current" id="dateLabel">正在读取日期</button><button id="nextDay" aria-label="后一天">›</button></div>
+      </section>
+
+      <section class="live-status" aria-label="班表当班安排" data-dispatch-view="current">
+        <div class="live-status-heading"><div><p class="eyebrow">SCHEDULED NOW</p><h2>班表当班安排</h2></div><div class="live-now"><i></i><span id="liveTime">正在核对当前时段</span></div></div>
+        <div class="live-room-grid" id="liveRoomGrid"></div>
+      </section>
+
+      <section class="makeup-planner" id="makeupPlanner" aria-labelledby="makeupPlannerTitle" data-dispatch-view="workbench">
+        <header><div><p class="eyebrow">MAKEUP MONTHLY SCHEDULING</p><h2 id="makeupPlannerTitle">化妆师月度排班</h2><p>四个直播间共用 2—3 名化妆师；三人上班排 AC1 / F / Q，仅两人上班时排 AC1 / Q，并均衡各班次数。</p></div><a id="makeupSourceLink" href="https://jqx28l0j4lx.feishu.cn/wiki/QrjQwGyHoi6kZYkuKYCczBGYnoc" target="_blank" rel="noopener noreferrer">打开已授权源表 ↗</a></header>
+        <div class="makeup-planner-tools"><label>排班月份<input id="makeupMonth" type="month"></label><button id="addMakeupArtist" type="button">＋ 新增化妆师</button><button id="generateMakeupDraft" type="button">生成月排班</button><button id="saveMakeupDraft" type="button" disabled>保存草稿</button><button id="previewMakeupImport" type="button" disabled>预览导入化妆师表</button><button id="commitMakeupImport" type="button" disabled>确认导入并回读</button></div>
+        <div id="makeupRosterEditor" class="makeup-roster-editor"></div><div id="makeupPlanningStatus" class="planning-status" aria-live="polite">正在读取化妆师排班源…</div><div id="makeupImportPreview" class="planning-import-preview" hidden></div><div id="makeupPlanningSummary" class="makeup-planning-summary"></div><div id="makeupPlanningGrid" class="planning-grid-wrap"></div>
+      </section>
+
+      <section class="schedule-card" id="schedule" data-dispatch-view="current">
+        <div class="section-heading"><div><p class="eyebrow">LIVE SCHEDULE</p><h2>直播间排班</h2></div><div class="legend"><span><i class="legend-dot flagship"></i>官旗</span><span><i class="legend-dot brand"></i>品牌精选</span><span><i class="legend-dot best"></i>优选</span><span><i class="legend-dot wangou"></i>王鸥美肤</span></div></div>
+        <div class="schedule-scroll"><div class="timeline" id="timeline"></div></div>
+      </section>
+
+      <section class="planning-hub" id="planningHub" data-dispatch-view="workbench">
+        <div class="section-heading"><div><p class="eyebrow">MONTHLY PLANNING WORKBENCH</p><h2>月度排班工作台</h2></div><a id="planningSourceLink" class="planning-source" href="https://jqx28l0j4lx.feishu.cn/wiki/UKVDwxpz7iKAv8k5KxTcxiDVnuf" target="_blank" rel="noopener noreferrer">打开品牌营销部直播中心排班表 ↗</a></div>
+        <div class="planning-room-grid" id="planningRoomGrid">
+          <article data-room-card="guanqi"><span class="room-chip flagship">官旗</span><h3>5 档资源位</h3><p>L / F / J2 / P / M · 倒班保护</p><span class="planning-draft-count" data-draft-count="guanqi">暂无草稿</span><div><button data-planning-room="guanqi" data-planning-role="anchor">主播预排</button><button class="secondary-room-action" data-planning-room="guanqi" data-planning-role="assistant">助理预排</button></div></article>
+          <article data-room-card="brand_selection"><span class="room-chip brand">品牌精选</span><h3>4 档资源位</h3><p>AC1 / L / J2 / WB · 评分可调</p><span class="planning-draft-count" data-draft-count="brand_selection">暂无草稿</span><div><button data-planning-room="brand_selection" data-planning-role="anchor">主播预排</button><button class="secondary-room-action" data-planning-room="brand_selection" data-planning-role="assistant">助理预排</button></div></article>
+          <article data-room-card="youxuan"><span class="room-chip best">优选</span><h3>周四至周三</h3><p>R / X / B3 / M · 次日倒班保护</p><span class="planning-draft-count" data-draft-count="youxuan">暂无草稿</span><div><button data-planning-room="youxuan" data-planning-role="anchor">主播预排</button><button class="secondary-room-action" data-planning-room="youxuan" data-planning-role="assistant">助理预排</button></div></article>
+          <article data-room-card="wangou"><span class="room-chip wangou">王鸥美肤</span><h3>周三至周三</h3><p>促销日标记 · 资源分严格递减</p><span class="planning-draft-count" data-draft-count="wangou">暂无草稿</span><div><button data-planning-room="wangou" data-planning-role="anchor">主播预排</button><button class="secondary-room-action" data-planning-room="wangou" data-planning-role="assistant">助理预排</button></div></article>
+        </div>
+        <section class="rest-workbench" aria-labelledby="restWorkbenchTitle"><header><div><p class="eyebrow">VERIFIED REST BOARD</p><h3 id="restWorkbenchTitle">主播休息统计与连播预警</h3><p>读取 8 月、9 月原始飞书排班表并跨月计算连播；未来空白只算“未排班”。连续直播达到 6 天时建议安排休息。</p></div><div class="rest-tools"><label>月份<input id="restMonth" type="month" /></label><label>全员固定月应休<input id="restEntitlement" type="number" min="0" max="31" placeholder="月初手动填写" /></label><button id="saveRestEntitlement" type="button">保存月应休</button><label>筛选主播<input id="restAnchorFilter" type="search" placeholder="可粘贴多个姓名，以空格/换行分隔" /></label><button id="refreshRestBoard" type="button">刷新来源</button><span id="restEntitlementStatus" role="status">尚未填写本月固定应休</span></div></header><div class="rest-summary-strip" id="restSummaryStrip"><span><b>来源状态</b>正在读取</span><span><b>主播数</b>待核验</span><span><b>连播预警</b>待核验</span></div><div class="rest-workbench-layout"><div class="rest-table-wrap"><table class="rest-board-table"><thead><tr><th>状态 / 主播</th><th>直播间</th><th>已休 / 剩余</th><th>跨月连播</th><th>建议休息</th><th>补班说明</th><th></th></tr></thead><tbody id="restBoardTable"><tr><td colspan="7">正在读取已授权排班源…</td></tr></tbody></table></div><aside class="rest-calendar" id="restCalendar"><header><div><h4>主播月历</h4><span>点击主播查看工作、休息与未排班</span></div><b>待选择</b></header></aside></div></section>
+      </section>
+
+      <div class="lower-grid" data-dispatch-view="current">
+        <section class="resource-card resource-rankings">
+          <div class="section-heading compact"><div><p class="eyebrow">RESOURCE PRIORITY</p><h2>资源位排序</h2></div><span class="resource-source">运营配置快照 · 待核验</span></div>
+          <p class="resource-intro">以下为历史配置参考，不代表飞书班表或实时资源状态。</p>
+          <div class="resource-ranking-list" aria-label="四个直播间资源位排序">
+            <article class="resource-ranking flagship" data-resource-room="guanqi"><span class="room-chip flagship">官旗</span><div><b>官旗资源位排序</b><p><strong>L</strong><i>›</i><strong>F</strong><i>›</i><strong>J2</strong><i>›</i><strong>P</strong><i>›</i><strong>M</strong></p></div></article>
+            <article class="resource-ranking brand" data-resource-room="brand_selection"><span class="room-chip brand">品牌精选</span><div><b>品牌精选资源位排序</b><p><strong>AC1</strong><i>›</i><strong>L</strong><i>›</i><strong>J2</strong><i>›</i><strong>WB</strong></p></div></article>
+            <article class="resource-ranking best" data-resource-room="youxuan"><span class="room-chip best">优选</span><div><b>优选资源位排序</b><p><strong>R</strong><i>›</i><strong>X</strong><i>›</i><strong>B3</strong><i>›</i><strong>M</strong></p></div></article>
+            <article class="resource-ranking wangou" data-resource-room="wangou"><span class="room-chip wangou">王鸥美肤</span><div><b>王鸥美肤资源位排序</b><p><strong>R</strong><i>›</i><strong>X</strong><i>›</i><strong>B3</strong><i>›</i><strong>M</strong></p></div></article>
+          </div>
+        </section>
+
+        <section class="dispatchable-card" id="dispatchableAnchors">
+          <div class="section-heading compact"><div><p class="eyebrow">ANCHOR AVAILABILITY</p><h2>可调度主播</h2></div><span class="dispatchable-date" id="dispatchableDate">正在读取当日状态</span></div>
+          <p class="dispatchable-intro">根据班表提供待支援与休息安排线索；实际打卡、到岗和开播状态尚未接入。</p>
+          <div class="dispatchable-grid" id="dispatchableContent" aria-live="polite"></div>
+        </section>
+
+        <section class="rules-card" id="rules" hidden>
+          <h2>规则提醒</h2><p>待实际排班和休息来源核验后展示；当前不推断实时违规或休假余额。</p>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="shiftDialog">
+    <form id="shiftForm">
+      <div class="modal-heading"><div><p class="eyebrow">FEISHU WRITEBACK</p><h2>写回直播排班</h2></div><button class="close" id="closeShiftDialog" type="button" aria-label="关闭">×</button></div>
+      <p class="writeback-note">只写入所选日期块内已有的主播/助播时间轴。提交前会展示飞书单元格差异，班表变化时自动阻断。</p>
+      <label for="shiftRoom">直播间<select id="shiftRoom" name="roomCode"><option value="guanqi">官旗</option><option value="brand_selection">品牌精选</option><option value="youxuan">优选</option><option value="wangou">王鸥美肤</option></select></label>
+      <label for="shiftRole">岗位<select id="shiftRole" name="role"><option value="anchor">主播</option><option value="assistant">助播</option></select></label>
+      <label for="shiftAction">操作<select id="shiftAction"><option value="assign">新增或调整排班</option><option value="remove">删除指定姓名的排班</option></select></label>
+      <label for="shiftName">排班姓名<input id="shiftName" name="name" maxlength="40" autocomplete="off" placeholder="填写飞书班表中的姓名" required /></label>
+      <div class="form-row"><label for="shiftStart">开始时间<select id="shiftStart" name="start" required></select></label><label for="shiftEnd">结束时间<select id="shiftEnd" name="end" required></select></label></div>
+      <section class="writeback-preview" id="writebackPreview" hidden aria-live="polite"></section>
+      <label class="overwrite-confirm" id="overwriteConfirm" hidden><input id="allowOverwrite" type="checkbox" />我已核对并同意覆盖目标时间段内现有姓名</label>
+      <div class="modal-actions"><button class="secondary" id="cancelShift" type="button">取消</button><button class="primary" id="saveShift" type="submit">预览飞书差异</button></div>
+    </form>
+  </dialog>
+  <dialog id="planningDialog" class="planning-dialog">
+    <form id="planningForm" method="dialog">
+      <div class="modal-heading"><div><p class="eyebrow">SCHEDULE DRAFT</p><h2 id="planningTitle">排班预排</h2><p id="planningRuleHint" class="planning-dialog-hint"></p></div><button class="close" id="closePlanningDialog" type="button" aria-label="关闭">×</button></div>
+      <div class="planning-form-grid"><label>开始日期<input id="planningStart" type="date" required /></label><label>结束日期<input id="planningEnd" type="date" required /></label></div>
+      <section id="planningAnchorRosterBlock" class="assistant-roster-editor"><header><div><b>主播名单与周排名</b><small>排名限定 1—7；优选可取消勾选以调整本周主播池。</small></div><button id="addAnchorRoster" type="button">＋ 新增主播</button></header><div id="anchorRosterRows"></div></section>
+      <section id="assistantRosterEditor" class="assistant-roster-editor" hidden><header><div><b id="assistantRosterTitle">助理名单</b><small>四个直播间独立维护；没有资源位，只保存班次、休息日与日期范围。</small></div><button id="addAssistantRoster" type="button">＋ 新增助理</button></header><div id="assistantRosterRows"></div></section>
+      <label id="planningEventDatesBlock" hidden>活动日期 <small>王鸥美肤专用，逗号分隔；日历会高亮并随草稿保存</small><input id="planningEventDates" placeholder="2026-09-09,2026-09-16" /></label>
+      <div class="planning-config-grid"><section><b id="planningShiftHeading">班次 / 资源位顺序</b><small>越靠前优先级越高；每个班次同时显示对应时间</small><div id="planningShiftOrder" class="planning-shift-order"></div></section><label>自定义班次与时间 <small>格式：D1@09:00-18:00，多个用逗号分隔</small><input id="planningCustomShifts" placeholder="D1@09:00-18:00,D2@18:00-次日02:00" /></label></div>
+      <section id="planningScores" class="planning-scores"></section>
+      <div class="planning-actions"><button class="secondary" id="loadPriorPlanning" type="button">导入上期排班</button><button class="secondary" id="generatePlanningDraft" type="button">生成预排草稿</button><button class="secondary" id="savePlanningDraft" type="button" disabled>保存草稿</button><button class="primary" id="previewPlanningImport" type="button" disabled>预览导入总表</button></div>
+      <div id="planningStatus" class="planning-status" aria-live="polite"></div><section id="planningSummary" class="planning-summary" hidden></section><div id="planningGrid" class="planning-grid-wrap"></div><section id="planningImportPreview" class="planning-import-preview" hidden></section>
+    </form>
+  </dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <script src="schedule-clock.js?v=20260921"></script>
+  <script src="app.js?v=20260921-clock"></script>
+  <script src="planning-workbench.js?v=20260829a"></script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+body.live-hub-embedded .app-shell{display:block}
+body.live-hub-embedded .sidebar{display:none}
+body.live-hub-embedded .material-page{width:100%;max-width:none;margin:0;padding:28px 30px 48px}
+@media(max-width:760px){body.live-hub-embedded .material-page{padding:18px 14px 32px}}

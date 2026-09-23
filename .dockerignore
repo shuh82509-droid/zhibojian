@@ -1,0 +1,14 @@
+.git
+.agents
+.codex
+sources
+.env
+.env.coco
+.env.*
+node_modules
+runtime/data-center/node_modules
+runtime/data-center/.next
+runtime/data-center/dist
+runtime/data-center/.wrangler
+*.log
+*.md

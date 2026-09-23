@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>素材中心 · 直播中枢系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="font-scale.css" />
+  <link rel="stylesheet" href="dispatch-enhancements.css" />
+  <link rel="stylesheet" href="material-center.css" />
+  <link rel="stylesheet" href="embedded-shell.css?v=20260828d" />
+</head>
+<body><script>if(new URLSearchParams(location.search).has('embed'))document.body.classList.add('live-hub-embedded');</script>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="../../"><span class="brand-mark">L</span><span>直播中枢</span></a>
+      <div class="workspace"><span class="workspace-dot"></span><span>直播中心</span><span class="chevron">⌄</span></div>
+      <nav aria-label="主导航">
+        <a href="../../#schedule"><span>◷</span>调度中心</a>
+        <a class="active" href="material-center.html"><span>◇</span>素材中心</a>
+      </nav>
+    </aside>
+    <main class="material-page">
+      <section class="material-hero material-workbench">
+        <div class="material-topline">
+          <div>
+            <p class="material-eyebrow">CONTENT &amp; MATERIAL LIBRARY</p>
+            <h1>素材中心</h1>
+            <p>统一归档直播所需沟通稿、妆造规范、视觉物料、竞对分析、直播手卡与违禁词资料。</p>
+          </div>
+        </div>
+        <label class="material-global-search"><span>⌕</span><input id="globalMaterialSearch" type="search" placeholder="搜索沟通稿、主播妆造、视觉素材、竞对分析、直播手卡与违禁词资料" autocomplete="off" /></label>
+        <div class="material-search-results" id="materialSearchResults" aria-live="polite" hidden></div>
+        <div class="material-section-tabs" role="tablist" aria-label="素材中心内容切换">
+          <button class="active" type="button" role="tab" aria-selected="true" data-material-panel="scripts">沟通稿</button>
+          <button type="button" role="tab" aria-selected="false" data-material-panel="makeup">主播妆造</button>
+          <button type="button" role="tab" aria-selected="false" data-material-panel="visuals">视觉素材</button>
+          <button type="button" role="tab" aria-selected="false" data-material-panel="competitors">竞对分析</button>
+          <button type="button" role="tab" aria-selected="false" data-material-panel="cue-cards">直播手卡</button>
+          <button type="button" role="tab" aria-selected="false" data-material-panel="prohibited">违禁词资料</button>
+        </div>
+        <div class="material-panel-shell">
+          <iframe class="material-frame active" data-material-frame="scripts" title="沟通稿" src="material-scripts.html?embed=1&amp;v=20260903b"></iframe>
+          <iframe class="material-frame" data-material-frame="makeup" title="主播妆造" data-src="material-makeup.html?embed=1"></iframe>
+          <iframe class="material-frame" data-material-frame="visuals" title="视觉素材" data-src="material-visuals.html?embed=1"></iframe>
+          <iframe class="material-frame" data-material-frame="competitors" title="竞对分析" data-src="material-competitors.html?embed=1"></iframe>
+          <iframe class="material-frame" data-material-frame="cue-cards" title="直播手卡" data-src="material-cue-cards.html?embed=1&amp;v=20260903a"></iframe>
+          <iframe class="material-frame" data-material-frame="prohibited" title="违禁词资料" data-src="material-prohibited.html?embed=1&amp;v=20260903a"></iframe>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="material-search.js"></script>
+  <script>
+    const materialTabs = [...document.querySelectorAll('[data-material-panel]')];
+    const materialFrames = [...document.querySelectorAll('[data-material-frame]')];
+    const applyEmbeddedFrameStyle = (frame) => {
+      try {
+        const documentInFrame = frame.contentDocument;
+        documentInFrame?.body?.classList.add('material-embedded');
+        const height = Math.max(760, documentInFrame?.documentElement?.scrollHeight || 0);
+        frame.style.height = (height + 12) + 'px';
+      } catch (_) {}
+    };
+    materialFrames.forEach((frame) => frame.addEventListener('load', () => applyEmbeddedFrameStyle(frame)));
+    materialFrames.forEach((frame) => applyEmbeddedFrameStyle(frame));
+    materialTabs.forEach((tab) => tab.addEventListener('click', () => {
+      const panel = tab.dataset.materialPanel;
+      materialTabs.forEach((button) => {
+        const selected = button === tab;
+        button.classList.toggle('active', selected);
+        button.setAttribute('aria-selected', String(selected));
+      });
+      materialFrames.forEach((frame) => {
+        const selected = frame.dataset.materialFrame === panel;
+        if (selected && !frame.getAttribute('src') && frame.dataset.src) frame.src = frame.dataset.src;
+        frame.classList.toggle('active', selected);
+        if (selected) applyEmbeddedFrameStyle(frame);
+      });
+    }));
+  </script>
+  <script src="../../coco-links.js" defer></script>
+</body>
+</html>

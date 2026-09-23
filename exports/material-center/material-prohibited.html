@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>违禁词资料 · 素材中心</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="material-center.css">
+  <link rel="stylesheet" href="material-modules.css">
+  <style>
+    .prohibited-page{max-width:none}.prohibited-panel{padding:22px;border:1px solid #ead9dc;border-radius:14px;background:#fffafb}.prohibited-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start}.prohibited-head h2{margin:0;font-size:22px}.prohibited-head p{margin:7px 0 0;color:#7d6c71;font-size:13px}.prohibited-status{padding:6px 10px;border-radius:999px;background:#f5e8eb;color:#8b4355;font-size:12px;font-weight:700}.prohibited-upload,.prohibited-link-upload{display:grid;grid-template-columns:minmax(180px,1fr) minmax(280px,1.8fr) auto;gap:9px;margin-top:16px}.prohibited-upload input,.prohibited-link-upload input{min-width:0;padding:10px 11px;border:1px solid #dfd4d7;border-radius:8px;background:#fff}.prohibited-upload button,.prohibited-link-upload button{border:0;border-radius:8px;background:#8f4054;color:#fff;padding:10px 15px;font-weight:800;cursor:pointer}.prohibited-link-upload{padding-top:15px;border-top:1px solid #eee1e4}.prohibited-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:11px;margin-top:20px}.prohibited-item{padding:14px;border:1px solid #eadfe1;border-radius:10px;background:#fff;text-decoration:none;color:#3e3337}.prohibited-item b{display:block}.prohibited-item small{display:block;margin-top:6px;color:#86777c;line-height:1.5}.prohibited-note{margin:13px 0 0;color:#89767c;font-size:12px}@media(max-width:760px){.prohibited-head{display:block}.prohibited-status{display:inline-block;margin-top:10px}.prohibited-upload,.prohibited-link-upload{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<main class="material-library-page prohibited-page">
+  <div class="material-topline"><div><p class="material-eyebrow">COMPLIANCE MATERIAL LIBRARY</p><h1>违禁词资料</h1><p>独立归档直播违禁词、敏感词与合规提醒，不再与直播手卡混排。</p></div></div>
+  <section class="prohibited-panel">
+    <div class="prohibited-head"><div><h2>资料库</h2><p>支持上传本地资料，或保存可追溯的飞书 Wiki / 飞书 Docx 原文。</p></div><span class="prohibited-status" id="prohibitedStatus">待读取</span></div>
+    <div class="prohibited-upload"><input id="prohibitedTitle" maxlength="120" placeholder="本地资料标题"><input id="prohibitedFile" type="file" accept=".png,.jpg,.jpeg,.pdf,.txt,.docx,image/png,image/jpeg,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><button id="uploadProhibited" type="button">上传本地资料</button></div>
+    <div class="prohibited-link-upload"><input id="prohibitedLinkTitle" maxlength="120" placeholder="飞书资料标题"><input id="prohibitedLinkUrl" type="url" placeholder="https://...feishu.cn/wiki/... 或 /docx/..."><button id="saveProhibitedLink" type="button">保存飞书资料</button></div>
+    <p class="prohibited-note">缺少读取权限或来源失效的资料会保留原记录并提示核验，不会按空资料处理。</p>
+    <div id="prohibitedList" class="prohibited-list"><div class="empty-material">正在读取违禁词资料…</div></div>
+  </section>
+</main>
+<script>
+const base=location.pathname.split('/modules/')[0],assetApi=`${base}/api/material-assets`,linkApi=`${base}/api/material-links`,prohibitedTitle=document.querySelector('#prohibitedTitle'),prohibitedFile=document.querySelector('#prohibitedFile'),prohibitedLinkTitle=document.querySelector('#prohibitedLinkTitle'),prohibitedLinkUrl=document.querySelector('#prohibitedLinkUrl'),saveProhibitedLink=document.querySelector('#saveProhibitedLink'),prohibitedStatus=document.querySelector('#prohibitedStatus'),prohibitedList=document.querySelector('#prohibitedList'),uploadProhibited=document.querySelector('#uploadProhibited');let assets=[],links=[];
+const esc=value=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+const dateTime=value=>{if(!value)return'—';const date=new Date(value);return Number.isNaN(date.getTime())?'—':new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date)};
+const fileData=file=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('本地文件读取失败'));reader.readAsDataURL(file)});
+async function uploadAsset(file,titleValue){const response=await fetch(assetApi,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'prohibited-word',name:file.name,title:titleValue,dataUrl:await fileData(file)})}),result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'上传失败');return result.asset}
+function render(){const local=assets.filter(item=>item.kind==='prohibited-word'),remote=links.filter(item=>item.kind==='prohibited'),list=[...remote,...local].sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)));prohibitedStatus.textContent=`共 ${list.length} 份`;prohibitedList.innerHTML=list.length?list.map(item=>`<a class="prohibited-item" href="${esc(item.url)}" target="_blank" rel="noreferrer"><b>${esc(item.title)}</b><small>${esc(item.sourceType?`飞书 ${item.sourceType==='docx'?'Docx':'Wiki'}`:(item.originalName||item.mime))} · ${dateTime(item.createdAt)} · ${esc(item.createdBy||'已授权成员')}</small></a>`).join(''):'<div class="empty-material">尚未上传违禁词资料。</div>'}
+async function load(){try{const [assetResponse,linkResponse]=await Promise.all([fetch(assetApi,{credentials:'same-origin',cache:'no-store'}),fetch(linkApi,{credentials:'same-origin',cache:'no-store'})]),assetPayload=await assetResponse.json(),linkPayload=await linkResponse.json();if(!assetResponse.ok||!assetPayload.ok)throw new Error(assetPayload.error||'本地资料读取失败');if(!linkResponse.ok||!linkPayload.ok)throw new Error(linkPayload.error||'飞书资料读取失败');assets=assetPayload.assets||[];links=linkPayload.links||[];render()}catch(error){prohibitedStatus.textContent='待读取';prohibitedList.innerHTML=`<div class="empty-material">${esc(error.message||'资料读取失败')}</div>`}}
+uploadProhibited.onclick=async()=>{const file=prohibitedFile.files[0];if(!file)return prohibitedStatus.textContent='请选择文件';prohibitedStatus.textContent='上传中…';try{await uploadAsset(file,prohibitedTitle.value.trim()||file.name);prohibitedTitle.value='';prohibitedFile.value='';await load()}catch(error){prohibitedStatus.textContent=error.message||'上传失败'}};
+saveProhibitedLink.onclick=async()=>{prohibitedStatus.textContent='保存中…';try{const response=await fetch(linkApi,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'prohibited',category:'违禁词资料',title:prohibitedLinkTitle.value.trim(),url:prohibitedLinkUrl.value.trim()})}),result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'保存失败');prohibitedLinkTitle.value='';prohibitedLinkUrl.value='';await load()}catch(error){prohibitedStatus.textContent=error.message||'保存失败'}};
+load();
+</script>
+</body>
+</html>

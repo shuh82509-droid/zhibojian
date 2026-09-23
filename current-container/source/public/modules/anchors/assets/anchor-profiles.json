@@ -1,0 +1,215 @@
+{
+  "generatedAt": "2026-08-24T11:05:59.728Z",
+  "baseToken": "R5ntb369Tap1sisGt5dcPsIpnnf",
+  "tableId": "tblDHQ06n9PBtToW",
+  "viewId": "vewKuBxJAm",
+  "profiles": [
+    {
+      "name": "陈璐",
+      "room": "品牌精选",
+      "makeupArtist": "刘玉婷",
+      "hireDate": "2026-03-16",
+      "recordUpdatedAt": "2026-07-10T09:20:04.000+08:00",
+      "photoFile": "975b00394e1f86495e0f.png",
+      "sourceRecordId": "rec5t1hWtZVdcl"
+    },
+    {
+      "name": "赵媛",
+      "room": "官旗",
+      "makeupArtist": "肖慧萍",
+      "hireDate": "2023-05-22",
+      "recordUpdatedAt": "2026-08-07T10:32:07.000+08:00",
+      "photoFile": "2a3eda01935f815c3f5f.png",
+      "sourceRecordId": "reclAwn3AyuLeh"
+    },
+    {
+      "name": "李晓茏",
+      "room": "官旗",
+      "makeupArtist": "肖慧萍",
+      "hireDate": "2024-10-24",
+      "recordUpdatedAt": "2026-08-07T10:32:10.000+08:00",
+      "photoFile": "90596afd47b5002389a9.png",
+      "sourceRecordId": "recnFoMpZnXPES"
+    },
+    {
+      "name": "宋怡琳",
+      "room": "护肤",
+      "makeupArtist": "邓艳佳",
+      "hireDate": "2026-02-23",
+      "recordUpdatedAt": "2026-08-04T19:10:05.000+08:00",
+      "photoFile": "4eef8f68a2de7dc5c65b.jpg",
+      "sourceRecordId": "recvjFX7TLvLPi"
+    },
+    {
+      "name": "杨晓彤",
+      "room": "品牌精选",
+      "makeupArtist": "刘玉婷",
+      "hireDate": "2024-09-05",
+      "recordUpdatedAt": "2026-08-10T14:01:22.000+08:00",
+      "photoFile": "86d5a34143b5e4304037.png",
+      "sourceRecordId": "recvjHr8iC5oyi"
+    },
+    {
+      "name": "刘晶晶",
+      "room": "品牌精选",
+      "makeupArtist": "刘玉婷",
+      "hireDate": "2023-10-23",
+      "recordUpdatedAt": "2026-08-10T14:01:41.000+08:00",
+      "photoFile": "2043893a6d32a467e0a9.png",
+      "sourceRecordId": "recvjHr8J8K9p6"
+    },
+    {
+      "name": "何嘉慧",
+      "room": "官旗",
+      "makeupArtist": "肖慧萍",
+      "hireDate": "2024-10-05",
+      "recordUpdatedAt": "2026-08-10T14:57:39.000+08:00",
+      "photoFile": "cab38a74e64f10efc2ab.png",
+      "sourceRecordId": "recvjHrdqKVQgK"
+    },
+    {
+      "name": "潘小慧",
+      "room": "官旗",
+      "makeupArtist": "邓艳佳",
+      "hireDate": "2024-09-02",
+      "recordUpdatedAt": "2026-08-10T14:57:51.000+08:00",
+      "photoFile": "1aad3997d6a454b391bb.png",
+      "sourceRecordId": "recvjHrCZ0RIpi"
+    },
+    {
+      "name": "丁阳虹",
+      "room": "品牌精选",
+      "makeupArtist": "邓艳佳",
+      "hireDate": "2026-04-02",
+      "recordUpdatedAt": "2026-08-10T14:58:31.000+08:00",
+      "photoFile": "4d4c5f12aa2574444d5a.png",
+      "sourceRecordId": "recvjL1xj2iipc"
+    },
+    {
+      "name": "林惠敏",
+      "room": "官旗",
+      "makeupArtist": "肖慧萍",
+      "hireDate": "2026-10-15",
+      "recordUpdatedAt": "2026-08-07T14:40:53.000+08:00",
+      "photoFile": "8662e9e988ff3bbb609a.png",
+      "sourceRecordId": "recvjL570Ls8Iu"
+    },
+    {
+      "name": "黄芷曈",
+      "room": "品牌精选",
+      "makeupArtist": "刘玉婷",
+      "hireDate": "2026-02-08",
+      "recordUpdatedAt": "2026-08-07T14:41:06.000+08:00",
+      "photoFile": "17c04077fc514f0462fe.png",
+      "sourceRecordId": "recvjL57cSTTuq"
+    },
+    {
+      "name": "蒋珂",
+      "room": "品牌精选",
+      "makeupArtist": "肖慧萍",
+      "hireDate": "2026-01-12",
+      "recordUpdatedAt": "2026-08-07T10:32:52.000+08:00",
+      "photoFile": "e22bf37bc320f0fd13f9.jpg",
+      "sourceRecordId": "recvjLjSglQ3qU"
+    },
+    {
+      "name": "罗梓欣",
+      "room": "护肤",
+      "makeupArtist": "刘玉婷",
+      "hireDate": "2026-05-21",
+      "recordUpdatedAt": "2026-08-04T19:29:56.000+08:00",
+      "photoFile": "3d2ba9656cba99e7818a.png",
+      "sourceRecordId": "recvkBJg4WfDQS"
+    },
+    {
+      "name": "陈意彤",
+      "room": "王鸥美肤",
+      "makeupArtist": "邓艳佳",
+      "hireDate": "2026-06-08",
+      "recordUpdatedAt": "2026-08-18T13:46:19.000+08:00",
+      "photoFile": "d33e3ba9586553a16118.jpg",
+      "sourceRecordId": "recvlnaS3KBLlf"
+    },
+    {
+      "name": "刁心然",
+      "room": "王鸥美肤",
+      "makeupArtist": "邓艳佳",
+      "hireDate": "2026-06-11",
+      "recordUpdatedAt": "2026-08-18T13:46:12.000+08:00",
+      "photoFile": "2d492ff7aae11f1c86dc.jpg",
+      "sourceRecordId": "recvmkllNh00gI"
+    },
+    {
+      "name": "林羽浠",
+      "room": "优选",
+      "makeupArtist": "肖慧萍",
+      "hireDate": "2026-08-04",
+      "recordUpdatedAt": "2026-08-20T09:12:03.000+08:00",
+      "photoFile": "5aedb0621c4fbe900407.jpg",
+      "sourceRecordId": "recvrjLNqKgJzO"
+    },
+    {
+      "name": "王思佳",
+      "room": "优选",
+      "makeupArtist": "刘玉婷",
+      "hireDate": "2026-07-09",
+      "recordUpdatedAt": "2026-08-07T17:23:28.000+08:00",
+      "photoFile": "30df288e4e32cbec634e.png",
+      "sourceRecordId": "recvrjMhCQGjYx"
+    },
+    {
+      "name": "王明玥",
+      "room": "王鸥美肤",
+      "makeupArtist": "肖慧萍",
+      "hireDate": "2026-06-15",
+      "recordUpdatedAt": "2026-08-07T15:26:28.000+08:00",
+      "photoFile": "b097466378295c3006f5.png",
+      "sourceRecordId": "recvrjNM6NajmI"
+    },
+    {
+      "name": "陈荟聿",
+      "room": "优选",
+      "makeupArtist": "刘玉婷",
+      "hireDate": "2026-06-29",
+      "recordUpdatedAt": "2026-08-10T17:09:02.000+08:00",
+      "photoFile": "ef9ee60bcc6062116680.jpg",
+      "sourceRecordId": "recvrkeheq45WH"
+    },
+    {
+      "name": "胡琳琳",
+      "room": "优选",
+      "makeupArtist": "邓艳佳",
+      "hireDate": "2026-06-02",
+      "recordUpdatedAt": "2026-08-10T17:07:38.000+08:00",
+      "photoFile": "29b256b43fd175743daf.jpg",
+      "sourceRecordId": "recvrken3eEGmV"
+    },
+    {
+      "name": "李安妮",
+      "room": "优选",
+      "makeupArtist": "肖慧萍",
+      "hireDate": "2026-08-08",
+      "recordUpdatedAt": "2026-08-20T09:11:54.000+08:00",
+      "photoFile": "967a17bed68f670d2c22.jpg",
+      "sourceRecordId": "recvrnDt6kBIMI"
+    },
+    {
+      "name": "刘睿",
+      "room": "王鸥美肤",
+      "makeupArtist": "邓艳佳",
+      "hireDate": "2026-08-12",
+      "recordUpdatedAt": "2026-08-20T09:11:48.000+08:00",
+      "photoFile": "39fd2e72f0e0557ed932.png",
+      "sourceRecordId": "recvsCKrNHs3zZ"
+    },
+    {
+      "name": "朱海鹏",
+      "room": "王鸥美肤",
+      "makeupArtist": "邓艳佳",
+      "hireDate": "2026-08-13",
+      "recordUpdatedAt": "2026-08-20T09:11:34.000+08:00",
+      "photoFile": "e4c6cba48ae6c71ed294.png",
+      "sourceRecordId": "recvsJpSdXve9z"
+    }
+  ]
+}

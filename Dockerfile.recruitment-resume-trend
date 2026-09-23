@@ -1,0 +1,4 @@
+FROM fd-027340-live-center-workbench:latest
+USER root
+COPY server.js /app/server.js
+COPY exports/recruitment-pool/recruitment-dashboard.html /app/public/modules/recruitment/recruitment-dashboard.html

@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>主播妆造 · 素材中心</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="font-scale.css" />
+  <link rel="stylesheet" href="dispatch-enhancements.css" />
+  <link rel="stylesheet" href="material-center.css" />
+  <style>
+    .makeup-source{margin:17px 0 0;padding:11px 13px;border:1px solid #dceae2;border-radius:8px;background:#f4f9f6;color:#587063;font-size:12px;line-height:1.65}.makeup-content-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px;padding-bottom:12px;border-bottom:1px solid #e5ebe7}.makeup-content-tabs button{border:1px solid #dce7e1;border-radius:8px;background:#f5f8f6;color:#607069;padding:9px 15px;font:600 14px "Noto Sans SC",sans-serif;cursor:pointer}.makeup-content-tabs button.active{background:#166b4b;color:#fff;border-color:#166b4b}.makeup-panel{display:none}.makeup-panel.active{display:block}.makeup-standard-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:22px}.makeup-standard-card{border:1px solid #e2e9e5;border-radius:11px;background:#fff;overflow:hidden}.makeup-standard-card>img{width:100%;height:180px;object-fit:cover;display:block;background:#edf2ef}.makeup-card-body{padding:18px}.makeup-standard-card h2,.makeup-live-header h2{margin:0;color:#18271f;font-size:19px}.makeup-standard-card p,.makeup-live-header p{margin:7px 0 0;color:#728077;font-size:13px;line-height:1.55}.makeup-standard-card ul{display:grid;gap:9px;margin:16px 0 0;padding:0;list-style:none}.makeup-standard-card li{padding:9px 10px;border-radius:7px;background:#f6f8f7;color:#45574d;font-size:13px;line-height:1.62}.makeup-standard-card li b{color:#1b714b}.makeup-live-header{margin-top:22px;padding:18px;border:1px solid #e2e9e5;border-radius:11px;background:#fbfdfc}.makeup-live-header small{display:block;margin-top:9px;color:#758279;font-size:12px}.anchor-gallery{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:16px}.anchor-card{overflow:hidden;border:1px solid #e2e9e5;border-radius:11px;background:#fff}.anchor-media-preview{position:relative;display:block;background:#edf2ef;color:inherit;text-decoration:none}.anchor-media-preview img{display:block;width:100%;aspect-ratio:9 / 16;object-fit:cover;background:#edf2ef}.anchor-media-badge{position:absolute;right:10px;bottom:10px;padding:6px 9px;border-radius:999px;background:rgba(16,54,39,.9);color:#fff;font-size:11px;font-weight:700;box-shadow:0 2px 10px rgba(0,0,0,.18)}.anchor-recording-fallback{display:flex;min-height:260px;aspect-ratio:9 / 16;box-sizing:border-box;padding:24px;flex-direction:column;align-items:flex-start;justify-content:flex-end;gap:9px;background:linear-gradient(155deg,#eef7f2 0%,#dceee5 58%,#cbe4d7 100%);color:#174c37;text-decoration:none}.anchor-recording-fallback strong{font-size:18px}.anchor-recording-fallback span{max-width:100%;overflow-wrap:anywhere;color:#60776b;font-size:12px;line-height:1.55}.anchor-recording-fallback em{font-style:normal;font-size:13px;font-weight:700;color:#126b48}.anchor-card .anchor-card-body{padding:13px 14px 15px}.anchor-card h3{margin:0;font-size:16px;color:#1d2d25;line-height:1.45}.anchor-card p{margin:5px 0 0;color:#718078;font-size:12px;line-height:1.55}.anchor-card small{display:block;margin-top:8px;color:#167348;font-size:11px}.makeup-empty{margin:22px 0;color:#718078}.makeup-entry[hidden]{display:none!important}@media(max-width:1020px){.anchor-gallery{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:760px){.makeup-standard-grid,.anchor-gallery{grid-template-columns:1fr}}
+    .room-switcher{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}.room-switcher button{border:1px solid #d9e6df;border-radius:8px;padding:9px 14px;background:#f5f8f6;color:#5d7066;font:600 14px "Noto Sans SC",sans-serif;cursor:pointer}.room-switcher button.active{background:#166b4b;border-color:#166b4b;color:#fff}.room-panel{display:none}.room-panel.active{display:block}.room-visual-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:16px}.room-visual-card{overflow:hidden;border:1px solid #e0e9e4;border-radius:10px;background:#fff;min-width:0}.room-visual-open{display:block;width:100%;padding:0;border:0;background:#edf2ef;cursor:zoom-in}.room-visual-open img{display:block;width:100%;aspect-ratio:3/4;height:auto;object-fit:cover;background:#edf2ef;transition:transform .22s ease}.room-visual-open:hover img{transform:scale(1.025)}.room-visual-card div{padding:12px 13px 14px}.room-visual-card span{display:block;color:#18734d;font-size:14px;font-weight:700}.room-visual-card p{margin:6px 0 0;color:#66766e;font-size:12px;line-height:1.55}.makeup-lightbox{width:min(860px,92vw);max-width:860px;padding:0;border:0;border-radius:12px;background:#172019;box-shadow:0 20px 60px rgba(0,0,0,.42)}.makeup-lightbox::backdrop{background:rgba(10,18,13,.72)}.makeup-lightbox img{display:block;max-width:100%;max-height:84vh;margin:auto;object-fit:contain}.makeup-lightbox-close{position:absolute;top:10px;right:10px;width:34px;height:34px;border:0;border-radius:50%;background:rgba(0,0,0,.58);color:#fff;font-size:23px;line-height:1;cursor:pointer}@media(max-width:1180px){.room-visual-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:640px){.room-visual-grid{grid-template-columns:1fr}}
+    .anchor-gallery{grid-template-columns:repeat(4,minmax(0,1fr))}.anchor-card{align-self:start}@media(max-width:1180px){.anchor-gallery{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:880px){.anchor-gallery{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.anchor-gallery{grid-template-columns:1fr}}
+    .room-scenarios{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}.room-scene,.room-shared-card{overflow:hidden;border:1px solid #e0e9e4;border-radius:11px;background:#fff}.room-scene button,.room-shared-card button{display:block;width:100%;padding:0;border:0;background:#edf2ef;cursor:zoom-in}.room-scene img{display:block;width:100%;aspect-ratio:4 / 3;object-fit:cover}.room-shared-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}.room-shared-card img{display:block;width:100%;aspect-ratio:16 / 7;object-fit:cover}.room-scene-body,.room-shared-body{padding:15px}.room-scene h3,.room-shared-card h3{margin:0;color:#183125;font-size:17px}.room-scene dl{display:grid;gap:8px;margin:12px 0 0}.room-scene dl div{padding:9px 10px;border-radius:7px;background:#f5f8f6;color:#52655b;font-size:13px;line-height:1.6}.room-scene dt{display:inline;color:#17704a;font-weight:700}.room-scene dd{display:inline;margin:0}.room-shared-body p{margin:9px 0 0;color:#53685d;font-size:13px;line-height:1.7}.field-reference-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:16px}.field-reference-card{overflow:hidden;border:1px solid #e0e9e4;border-radius:10px;background:#fff}.field-reference-card button{display:block;width:100%;padding:0;border:0;background:#edf2ef;cursor:zoom-in}.field-reference-card img{display:block;width:100%;aspect-ratio:3 / 4;object-fit:cover}.field-reference-card div{padding:12px}.field-reference-card h3{margin:0;color:#183125;font-size:15px}.field-reference-card p{margin:6px 0 0;color:#607268;font-size:12px;line-height:1.55}@media(max-width:980px){.field-reference-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:880px){.room-scenarios,.room-shared-grid{grid-template-columns:1fr}}@media(max-width:560px){.room-scene img{aspect-ratio:3 / 4}.field-reference-grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <script>if (new URLSearchParams(location.search).has('embed')) document.body.classList.add('material-embedded');</script>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="../../"><span class="brand-mark">L</span><span>直播中枢</span></a>
+      <div class="workspace"><span class="workspace-dot"></span><span>直播中心</span><span class="chevron">⌄</span></div>
+      <nav aria-label="主导航"><a href="../../#schedule"><span>◷</span>调度中心</a><a class="active" href="material-center.html"><span>◇</span>素材中心</a></nav>
+    </aside>
+    <main class="material-page">
+      <section class="material-library-page makeup-library">
+        <a class="back-link" href="material-center.html">← 返回素材中心</a>
+        <div class="material-topline makeup-origin-row">
+          <a class="secondary" target="_blank" rel="noopener" href="https://jqx28l0j4lx.feishu.cn/wiki/ZbKKw3IQyiptGHk9rHickXsPnoe">查看规范原文 ↗</a>
+        </div>
+        <label class="material-search"><span>⌕</span><input id="makeupSearch" type="search" placeholder="搜索直播间、主播姓名、发色、服饰或妆造要求" /></label>
+        <div class="makeup-content-tabs" role="tablist" aria-label="主播妆造内容切换">
+          <button class="active" type="button" role="tab" aria-selected="true" data-makeup-panel="standards">直播间妆造规范</button>
+          <button type="button" role="tab" aria-selected="false" data-makeup-panel="gallery">主播上播妆造合集</button>
+        </div>
+
+        <section class="makeup-panel active" data-makeup-content="standards">
+          <div class="makeup-source">规范来源：飞书《WIS直播间视觉规范》。已按官旗、品牌精选、优选、王鸥美肤四个直播间提炼色调、服装、发型发色与妆面要求；示范图直接取自规范文档。</div>
+          <div class="makeup-standard-grid">
+            <article class="makeup-standard-card makeup-entry" data-search="官旗 大促 红金 日销 蓝金 黑西装 深色 发色 何嘉慧 林慧敏">
+              <img src="https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/CmdfbKXruoG254xTl2McC1qtnJg/?fallback_source=1&height=1280&mount_node_token=BWM5duYLro9OcAxaWqZciPOenKg&mount_point=docx_image&policy=equal&width=1280" alt="官旗直播间妆造示范图" />
+              <div class="makeup-card-body"><h2>官旗直播间</h2><p>大促、日销与人设演绎的镜头形象要求</p><ul><li><b>背景色调：</b>大促使用红金色调；日销使用蓝金色调。</li><li><b>服装：</b>大促优先深色、高质感材质；总裁演绎统一黑西装。日销可浅、深色搭配，但避免纯白。</li><li><b>发色发型：</b>黑色、深咖、冷黑茶优先，须避免明显色差或褪色尴尬期；卷发、盘发、直发按背景、主题、人设匹配。</li><li><b>妆面：</b>大促底妆清透水光；低饱和红棕眼妆配粉紫细闪，腮红呼应红火氛围。日销保持清透服帖、眉形自然、眼妆层次与唇线清晰。</li></ul></div>
+            </article>
+            <article class="makeup-standard-card makeup-entry" data-search="品牌精选 红色 金色 专柜 仓库 西装 黑色 冷黑茶 深棕褐 蒋珂 罗梓欣">
+              <img src="https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/BZMjbpdOaow2iGxv5A6cihsynjh/?fallback_source=1&height=1280&mount_node_token=Qs4EdxREeo7d6ux3TqOc09cInoc&mount_point=docx_image&policy=equal&width=1280" alt="品牌精选直播间妆造示范图" />
+              <div class="makeup-card-body"><h2>品牌精选直播间</h2><p>日销、节点与专柜内容的高质感妆造要求</p><ul><li><b>背景色调：</b>大促红色调；日销金色调；专柜、仓库等场景需与当日主题同步。</li><li><b>服装：</b>优先高垂感、哑光高级面料；避免纯白及廉价化纤。店长演绎统一西装。</li><li><b>发色发型：</b>仅建议纯黑、冷黑茶、深棕褐；禁止黄色、浅棕、粉棕、灰蓝等浅亮发色，并防止补光将深发色照白。</li><li><b>妆面：</b>底妆清透服帖；唇妆为奶茶红或豆沙棕，提前润唇；大促使用柔雾眉、红棕晕染、粉紫细闪与同色腮红。</li></ul></div>
+            </article>
+            <article class="makeup-standard-card makeup-entry" data-search="优选 蓝色 品牌色 日销 王思佳 刁心然 胡琳琳 发色 发型">
+              <img src="https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/WWFvb4s8xoBAvlxC0DAcuTqln8e/?fallback_source=1&height=1280&mount_node_token=FqCxdlKo9o8MRvx98Ioct21Onqe&mount_point=docx_image&policy=equal&width=1280" alt="优选直播间妆造示范图" />
+              <div class="makeup-card-body"><h2>优选直播间</h2><p>蓝色品牌日销场的镜头形象要求</p><ul><li><b>背景色调：</b>日销以蓝色品牌色调为主，服装、妆面需与蓝色场景保持协调。</li><li><b>服装：</b>浅色或深色均可；避免纯白，可使用带设计或点缀的白色单品；优先高质感面料。</li><li><b>发色发型：</b>以黑色、深咖、冷黑茶等深色为主，提前审核；可选择卷发、盘发、半扎或直发，需贴合主播气质与主题。</li><li><b>镜头表现：</b>上播前检查服饰整洁、光线与产品画面；避免人物、产品、服装同时偏白导致过曝。</li></ul></div>
+            </article>
+            <article class="makeup-standard-card makeup-entry" data-search="王鸥 王鸥美肤 粉金 视频号 宋怡琳 李安妮 服装 妆面">
+              <img src="https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/O1S4ba8vcoYJuWxu2BRc86S3nJb/?fallback_source=1&height=1280&mount_node_token=HA2VdN1ljoG06cx6LC4cQv48nGf&mount_point=docx_image&policy=equal&width=1280" alt="王鸥美肤直播间妆造示范图" />
+              <div class="makeup-card-body"><h2>王鸥美肤直播间</h2><p>视频号日销场的粉金镜头妆造要求</p><ul><li><b>背景色调：</b>日销使用粉金色调，整体画面保持精致、柔和、有质感。</li><li><b>服装：</b>浅色或深色均可；避免纯白，可选择有设计或点缀的白色；优先高质感上衣材质。</li><li><b>妆面：</b>底妆清透服帖、贴合肤色；眉形自然对称、眼妆层次清楚、唇线清晰且不干燥。</li><li><b>持妆与适配：</b>妆造需贴合主播气质与主题，全程无明显脱妆；镜头中突出主播与产品，避免曝光失衡。</li></ul></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="makeup-panel" data-makeup-content="gallery">
+          <div class="makeup-live-header"><h2>主播上播妆造合集</h2><p>按“直播学习群”最新记录逐条配对：同组截图作为稳定预览，点击即可打开原始录屏。</p><small>主播姓名与直播间依据群内相邻文字标注；未标注的信息明确显示“待核验”。</small></div>
+          <div class="anchor-gallery">
+            <article class="anchor-card makeup-entry" data-search="何嘉慧 官旗 直播学习群 上播妆造">
+              <a class="anchor-recording-fallback" href="https://internal-api-lark-file.feishu.cn/download/messages/7673488768040488138/keys/file_v3_0014h_06724e87-2974-40f7-aa59-dc203fec038g?chat_id=7241530318304411651" target="_blank" rel="noopener noreferrer"><strong>原始录屏</strong><span>浏览器不支持的录屏格式不再显示黑屏。</span><em>打开原始录屏 ↗</em></a>
+              <div class="anchor-card-body"><h3>何嘉慧</h3><p>官旗直播间 · 上播妆造</p><small>来源：直播学习群</small></div>
+            </article>
+            <article class="anchor-card makeup-entry" data-search="王思佳 优选 直播学习群 上播妆造">
+              <a class="anchor-recording-fallback" href="https://internal-api-lark-file.feishu.cn/download/messages/7673472909255380163/keys/file_v3_0014h_f179df6e-8405-4c3b-9c75-4f5e8ef78bfg?chat_id=7241530318304411651" target="_blank" rel="noopener noreferrer"><strong>原始录屏</strong><span>浏览器不支持的录屏格式不再显示黑屏。</span><em>打开原始录屏 ↗</em></a>
+              <div class="anchor-card-body"><h3>王思佳</h3><p>优选直播间 · 上播妆造</p><small>来源：直播学习群</small></div>
+            </article>
+            <article class="anchor-card makeup-entry" data-search="罗梓欣 品牌精选 直播学习群 上播妆造">
+              <a class="anchor-recording-fallback" href="https://internal-api-lark-file.feishu.cn/download/messages/7673465601989283108/keys/file_v3_0014h_5850fb74-5045-4e01-942f-ab6515a0a24g?chat_id=7241530318304411651" target="_blank" rel="noopener noreferrer"><strong>原始录屏</strong><span>浏览器不支持的录屏格式不再显示黑屏。</span><em>打开原始录屏 ↗</em></a>
+              <div class="anchor-card-body"><h3>罗梓欣</h3><p>品牌精选直播间 · 上播妆造</p><small>来源：直播学习群</small></div>
+            </article>
+            <article class="anchor-card makeup-entry" data-search="蒋珂 品牌精选 直播学习群 上播妆造">
+              <a class="anchor-recording-fallback" href="https://internal-api-lark-file.feishu.cn/download/messages/7673487531156966670/keys/file_v3_0014h_d618ce5b-b3a0-4672-ab33-1d339f63399g?chat_id=7241530318304411651" target="_blank" rel="noopener noreferrer"><strong>原始录屏</strong><span>浏览器不支持的录屏格式不再显示黑屏。</span><em>打开原始录屏 ↗</em></a>
+              <div class="anchor-card-body"><h3>蒋珂</h3><p>品牌精选直播间 · 上播妆造</p><small>来源：直播学习群</small></div>
+            </article>
+            <article class="anchor-card makeup-entry" data-search="宋怡琳 王鸥美肤 直播学习群 上播妆造">
+              <a class="anchor-recording-fallback" href="https://internal-api-lark-file.feishu.cn/download/messages/7673472315740392642/keys/file_v3_0014h_c171f3e9-0cd5-4a24-8115-2f1b74e6a1eg?chat_id=7241530318304411651" target="_blank" rel="noopener noreferrer"><strong>原始录屏</strong><span>浏览器不支持的录屏格式不再显示黑屏。</span><em>打开原始录屏 ↗</em></a>
+              <div class="anchor-card-body"><h3>宋怡琳</h3><p>王鸥美肤直播间 · 上播妆造</p><small>来源：直播学习群</small></div>
+            </article>
+          </div>
+        </section>
+        <p id="makeupSearchEmpty" class="makeup-empty" hidden>没有找到相关规范或主播上播记录，请更换关键词。</p>
+      </section>
+    </main>
+  </div>
+  <script>
+    const anchorGallery = document.querySelector('.anchor-gallery');
+    const anchorVideos = [
+      ['官旗', '何嘉慧', 'https://internal-api-lark-file.feishu.cn/download/messages/7673488768040488138/keys/file_v3_0014h_06724e87-2974-40f7-aa59-dc203fec038g?chat_id=7241530318304411651'],
+      ['官旗', '林惠敏', 'https://internal-api-lark-file.feishu.cn/download/messages/7673457355253664971/keys/file_v3_0014h_84c332e2-cf25-4c81-a040-672506a42a3g?chat_id=7241530318304411651'],
+      ['官旗', '潘小慧', 'https://internal-api-lark-file.feishu.cn/download/messages/7673379785896152339/keys/file_v3_0014h_d84978df-d3f1-43c9-a64f-5f4e5c3edd5g?chat_id=7241530318304411651'],
+      ['品牌精选', '蒋珂', 'https://internal-api-lark-file.feishu.cn/download/messages/7673487531156966670/keys/file_v3_0014h_d618ce5b-b3a0-4672-ab33-1d339f63399g?chat_id=7241530318304411651'],
+      ['品牌精选', '罗梓欣', 'https://internal-api-lark-file.feishu.cn/download/messages/7673465601989283108/keys/file_v3_0014h_5850fb74-5045-4e01-942f-ab6515a0a24g?chat_id=7241530318304411651'],
+      ['品牌精选', '李晓茏', 'https://internal-api-lark-file.feishu.cn/download/messages/7673394142445309126/keys/file_v3_0014h_dfd7313c-39c8-428e-8e9e-5c81b64c803g?chat_id=7241530318304411651'],
+      ['品牌精选', '陈璐', 'https://internal-api-lark-file.feishu.cn/download/messages/7673347887786380488/keys/file_v3_0014h_cb721f29-0b2c-48b4-bb86-2e982195fdbg?chat_id=7241530318304411651'],
+      ['优选', '王思佳', 'https://internal-api-lark-file.feishu.cn/download/messages/7673472909255380163/keys/file_v3_0014h_f179df6e-8405-4c3b-9c75-4f5e8ef78bfg?chat_id=7241530318304411651'],
+      ['优选', '刁心然', 'https://internal-api-lark-file.feishu.cn/download/messages/7673457327848049954/keys/file_v3_0014h_38686011-15a6-40f6-8927-0d3ec0d642eg?chat_id=7241530318304411651'],
+      ['优选', '胡琳琳', 'https://internal-api-lark-file.feishu.cn/download/messages/7673363178348088268/keys/file_v3_0014h_5a7b46ef-db42-44e8-b1a0-59d308fbdccg?chat_id=7241530318304411651'],
+      ['王鸥美肤', '宋怡琳', 'https://internal-api-lark-file.feishu.cn/download/messages/7673472315740392642/keys/file_v3_0014h_c171f3e9-0cd5-4a24-8115-2f1b74e6a1eg?chat_id=7241530318304411651'],
+      ['王鸥美肤', '李安妮', 'https://internal-api-lark-file.feishu.cn/download/messages/7673394000128199982/keys/file_v3_0014h_6e3ddf6c-3f29-403e-a97c-a117fa5854cg?chat_id=7241530318304411651'],
+      ['王鸥美肤', '陈意彤', 'https://internal-api-lark-file.feishu.cn/download/messages/7673363844260989906/keys/file_v3_0014h_6c0ca45f-eb32-4b87-b08c-e2d2b717db0g?chat_id=7241530318304411651']
+    ];
+    anchorGallery.innerHTML = anchorVideos.map(([room, name, src]) => `<article class="anchor-card makeup-entry" data-search="${room} ${name} 直播学习群 上播妆造"><a class="anchor-recording-fallback" href="${src}" target="_blank" rel="noopener noreferrer"><strong>原始录屏</strong><span>${name} · ${room}直播间</span><em>打开原始录屏 ↗</em></a><div class="anchor-card-body"><h3>${name}</h3><p>${room}直播间 · 上播妆造</p><small>来源：直播学习群最新录屏</small></div></article>`).join('');
+    const standardMount = document.querySelector('[data-makeup-content="standards"]');
+    const visualSource = {
+      official: {
+        background: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/CmdfbKXruoG254xTl2McC1qtnJg/?fallback_source=1&height=1280&mount_node_token=BWM5duYLro9OcAxaWqZciPOenKg&mount_point=docx_image&policy=equal&width=1280',
+        outfit: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/O1S4ba8vcoYJuWxu2BRc86S3nJb/?fallback_source=1&height=1280&mount_node_token=HA2VdN1ljoG06cx6LC4cQv48nGf&mount_point=docx_image&policy=equal&width=1280',
+        hair: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/BZMjbpdOaow2iGxv5A6cihsynjh/?fallback_source=1&height=1280&mount_node_token=Qs4EdxREeo7d6ux3TqOc09cInoc&mount_point=docx_image&policy=equal&width=1280',
+        makeup: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/WWFvb4s8xoBAvlxC0DAcuTqln8e/?fallback_source=1&height=1280&mount_node_token=FqCxdlKo9o8MRvx98Ioct21Onqe&mount_point=docx_image&policy=equal&width=1280'
+      },
+      selected: {
+        background: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/KJVYboKPvo3ahXxfU7lc6nhtnMd/?fallback_source=1&height=1280&mount_node_token=MfK7dU8AIoxhSxx3N3LcK7SGnmg&mount_point=docx_image&policy=equal&width=1280',
+        outfit: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/AGvXbUYrxoUbzdxBl8acT9won7c/?fallback_source=1&height=1280&mount_node_token=KcWkdSvP4otDz5xwIwQcXk7XnOf&mount_point=docx_image&policy=equal&width=1280',
+        hair: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/E8gHbQSNtou3OoxYgMKcDia4nXE/?fallback_source=1&height=1280&mount_node_token=Bwkad3mM2o5kHuxW43Nc6qqTnYe&mount_point=docx_image&policy=equal&width=1280',
+        makeup: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/CtoJbehEzoq8VjxP1tjcIfw6nsf/?fallback_source=1&height=1280&mount_node_token=VlhgdehtPoSHh6x4ITAcL2zUnih&mount_point=docx_image&policy=equal&width=1280'
+      },
+      preferred: {
+        background: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/FSTIb5NuNoeB1fxaKNfcEB8FnMc/?fallback_source=1&height=1280&mount_node_token=FnqAd3nfpojqqGxZ4F9c6KRgnAg&mount_point=docx_image&policy=equal&width=1280',
+        outfit: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/DVifbpYC9olGOwxDMuucIttvnm9/?fallback_source=1&height=1280&mount_node_token=YnFudsOdromjA1xGKGkcABk1nVc&mount_point=docx_image&policy=equal&width=1280',
+        hair: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/DpchbNFTmoGlvVxodeIcJkU6nRe/?fallback_source=1&height=1280&mount_node_token=GA99dFLbfohzYHx5O2icz6Fantb&mount_point=docx_image&policy=equal&width=1280',
+        makeup: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/IhB6bRwE6o85Hzxe1v0cuRqtnVc/?fallback_source=1&height=1280&mount_node_token=JTPvd7YE4oNQcox0y2hcYwocnkg&mount_point=docx_image&policy=equal&width=1280'
+      },
+      wangou: {
+        background: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/R8qpbcoqmojxqLx0clYcRUzdn9g/?fallback_source=1&height=1280&mount_node_token=Yti5dQi79oG15Qx718wcWLQenCe&mount_point=docx_image&policy=equal&width=1280',
+        outfit: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/LRg5bttfBol3AJxoXYrcbspWn3b/?fallback_source=1&height=1280&mount_node_token=VZN7dL1E3oH5lsxken8czhY5n9b&mount_point=docx_image&policy=equal&width=1280',
+        hair: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/WebwbJ98hoBuEox9KvXcTb6bnPh/?fallback_source=1&height=1280&mount_node_token=R9EYdQKb8onQ4hx6wdYcg4YWnEe&mount_point=docx_image&policy=equal&width=1280',
+        makeup: 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/MF4ibjZnRoL0zmxfFOqcuDnRn0g/?fallback_source=1&height=1280&mount_node_token=LQKudXp9voR2VxxiFEUcusyznBe&mount_point=docx_image&policy=equal&width=1280'
+      }
+    };
+    const roomVisuals = [
+      { id: 'official', name: '官旗直播间', keywords: '官旗 大促 红金 日销 蓝金 黑西装 深色 发型 妆面 何嘉慧 林慧敏', cards: [
+        ['背景色调', 'background', '大促红金色调；日销蓝金色调。'],
+        ['服装', 'outfit', '大促优先深色、高质感；总裁演绎黑西装。'],
+        ['发型', 'hair', '黑色、深咖、冷黑茶优先；发型匹配主题与人设。'],
+        ['妆面', 'makeup', '大促清透水光与红棕眼妆；日销自然清透。']
+      ]},
+      { id: 'selected', name: '品牌精选直播间', keywords: '品牌精选 红色 金色 专柜 仓库 西装 深棕褐 发型 妆面 蒋珂 罗梓欣', cards: [
+        ['背景色调', 'background', '大促红色调；日销金色调；特殊场景同步主题。'],
+        ['服装', 'outfit', '高垂感、哑光高级面料；店长演绎统一西装。'],
+        ['发型', 'hair', '纯黑、冷黑茶、深棕褐；禁浅亮发色与明显色差。'],
+        ['妆面', 'makeup', '清透底妆；奶茶红或豆沙棕唇妆；大促加强红棕与细闪。']
+      ]},
+      { id: 'preferred', name: '优选直播间', keywords: '优选 蓝色 品牌色 日销 发型 妆面 王思佳 刁心然 胡琳琳', cards: [
+        ['背景色调', 'background', '日销以蓝色品牌色调为主，画面保持协调。'],
+        ['服装', 'outfit', '浅深色均可，避免纯白；优先高质感面料。'],
+        ['发型', 'hair', '黑色、深咖、冷黑茶为主；卷发、盘发、半扎或直发皆可。'],
+        ['妆面', 'makeup', '清透服帖；镜头中避免人物、产品、服装同时偏白。']
+      ]},
+      { id: 'wangou', name: '王鸥美肤直播间', keywords: '王鸥 王鸥美肤 粉金 视频号 发型 妆面 宋怡琳 李安妮', cards: [
+        ['背景色调', 'background', '日销使用粉金色调，画面柔和且精致。'],
+        ['服装', 'outfit', '浅深色均可，避免纯白；选择有设计感的高质感单品。'],
+        ['发型', 'hair', '发型与主播气质、当日主题及镜头背景保持统一。'],
+        ['妆面', 'makeup', '底妆清透服帖；眉形、眼妆与唇线清晰，直播全程稳定。']
+      ]}
+    ];
+    standardMount.innerHTML = `<div class="makeup-source">规范来源：飞书《WIS直播间视觉规范》。请按直播间切换查看；每个维度均配有对应直播间的视觉参考图。</div><div class="room-switcher" role="tablist" aria-label="按直播间查看妆造规范">${roomVisuals.map((room, index) => `<button class="${index === 0 ? 'active' : ''}" type="button" role="tab" aria-selected="${index === 0}" data-room="${room.id}">${room.name}</button>`).join('')}</div>${roomVisuals.map((room, index) => `<section class="room-panel makeup-entry ${index === 0 ? 'active' : ''}" data-room-content="${room.id}" data-search="${room.keywords}"><div class="room-visual-grid">${room.cards.map(([title, image, copy]) => `<article class="room-visual-card"><button class="room-visual-open" type="button" aria-label="打开${room.name}${title}参考图"><img src="${visualSource[room.id][image]}" alt="${room.name}${title}视觉参考图" /></button><div><span>${title}</span><p>${copy}</p></div></article>`).join('')}</div></section>`).join('')}`;
+    const scenarioVisuals = [
+      { id:'official', name:'官旗直播间', keywords:'官旗 大促 红金 日销 蓝金 黑西装 深色 发色 发型 妆面', scenes:[
+        { name:'大促场 · 红金背景', image:visualSource.official.background, tone:'红金主题，画面饱和但不压肤色。', outfit:'深色、高质感面料优先；总裁人设统一黑西装。', makeup:'清透水光底妆；低饱和红棕眼妆配粉紫细闪，腮红呼应红金氛围。' },
+        { name:'日销场 · 蓝金背景', image:'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/DVifbpYC9olGOwxDMuucIttvnm9/?fallback_source=1&height=1280&mount_node_token=YnFudsOdromjA1xGKGkcABk1nVc&mount_point=docx_image&policy=equal&width=1280', tone:'蓝金场景，保持干净、明亮与产品可见度。', outfit:'可选浅色或深色搭配，但避免纯白；服装需与蓝金背景拉开层次。', makeup:'清透服帖、自然眉形；眼妆有层次、唇线清晰，保持日销自然感。' }
+      ], shared:[
+        { name:'统一发色与发型', image:visualSource.official.hair, copy:'黑色、深咖、冷黑茶优先；卷发、盘发、直发均需与人设、背景和当日主题匹配。' },
+        { name:'统一注意事项', image:visualSource.official.outfit, copy:'服装、发型、背景与产品主题必须统一；避免人脸、服装、产品同时偏白造成过曝；全程检查脱妆与反光。' }
+      ]},
+      { id:'selected', name:'品牌精选直播间', keywords:'品牌精选 大促 红色 日销 金色 专柜 仓库 西装 发色 发型 妆面', scenes:[
+        { name:'大促场 · 红色主题', image:visualSource.official.background, tone:'大促以红色主题为主，专柜及陈列同步主视觉。', outfit:'高垂感、哑光高级面料；避开纯白与廉价化纤，店长演绎统一西装。', makeup:'清透服帖底妆；柔雾眉、红棕晕染、粉紫细闪与同色腮红，唇部提前润泽。' },
+        { name:'日销场 · 金色主题', image:visualSource.selected.background, tone:'日销以金色调为主；专柜、仓库等场景须与当天主题一致。', outfit:'延续高级质感和利落线条，避免纯白压画面。', makeup:'清透底妆、自然眉形；眼妆和唇妆有层次且不显干，直播全程不脱妆。' }
+      ], shared:[
+        { name:'统一发色与发型', image:visualSource.selected.hair, copy:'仅建议纯黑、冷黑茶、深棕褐；禁止黄、浅棕、粉棕、灰蓝等浅亮发色，避免补光把深发色照白。' },
+        { name:'统一注意事项', image:visualSource.official.outfit, copy:'妆造须贴合货品和当日主题；发根不能有明显色差，镜头内避免反光、掉妆或全白过曝。' }
+      ]},
+      { id:'preferred', name:'优选直播间', keywords:'优选 蓝色 品牌色 日销 发色 发型 妆面', scenes:[
+        { name:'日销场 · 蓝色品牌场', image:'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/DVifbpYC9olGOwxDMuucIttvnm9/?fallback_source=1&height=1280&mount_node_token=YnFudsOdromjA1xGKGkcABk1nVc&mount_point=docx_image&policy=equal&width=1280', tone:'以蓝色品牌场为主，画面清爽、产品与主播层次分明。', outfit:'浅色或深色均可，避免纯白；可使用有设计或点缀的白色单品，优先高质感面料。', makeup:'底妆清透服帖，眉眼唇线干净有层次；妆面与蓝色场景保持协调。' }
+      ], shared:[
+        { name:'统一发色与发型', image:visualSource.official.hair, copy:'黑色、深咖、冷黑茶为主；卷发、盘发、半扎或直发均可，须提前结合主播气质和主题审核。' },
+        { name:'统一注意事项', image:visualSource.official.outfit, copy:'上播前检查服装整洁、灯光与产品画面；避免人脸、产品、服装同时偏白导致曝光失衡。' }
+      ]},
+      { id:'wangou', name:'王鸥美肤直播间', keywords:'王鸥美肤 粉金 视频号 发色 发型 妆面', scenes:[
+        { name:'日销场 · 粉金主题', image:visualSource.wangou.background, tone:'粉金色调，画面柔和、精致，并突出主播与产品。', outfit:'浅色或深色均可；避免纯白，可选带设计感或点缀的高质感单品。', makeup:'清透服帖底妆；自然对称眉形、层次清楚的眼妆与不显干的唇妆。' }
+      ], shared:[
+        { name:'统一发色与发型', image:visualSource.wangou.hair, copy:'发色、发型需与主播气质、镜头背景和当日主题协调；上播前完成妆发与灯光审核。' },
+        { name:'统一注意事项', image:visualSource.wangou.outfit, copy:'保持妆面稳定、不脱妆；服装、背景、产品统一，避免反光、全白过曝及镜头内杂乱元素。' }
+      ]}
+    ];
+    const officialFieldReferences = [
+      ['背景｜大促红金', 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/CmdfbKXruoG254xTl2McC1qtnJg/?fallback_source=1&height=1280&mount_node_token=BWM5duYLro9OcAxaWqZciPOenKg&mount_point=docx_image&policy=equal&width=1280', '红金场景图，来自「直播间背景」列。'],
+      ['服装｜高质感深色', 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/WWFvb4s8xoBAvlxC0DAcuTqln8e/?fallback_source=1&height=1280&mount_node_token=FqCxdlKo9o8MRvx98Ioct21Onqe&mount_point=docx_image&policy=equal&width=1280', '深色高质感上衣，来自「服饰要求」列。'],
+      ['发色与发型', 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/KJVYboKPvo3ahXxfU7lc6nhtnMd/?fallback_source=1&height=1280&mount_node_token=MfK7dU8AIoxhSxx3N3LcK7SGnmg&mount_point=docx_image&policy=equal&width=1280', '黑色、深咖或冷黑茶，来自「发色&发型」列。'],
+      ['妆面｜大促水光', 'https://internal-api-drive-stream.feishu.cn/space/api/box/stream/download/v2/cover/E8gHbQSNtou3OoxYgMKcDia4nXE/?fallback_source=1&height=1280&mount_node_token=Bwkad3mM2o5kHuxW43Nc6qqTnYe&mount_point=docx_image&policy=equal&width=1280', '红棕眼妆、粉紫细闪，来自「妆造要求」列。']
+    ];
+    standardMount.innerHTML = `<div class="makeup-source">规范来源：飞书《WIS直播间视觉规范》。图片严格按表格列展示：背景、服装、发色发型、妆面互不混用；下方仅展示已经确认字段来源的参考图。</div><div class="room-switcher" role="tablist" aria-label="按直播间查看妆造规范">${scenarioVisuals.map((room,index)=>`<button class="${index===0?'active':''}" type="button" role="tab" aria-selected="${index===0}" data-room="${room.id}">${room.name}</button>`).join('')}</div>${scenarioVisuals.map((room,index)=>`<section class="room-panel makeup-entry ${index===0?'active':''}" data-room-content="${room.id}" data-search="${room.keywords}"><div class="room-scenarios">${room.scenes.map(scene=>`<article class="room-scene"><button class="room-visual-open" type="button" aria-label="打开${room.name}${scene.name}背景参考图"><img src="${scene.image}" alt="${room.name}${scene.name}背景参考图"></button><div class="room-scene-body"><h3>${scene.name}</h3><dl><div><dt>背景：</dt><dd>${scene.tone}</dd></div><div><dt>服装：</dt><dd>${scene.outfit}</dd></div><div><dt>妆面：</dt><dd>${scene.makeup}</dd></div></dl></div></article>`).join('')}</div>${room.id==='official'?`<div class="field-reference-grid">${officialFieldReferences.map(([title,image,copy])=>`<article class="field-reference-card"><button class="room-visual-open" type="button" aria-label="打开${title}参考图"><img src="${image}" alt="${title}参考图"></button><div><h3>${title}</h3><p>${copy}</p></div></article>`).join('')}</div>`:''}<div class="room-shared-grid">${room.shared.map(item=>`<article class="room-shared-card"><button class="room-visual-open" type="button" aria-label="打开${room.name}${item.name}参考图"><img src="${item.image}" alt="${room.name}${item.name}参考图"></button><div class="room-shared-body"><h3>${item.name}</h3><p>${item.copy}</p></div></article>`).join('')}</div></section>`).join('')}`;
+    const makeupLightbox = document.createElement('dialog');
+    makeupLightbox.className = 'makeup-lightbox';
+    makeupLightbox.innerHTML = '<button class="makeup-lightbox-close" type="button" aria-label="关闭图片预览">×</button><img alt="妆造参考图预览" />';
+    document.body.append(makeupLightbox);
+    const makeupLightboxImage = makeupLightbox.querySelector('img');
+    standardMount.addEventListener('click', (event) => {
+      const opener = event.target.closest('.room-visual-open');
+      if (!opener) return;
+      const image = opener.querySelector('img');
+      makeupLightboxImage.src = image.currentSrc || image.src;
+      makeupLightboxImage.alt = image.alt;
+      makeupLightbox.showModal();
+    });
+    makeupLightbox.querySelector('.makeup-lightbox-close').addEventListener('click', () => makeupLightbox.close());
+    makeupLightbox.addEventListener('click', (event) => { if (event.target === makeupLightbox) makeupLightbox.close(); });
+  </script>
+  <script>
+    const makeupSearch = document.querySelector('#makeupSearch');
+    const makeupEntries = [...document.querySelectorAll('.makeup-entry')];
+    const makeupEmpty = document.querySelector('#makeupSearchEmpty');
+    const makeupTabs = [...document.querySelectorAll('[data-makeup-panel]')];
+    const makeupPanels = [...document.querySelectorAll('[data-makeup-content]')];
+    const roomTabs = [...document.querySelectorAll('[data-room]')];
+    const roomPanels = [...document.querySelectorAll('[data-room-content]')];
+    let makeupActivePanel = 'standards';
+    function renderMakeupSearch() {
+      const query = makeupSearch.value.trim().toLowerCase();
+      let visible = 0;
+      makeupEntries.forEach((entry) => {
+        const inActivePanel = entry.closest('[data-makeup-content]')?.dataset.makeupContent === makeupActivePanel;
+        const inActiveRoom = !entry.classList.contains('room-panel') || entry.classList.contains('active');
+        const matched = inActivePanel && inActiveRoom && (!query || (entry.dataset.search + ' ' + entry.innerText).toLowerCase().includes(query));
+        entry.hidden = !matched;
+        if (matched) visible += 1;
+      });
+      makeupEmpty.hidden = visible !== 0;
+    }
+    makeupSearch.addEventListener('input', renderMakeupSearch);
+    makeupTabs.forEach((tab) => tab.addEventListener('click', () => {
+      makeupActivePanel = tab.dataset.makeupPanel;
+      makeupTabs.forEach((button) => {
+        const selected = button === tab;
+        button.classList.toggle('active', selected);
+        button.setAttribute('aria-selected', String(selected));
+      });
+      makeupPanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.makeupContent === makeupActivePanel));
+      renderMakeupSearch();
+    }));
+    roomTabs.forEach((tab) => tab.addEventListener('click', () => {
+      roomTabs.forEach((button) => {
+        const selected = button === tab;
+        button.classList.toggle('active', selected);
+        button.setAttribute('aria-selected', String(selected));
+      });
+      roomPanels.forEach((panel) => panel.classList.toggle('active', panel.dataset.roomContent === tab.dataset.room));
+      renderMakeupSearch();
+    }));
+  </script>
+  <script>
+    document.addEventListener('livehub:module-data', ({detail}) => {
+      const gallery=document.querySelector('.anchor-gallery');
+      if(!gallery || gallery.dataset.liveLearningLoaded==='1') return;
+      const learning=(detail?.chats||[]).find(chat=>chat.key==='learning');
+      if(!learning) return;
+      const messages=learning.messages||[],safe=value=>String(value||'').replace(/[<>&"']/g,char=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[char])),messageTime=message=>Date.parse(message?.createdAt||'')||0;
+      const mediaItems=messages.flatMap(message=>(message.resources||[]).map(resource=>({message,resource})))
+        .filter(({resource})=>resource.url&&(resource.type==='file'||resource.type==='image'));
+      const isVideo=resource=>resource.type==='file'&&/\.(?:mp4|mov|webm|m4v)$/iu.test(resource.name||'');
+      const images=mediaItems.filter(({resource})=>resource.type==='image'),videos=mediaItems.filter(({resource})=>isVideo(resource)),attachments=mediaItems.filter(({resource})=>resource.type==='file'&&!isVideo(resource)),usedImages=new Set();
+      const pairedVideos=videos.map(video=>{
+        const videoTime=messageTime(video.message),image=images.filter(candidate=>!usedImages.has(candidate)&&candidate.message.sender===video.message.sender&&(candidate.message===video.message||(videoTime&&messageTime(candidate.message)&&Math.abs(messageTime(candidate.message)-videoTime)<=5*60*1000))).sort((a,b)=>Math.abs(messageTime(a.message)-videoTime)-Math.abs(messageTime(b.message)-videoTime))[0];
+        if(image) usedImages.add(image);
+        return {message:video.message,resource:video.resource,imageResource:image?.resource||null};
+      });
+      const records=[...pairedVideos,...images.filter(item=>!usedImages.has(item)).map(item=>({message:item.message,resource:item.resource,imageResource:item.resource})),...attachments.map(item=>({message:item.message,resource:item.resource,imageResource:null}))]
+        .sort((a,b)=>messageTime(b.message)-messageTime(a.message)).slice(0,16);
+      if(records.length){
+        gallery.dataset.liveLearningLoaded='1';gallery.replaceChildren();
+        records.forEach(({message,resource,imageResource})=>{
+          const created=messageTime(message),companion=messages.find(candidate=>candidate!==message&&candidate.text&&candidate.sender===message.sender&&created&&messageTime(candidate)&&Math.abs(messageTime(candidate)-created)<=5*60*1000);
+          const evidence=(message.text||companion?.text||'').trim(),room=['王鸥美肤','品牌精选','优选','官旗'].find(value=>evidence.includes(value))||'',fileName=resource.name||'上播妆造素材',video=isVideo(resource);
+          const card=document.createElement('article');card.className='anchor-card makeup-entry';card.dataset.cocoLearning='1';card.dataset.search=`WIS直播学习 ${room} ${evidence} ${fileName}`;
+          const targetUrl=resource.url,imageUrl=imageResource?.url||(!video&&resource.type==='image'?resource.url:''),media=imageUrl?`<a class="anchor-media-preview" href="${safe(targetUrl)}" target="_blank" rel="noopener noreferrer" aria-label="${video?'打开原始录屏':'打开已授权截图'}"><img src="${safe(imageUrl)}" alt="${safe(evidence||fileName)}"><span class="anchor-media-badge">${video?'截图预览 · 打开原始录屏':'已授权截图'}</span></a>`:`<a class="anchor-recording-fallback" href="${safe(targetUrl)}" target="_blank" rel="noopener noreferrer"><strong>${video?'原始录屏':'群内附件'}</strong><span>${safe(fileName)}</span><em>${video?'打开原始录屏':'打开附件'} ↗</em></a>`;
+          card.innerHTML=`${media}<div class="anchor-card-body"><h3>${safe(evidence||fileName)}</h3><p>${safe(room?`${room}直播间 · 最新已授权记录`:'群消息未标注直播间，待核验')}${video&&imageUrl?' · 画面为同组截图预览':''}</p><small>来源：WIS直播学习 · ${safe(String(message.createdAt||'').slice(0,10))}</small></div>`;
+          gallery.append(card);
+        });
+      }
+      const rooms={official:'官旗直播间',selected:'品牌精选直播间',preferred:'优选直播间',wangou:'王鸥美肤直播间'};
+      const chatKeys={official:'official_visual',selected:'selected_visual',preferred:'preferred_visual',wangou:'wangou_visual'};
+      Object.entries(chatKeys).forEach(([room,key])=>{
+        const chat=(detail?.chats||[]).find(item=>item.key===key);
+        const image=chat?.messages?.flatMap(message=>message.resources||[]).find(resource=>resource.type==='image'&&resource.url);
+        if(!image) return;
+        const panel=document.querySelector(`[data-room-content="${room}"]`);
+        const target=panel?.querySelector('.room-scenarios img, .room-visual-grid img');
+        if(target){target.src=image.url;target.alt=`${rooms[room]}最新已授权视觉参考图`;}
+      });
+    });
+  </script>
+  <script src="../../module-data.js" defer></script>
+  <script src="../../coco-links.js" defer></script>
+</body>
+</html>

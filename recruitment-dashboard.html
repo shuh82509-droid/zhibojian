@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>主播招聘工作台 · 打包前文档恢复版</title>
+  <style>
+    :root{--bg:#f5f7fb;--panel:#fff;--ink:#172033;--muted:#6d778b;--line:#e7eaf0;--blue:#3668f5;--blue-weak:#edf2ff;--green:#159b68;--green-weak:#eaf8f2;--amber:#c77a0a;--amber-weak:#fff5df;--red:#d84949;--red-weak:#fff0f0;--purple:#7655e8;--purple-weak:#f2efff;--shadow:0 12px 30px rgba(28,45,90,.08);--radius:18px}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 Inter,"PingFang SC","Microsoft YaHei",sans-serif} button,input,select{font:inherit} button{cursor:pointer}
+    .shell{max-width:1680px;margin:auto;padding:28px}.topbar{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:22px}.eyebrow{color:var(--blue);font-weight:750;font-size:12px;letter-spacing:.12em}.title{margin:5px 0 4px;font-size:30px;line-height:1.2}.sub{color:var(--muted)}.snapshot{padding:9px 13px;border:1px solid #dfe5f5;background:#fff;border-radius:999px;color:#59657c;white-space:nowrap}
+    .metrics{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:12px;margin-bottom:18px}.metric{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:15px 16px;box-shadow:0 5px 16px rgba(28,45,90,.035)}.metric b{display:block;font-size:25px;margin-top:5px}.metric span{color:var(--muted);font-size:12px}.metric.accent{background:linear-gradient(145deg,#315ee9,#6c84ff);color:#fff;border:0}.metric.accent span{color:#dfe6ff}
+    .notice-grid{display:grid;grid-template-columns:1.3fr 1fr;gap:14px;margin-bottom:18px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}.panel-head{padding:17px 19px 13px;display:flex;justify-content:space-between;gap:16px;align-items:center}.panel-head h2{font-size:17px;margin:0}.panel-head small{color:var(--muted)}
+    .alerts{padding:0 18px 18px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.alert{border:1px solid var(--line);border-radius:13px;padding:13px;background:#fbfcff}.alert strong{display:block;font-size:21px}.alert span{color:var(--muted);font-size:12px}.alert.warn{border-color:#f3dcab;background:#fffaf0}.alert.ok{border-color:#cdebdc;background:#f5fcf8}
+    .rules{padding:0 18px 18px;display:grid;gap:9px}.rule{display:flex;gap:10px;color:#505b71}.rule i{width:7px;height:7px;margin-top:7px;flex:0 0 auto;border-radius:50%;background:var(--blue)}
+    .funnel-panel{margin-bottom:18px;overflow:hidden}.funnel-shell{display:grid;grid-template-columns:minmax(580px,1.5fr) minmax(300px,.75fr);gap:24px;padding:0 20px 20px;align-items:center}.funnel{display:grid;gap:6px;justify-items:center}.funnel-step{min-height:48px;padding:0 18px;display:flex;align-items:center;justify-content:space-between;color:#fff;clip-path:polygon(3% 0,97% 0,100% 50%,97% 100%,3% 100%,0 50%);font-weight:720}.funnel-step span{font-size:12px;opacity:.9}.funnel-step b{font-size:21px}.funnel-step:nth-child(1){width:100%;background:#315ee9}.funnel-step:nth-child(2){width:90%;background:#4774ef}.funnel-step:nth-child(3){width:80%;background:#5d88f1}.funnel-step:nth-child(4){width:70%;background:#719af0}.funnel-step:nth-child(5){width:60%;background:#7f84df}.funnel-step:nth-child(6){width:50%;background:#6c62c9}.conversion-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.conversion-card{border:1px solid var(--line);border-radius:13px;background:#fbfcff;padding:13px}.conversion-card span{display:block;color:var(--muted);font-size:11px}.conversion-card b{display:block;font-size:22px;margin-top:3px}.conversion-note{grid-column:1/-1;color:#687387;font-size:12px;line-height:1.6;padding:4px 2px}
+    .calendar{margin-bottom:18px;overflow:hidden}.calendar-strip{display:grid;grid-template-columns:repeat(14,minmax(92px,1fr));gap:8px;padding:0 16px 17px;overflow-x:auto}.day{min-height:112px;border:1px solid var(--line);border-radius:13px;padding:10px;background:#fbfcff}.day.today{border-color:#7895ff;background:#f3f6ff}.day .date{font-weight:760}.day .week{font-size:11px;color:var(--muted);margin-left:4px}.event{margin-top:8px;padding:6px 7px;border-radius:8px;background:var(--blue-weak);color:#3158c7;font-size:11px;line-height:1.35}.event.done{background:var(--green-weak);color:#147450}.event.fail{background:var(--red-weak);color:#a43d3d}.empty{margin-top:16px;color:#a5adbc;font-size:11px}
+    .toolbar{display:flex;gap:10px;align-items:center;padding:0 18px 16px}.toolbar input{min-width:260px;flex:1;border:1px solid var(--line);border-radius:11px;padding:10px 12px;outline:none}.toolbar input:focus{border-color:#8aa0f4;box-shadow:0 0 0 3px #edf1ff}.toolbar select{border:1px solid var(--line);background:#fff;border-radius:11px;padding:10px 32px 10px 11px;color:#525e73}
+    .board-wrap{overflow-x:auto;padding:0 16px 17px}.board{display:grid;grid-template-columns:repeat(5,minmax(245px,1fr)) minmax(285px,1.12fr);gap:12px;min-width:1560px;align-items:start}.lane{border:1px solid var(--line);border-radius:15px;background:#f8f9fc;min-height:260px;overflow:hidden}.lane.progress{border:2px solid #8da1ff;background:linear-gradient(180deg,#f1f4ff,#fbfcff);box-shadow:0 10px 24px rgba(54,104,245,.13)}.lane-head{padding:13px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;font-weight:760}.lane.progress .lane-head{color:#244fd0;background:#e9eeff;border-bottom-color:#cdd7ff}.count{display:grid;place-items:center;min-width:25px;height:25px;padding:0 7px;border-radius:999px;background:#e9ecf3;color:#626d80;font-size:12px}.lane.progress .count{background:#3868f5;color:white}.cards{padding:10px;display:grid;gap:9px}.card{border:1px solid var(--line);background:#fff;border-radius:12px;padding:12px;text-align:left;width:100%;color:inherit;transition:.16s;box-shadow:0 2px 8px rgba(27,39,75,.03)}.card:hover{transform:translateY(-1px);border-color:#b8c5f3;box-shadow:0 7px 18px rgba(27,39,75,.08)}.card-top{display:flex;justify-content:space-between;gap:8px}.card-name{font-weight:780;font-size:15px}.tag{border-radius:999px;padding:2px 7px;font-size:10px;white-space:nowrap}.tag.blue{background:var(--blue-weak);color:#3158c7}.tag.red{background:var(--red-weak);color:#b43e3e}.tag.green{background:var(--green-weak);color:#13754e}.tag.amber{background:var(--amber-weak);color:#9a650e}.tag.purple{background:var(--purple-weak);color:#6344cb}.meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:7px;color:var(--muted);font-size:11px}.note{margin-top:8px;color:#4f5b70;font-size:12px}.empty-lane{padding:26px 8px;text-align:center;color:#9aa3b3;font-size:12px}
+    .foot{display:flex;justify-content:space-between;gap:16px;color:var(--muted);font-size:12px;padding:14px 4px 0}.dialog{width:min(760px,calc(100vw - 30px));border:0;border-radius:20px;padding:0;box-shadow:0 30px 90px rgba(20,30,60,.25)}.dialog::backdrop{background:rgba(20,29,48,.44);backdrop-filter:blur(3px)}.dialog-head{padding:21px 22px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}.dialog-head h3{margin:0;font-size:21px}.close{border:0;background:#f0f2f7;border-radius:9px;width:34px;height:34px;color:#667085}.dialog-body{padding:20px 22px 24px}.detail-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.detail{background:#f7f8fb;border-radius:11px;padding:10px}.detail label{display:block;color:var(--muted);font-size:11px}.timeline{margin-top:18px;border-left:2px solid #dfe4f3;padding-left:17px;display:grid;gap:13px}.timeline-item{position:relative}.timeline-item:before{content:"";position:absolute;left:-23px;top:5px;width:10px;height:10px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 3px #edf1ff}.timeline-item b{font-size:13px}.timeline-item p{margin:3px 0;color:#596478;font-size:12px}.hidden{display:none!important}
+    @media(max-width:1050px){.metrics{grid-template-columns:repeat(3,1fr)}.notice-grid{grid-template-columns:1fr}.alerts{grid-template-columns:repeat(3,1fr)}.funnel-shell{grid-template-columns:1fr}}
+    @media(max-width:650px){.shell{padding:18px 12px}.topbar{display:block}.snapshot{display:inline-block;margin-top:12px}.metrics{grid-template-columns:repeat(2,1fr)}.notice-grid{grid-template-columns:1fr}.alerts{grid-template-columns:1fr}.toolbar{align-items:stretch;flex-direction:column}.toolbar input{min-width:0}.detail-grid{grid-template-columns:1fr}.foot{display:block}.foot span{display:block;margin-top:4px}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div><div class="eyebrow">LIVE CENTER · RECRUITMENT</div><h1 class="title">主播招聘工作台</h1><div class="sub">打包前文档恢复版 · 招聘漏斗、面试日历、面评、录屏与入职考核时间线</div></div>
+      <div class="snapshot">恢复快照 · 2026-08-13</div>
+    </header>
+
+    <section class="metrics" aria-label="招聘指标">
+      <div class="metric accent"><span>周期候选人</span><b>42</b></div>
+      <div class="metric"><span>初审通过</span><b>29</b></div>
+      <div class="metric"><span>匹配面试</span><b>13</b></div>
+      <div class="metric"><span>面试通过</span><b>2</b></div>
+      <div class="metric"><span>考核通过</span><b>3</b></div>
+      <div class="metric"><span>已入职</span><b>2</b></div>
+    </section>
+
+    <section class="notice-grid">
+      <article class="panel">
+        <div class="panel-head"><h2>当前提醒</h2><small>按恢复快照计算</small></div>
+        <div class="alerts">
+          <div class="alert ok"><strong>0</strong><span>待审核</span></div>
+          <div class="alert warn"><strong>3</strong><span>待面评</span></div>
+          <div class="alert"><strong>7</strong><span>8 月 13 日新增简历</span></div>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h2>恢复口径</h2><small>已固化</small></div>
+        <div class="rules">
+          <div class="rule"><i></i><span>面试日历为恢复当日往前 14 天（2026-07-31 至 2026-08-13）。</span></div>
+          <div class="rule"><i></i><span>曾思怡 8 月 7 日面试已取消，不计入日历，状态为待重新安排。</span></div>
+          <div class="rule"><i></i><span>候选人进入面试、Offer 或入职流程时，初审按通过归类。</span></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel funnel-panel">
+      <div class="panel-head"><div><h2>招聘转化漏斗</h2><small>恢复快照截至 2026 年 8 月 13 日</small></div><span class="tag blue">完整招聘链路</span></div>
+      <div class="funnel-shell">
+        <div class="funnel" aria-label="招聘转化漏斗">
+          <div class="funnel-step"><span>候选人提交</span><b>42</b></div>
+          <div class="funnel-step"><span>初审通过</span><b>29</b></div>
+          <div class="funnel-step"><span>匹配面试</span><b>13</b></div>
+          <div class="funnel-step"><span>面试通过</span><b>2</b></div>
+          <div class="funnel-step"><span>考核通过</span><b>3</b></div>
+          <div class="funnel-step"><span>已入职</span><b>2</b></div>
+        </div>
+        <div class="conversion-grid">
+          <div class="conversion-card"><span>候选人 → 初审通过</span><b>69.0%</b></div>
+          <div class="conversion-card"><span>初审通过 → 匹配面试</span><b>44.8%</b></div>
+          <div class="conversion-card"><span>匹配面试 → 面试通过</span><b>15.4%</b></div>
+          <div class="conversion-card"><span>当前已入职</span><b>2 人</b></div>
+          <div class="conversion-note">考核通过包含此前已进入培养阶段的主播，因此人数可能高于当前快照中的“面试通过”。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel calendar">
+      <div class="panel-head"><h2>近 14 天面试日历</h2><small>2026-07-31 — 2026-08-13</small></div>
+      <div class="calendar-strip" id="calendar"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>候选人阶段</h2><small>所有阶段保持同一横排 · 点击卡片查看详情</small></div>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="搜索姓名、阶段、日期或备注" aria-label="搜索候选人">
+        <select id="sourceFilter" aria-label="来源筛选"><option value="">全部来源</option><option>招聘群</option><option>日历</option><option>指定私聊</option></select>
+      </div>
+      <div class="board-wrap"><div class="board" id="board"></div></div>
+    </section>
+    <footer class="foot"><span>离线恢复版：不会连接、读取或更新飞书。</span><span>保留六层漏斗、近 14 天日历与六个候选人阶段。</span></footer>
+  </main>
+
+  <dialog class="dialog" id="detailDialog">
+    <div class="dialog-head"><div><div class="eyebrow" id="dialogStage"></div><h3 id="dialogName"></h3></div><button class="close" id="closeDialog" aria-label="关闭">×</button></div>
+    <div class="dialog-body" id="dialogBody"></div>
+  </dialog>
+
+  <script>
+    const SNAPSHOT='2026-08-13';
+    const stages=[
+      {id:'review',label:'待审核'},
+      {id:'feedback',label:'待面评'},
+      {id:'passed',label:'初审通过'},
+      {id:'failed',label:'初审不通过'},
+      {id:'interviewed',label:'面试完成'},
+      {id:'progress',label:'通过后进度',progress:true}
+    ];
+    const candidates=[
+      {name:'吕瑶',stage:'feedback',source:'日历',date:'8月11日',status:'待面评',note:'面试已结束，尚未恢复到有效面评。',timeline:[['8月11日','完成面试'],['当前','等待面评']]},
+      {name:'宋苹苹',stage:'feedback',source:'日历',date:'8月12日',status:'待面评',note:'面试日程已过，按规则进入待面评。',timeline:[['8月12日','面试日程'],['当前','等待面评']]},
+      {name:'邓诗露',stage:'feedback',source:'日历',date:'8月13日 16:00',status:'待面评',note:'面试日程已过，未恢复到后续评价。',timeline:[['8月13日 16:00','面试日程'],['当前','等待面评']]},
+      {name:'彭树芳',stage:'passed',source:'招聘群',date:'8月12日',status:'待约面',note:'初审通过，等待安排面试。',timeline:[['8月12日','初审通过'],['当前','等待面试安排']]},
+      {name:'陈思佳',stage:'passed',source:'日历',date:'8月19日',status:'待面试',note:'已安排 8 月 19 日面试，不在近 14 天历史日历内。',timeline:[['当前','初审通过'],['8月19日','计划面试']]},
+      {name:'曾思怡',stage:'passed',source:'日历',date:'待定',status:'待重新安排',note:'曾安排后取消；8 月 7 日不计为有效面试。',timeline:[['8月7日','原日程已取消'],['当前','等待重新安排']]},
+      {name:'蔡永恒',stage:'passed',source:'招聘群',date:'待定',status:'待约面',note:'初审通过，等待安排面试。'},
+      {name:'李奕霖',stage:'passed',source:'招聘群',date:'8月13日',status:'初审通过',note:'表情复查后归类为通过。',media:['李奕霖-招聘原始.mp4']},
+      {name:'李可潼',stage:'passed',source:'招聘群',date:'8月13日',status:'初审通过',note:'表情复查后归类为通过。',media:['李可潼-招聘原始.mp4']},
+      {name:'石国庆',stage:'passed',source:'招聘群',date:'8月13日',status:'初审通过',note:'表情复查后归类为通过。',media:['石国庆-招聘原始.mp4']},
+      {name:'李楚晴',stage:'passed',source:'招聘群',date:'8月13日',status:'初审通过',note:'表情复查后归类为通过。',media:['李楚晴-招聘原始.mp4']},
+      {name:'刘玫香',stage:'passed',source:'招聘群',date:'8月13日',status:'初审通过',note:'表情复查后归类为通过。',media:['刘玫香-招聘原始.mp4']},
+      {name:'卓晓丽',stage:'failed',source:'招聘群',date:'8月12日',status:'初审不通过',note:'已归档初审不通过。',media:['卓晓丽-招聘原始.mp4']},
+      {name:'黄馥子',stage:'failed',source:'招聘群',date:'8月13日',status:'初审不通过',note:'表情复查后归类为不通过。',media:['黄馥子-招聘原始.mp4']},
+      {name:'魏明珠',stage:'failed',source:'招聘群',date:'8月13日',status:'初审不通过',note:'表情复查后归类为不通过。',media:['魏明珠-招聘原始.mp4','魏明珠-招聘图片.png']},
+      {name:'易婷',stage:'interviewed',source:'日历',date:'7月31日',status:'面试不通过',note:'已完成面试并归档不通过。'},
+      {name:'张淑玟',stage:'interviewed',source:'日历',date:'7月31日',status:'面试不通过',note:'已完成面试并归档不通过。'},
+      {name:'李佳楠',stage:'interviewed',source:'日历',date:'7月31日',status:'面试不通过',note:'已完成面试并归档不通过。'},
+      {name:'刘莎岚',stage:'interviewed',source:'日历',date:'8月3日',status:'面试不通过',note:'自然流直播话术不连贯、较琐碎，不擅长解决用户疑问。',timeline:[['7月29日','招聘端推送，初审通过'],['8月3日 16:00','完成面试'],['面评','颜值 4，表现力 4.5；有服装直播与海外带货经历，但自然流话术不连贯、较琐碎，不擅长解决用户疑问；不通过。']]},
+      {name:'李佩韩',stage:'interviewed',source:'日历',date:'8月4日',status:'面试不通过',note:'音色穿透力不足，紧张时会反复说口水话。',timeline:[['7月30日','招聘端推送，初审通过'],['8月4日 16:00','完成面试'],['面评','颜值 4.5，表现力 4.5；有穿搭自媒体、服装兼职主播与非遗手工产品直播经历，音色穿透力不足，紧张时口水话较多；不通过。']]},
+      {name:'张玥',stage:'interviewed',source:'日历',date:'8月7日',status:'面试不通过',note:'有效面试日程；已有结论。',media:['张玥-面试录屏.mp4']},
+      {name:'韦建英',stage:'interviewed',source:'日历',date:'8月10日',status:'面试不通过',note:'已完成面试并归档不通过。',media:['韦建英-主播简历.pdf','韦建英-招聘原始.mp4','韦建英-面试录屏.mp4']},
+      {name:'刘睿',stage:'progress',source:'指定私聊',date:'8月6日入职',status:'已入职 · 考核通过',note:'8 月 6 日已入职；8 月 13 日完成三日考核，4 项总分 299，平均 74.75。',timeline:[['8月6日','已入职'],['考核第一天','完成，附录屏'],['考核第二天','完成，附录屏'],['考核第三天','完成，附录屏'],['8月13日','考核通过 · 总分 299 · 均分 74.75']],media:['刘睿-主播简历.pdf','刘睿-招聘原始.mp4','刘睿-招聘原始.mov','刘睿-面试录屏.mov','刘睿-考核第一天.mp4','刘睿-考核第二天.mp4','刘睿-考核第三天.mp4']},
+      {name:'林羽浠',stage:'progress',source:'指定私聊',date:'考核完成',status:'考核通过',note:'三日主播考核已通过，进入通过后进度。',timeline:[['考核第一天','完成，附原录屏'],['考核第二天','逼单演绎较多但偏生硬，需要补充逼单话术和信念感。'],['考核第三天','表情与手势更灵动，但整体过于动态；需沉淀肢体控制与表情，继续强化逼单话术。考核通过。']],media:['林羽浠-考核第一天.mov','林羽浠-考核第二天.mov','林羽浠-考核第三天.mov']},
+      {name:'李安妮',stage:'progress',source:'指定私聊',date:'8月13日',status:'已入职 · 待确认到岗',note:'已接受 Offer，计划 8 月 13 日入职；历史状态为已入职，待人事确认到岗。',timeline:[['此前','面试通过'],['此前','主播考核通过'],['8月13日','入职节点 · 待确认到岗']],media:['李安妮-考核第一天.mp4','李安妮-考核第二天.mp4','李安妮-考核第三天.mp4']},
+      {name:'朱海鹏',stage:'progress',source:'招聘群',date:'8月13日',status:'8月13日入职',note:'入职日期已按用户校正为 8 月 13 日。',timeline:[['此前','面试/Offer 流程通过'],['8月13日','入职']]}
+    ];
+    const interviewEvents={
+      '2026-07-31':[['易婷','fail'],['张淑玟','fail'],['李佳楠','fail'],['刘睿','done']],
+      '2026-08-03':[['刘莎岚','fail']],
+      '2026-08-04':[['李佩韩','fail']],
+      '2026-08-07':[['张玥','fail']],
+      '2026-08-10':[['韦建英','fail']],
+      '2026-08-11':[['吕瑶','']],
+      '2026-08-12':[['宋苹苹','']],
+      '2026-08-13':[['邓诗露 16:00','']]
+    };
+    const weekdays=['日','一','二','三','四','五','六'];
+    const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+    const tagClass=s=>s.includes('不通过')?'red':s.includes('已入职')||s.includes('通过')?'green':s.includes('待')?'amber':'blue';
+    function renderCalendar(){
+      const root=document.querySelector('#calendar'); const end=new Date(SNAPSHOT+'T12:00:00');
+      root.innerHTML=Array.from({length:14},(_,i)=>{const d=new Date(end);d.setDate(end.getDate()-13+i);const key=[d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-');const events=interviewEvents[key]||[];return `<div class="day ${key===SNAPSHOT?'today':''}"><div><span class="date">${d.getMonth()+1}/${d.getDate()}</span><span class="week">周${weekdays[d.getDay()]}</span></div>${events.length?events.map(e=>`<div class="event ${e[1]}">${esc(e[0])}</div>`).join(''):'<div class="empty">无面试</div>'}</div>`}).join('');
+    }
+    function card(c,index){return `<button class="card" data-index="${index}"><div class="card-top"><span class="card-name">${esc(c.name)}</span><span class="tag ${tagClass(c.status)}">${esc(c.status)}</span></div><div class="meta"><span>${esc(c.source)}</span><span>·</span><span>${esc(c.date)}</span></div><div class="note">${esc(c.note||'暂无补充说明')}</div></button>`}
+    function renderBoard(){
+      const q=document.querySelector('#search').value.trim().toLowerCase();const src=document.querySelector('#sourceFilter').value;
+      const filtered=candidates.map((c,index)=>({...c,index})).filter(c=>(!src||c.source===src)&&(!q||Object.values(c).flat(2).join(' ').toLowerCase().includes(q)));
+      document.querySelector('#board').innerHTML=stages.map(s=>{const list=filtered.filter(c=>c.stage===s.id);return `<section class="lane ${s.progress?'progress':''}"><div class="lane-head"><span>${s.label}</span><span class="count">${list.length}</span></div><div class="cards">${list.length?list.map(c=>card(c,c.index)).join(''):'<div class="empty-lane">暂无候选人</div>'}</div></section>`}).join('');
+      document.querySelectorAll('.card').forEach(el=>el.addEventListener('click',()=>openDetail(candidates[Number(el.dataset.index)])));
+    }
+    function openDetail(c){
+      const stage=stages.find(s=>s.id===c.stage)?.label||'';document.querySelector('#dialogStage').textContent=stage;document.querySelector('#dialogName').textContent=c.name;
+      const timeline=(c.timeline||[[c.date,c.note||c.status]]).map(t=>`<div class="timeline-item"><b>${esc(t[0])}</b><p>${esc(t[1])}</p></div>`).join('');
+      document.querySelector('#dialogBody').innerHTML=`<div class="detail-grid"><div class="detail"><label>当前状态</label><b>${esc(c.status)}</b></div><div class="detail"><label>数据来源</label><b>${esc(c.source)}</b></div><div class="detail"><label>关键日期</label><b>${esc(c.date)}</b></div><div class="detail"><label>恢复快照</label><b>${SNAPSHOT}</b></div></div><div class="timeline">${timeline}</div>`;
+      document.querySelector('#detailDialog').showModal();
+    }
+    document.querySelector('#search').addEventListener('input',renderBoard);document.querySelector('#sourceFilter').addEventListener('change',renderBoard);document.querySelector('#closeDialog').addEventListener('click',()=>document.querySelector('#detailDialog').close());document.querySelector('#detailDialog').addEventListener('click',e=>{if(e.target===e.currentTarget)e.currentTarget.close()});
+    renderCalendar();renderBoard();
+  </script>
+</body>
+</html>

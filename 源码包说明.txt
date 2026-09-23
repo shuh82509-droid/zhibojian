@@ -1,0 +1,5 @@
+﻿直播中心工作台完整源码包
+生成日期：2026-08-20
+包含：主站、各业务模块、服务端、构建产物、测试、Docker 与部署脚本。
+未包含：SSH 密码、Coco App Secret、MCP/MiniMax Token、真实 .env、node_modules、缓存及临时诊断输出。
+部署前请根据 .env.example / .env.coco.template 在服务器单独配置凭据。

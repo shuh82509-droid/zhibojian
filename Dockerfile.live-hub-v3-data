@@ -1,0 +1,6 @@
+FROM fd-027340-data-center:latest
+USER root
+RUN rm -rf /app/dist
+COPY runtime/data-center/dist/ /app/dist/
+USER node
+

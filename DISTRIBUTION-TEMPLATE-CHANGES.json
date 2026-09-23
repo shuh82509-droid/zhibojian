@@ -1,0 +1,35 @@
+{
+  "reason": "Source distribution omits business/people snapshots; these are empty templates, not production observations.",
+  "changes": [
+    {
+      "file": "exports/morning-dashboard/index.html",
+      "emptyDataVariables": [
+        "photos",
+        "gmvNames",
+        "reports",
+        "rotations",
+        "thursdayReports",
+        "sourceDocs",
+        "latestReportDate"
+      ],
+      "removedSnapshotStatements": 35
+    },
+    {
+      "file": "exports/recruitment-pool/recruitment-dashboard.html",
+      "emptyDataVariables": [
+        "candidates",
+        "interviewEvents",
+        "SNAPSHOT"
+      ],
+      "removedSnapshotStatements": 0
+    },
+    {
+      "file": "exports/anchor-archives/recruitment-dashboard.html",
+      "emptyDataVariables": [
+        "AVATARS",
+        "ANCHOR_ALIASES"
+      ],
+      "removedSnapshotStatements": 0
+    }
+  ]
+}

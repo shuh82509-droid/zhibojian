@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>沟通稿自动生成器 · 直播中枢</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="font-scale.css" />
+  <link rel="stylesheet" href="material-center.css" />
+  <link rel="stylesheet" href="communication-generator.css?v=20260907a" />
+</head>
+<body class="communication-generator-page">
+  <main class="generator-page-shell">
+    <a class="back-link" href="material-scripts.html?embed=1">← 返回沟通稿资料库</a>
+    <form id="communicationGeneratorForm" class="communication-generator-form">
+      <header><div><span>COMMUNICATION SCRIPT BUILDER</span><h1>沟通稿自动生成器</h1><p>按 5—7 分钟、两轮完整直播循环生成；发布前执行严格合规复核。</p></div></header>
+      <div class="generator-config"><label>产品<select id="generatorProduct"></select><small id="generatorProductSource">正在读取产品资料库…</small></label><label>主播人设<select id="generatorPersona"></select></label><label>播法<select id="generatorBroadcastMode"><option>单播</option><option>双播</option></select></label><label>平台<select id="generatorPlatform"><option>抖音</option><option>视频号</option></select></label><label>生成篇数<select id="generatorCount"><option value="1">1 篇</option><option value="2">2 篇</option><option value="3">3 篇</option><option value="4">4 篇</option><option value="5">5 篇</option></select></label><label>自定义人设<input id="generatorCustomPersona" maxlength="80" placeholder="留空则使用上方人设" /></label></div>
+      <div class="generator-mechanism"><label>价格机制<input id="generatorPrice" maxlength="120" placeholder="如无已核验机制请留空" /></label><label>主品数量<input id="generatorMainQuantity" maxlength="120" placeholder="例如：待业务确认" /></label><label>赠品<input id="generatorGifts" maxlength="240" placeholder="赠品名称与数量；发布前复核" /></label></div>
+      <label class="generator-brief">补充要求<textarea id="generatorBrief" rows="3" maxlength="2000" placeholder="例如：稳健语气、适合日常平播；不得新增优惠"></textarea></label>
+      <details class="generator-new-product"><summary>＋ 新增产品与可验证资料</summary><div><label>产品名<input id="generatorCustomProduct" maxlength="40" /></label><label>飞书资料链接<textarea id="generatorSourceUrls" rows="3" placeholder="每行一个 wiki/docx 链接；新产品必填"></textarea></label></div></details>
+      <fieldset id="generatorStages"><legend>生成结构</legend></fieldset>
+      <div class="generator-actions"><button id="generateCommunication" type="button">生成长稿并合规复核</button><select id="generatorVersion" hidden aria-label="选择稿件版本"></select><span id="generatorStatus">仅使用可读取的飞书原文</span></div>
+      <section id="generatorEditors" class="generator-editors"></section>
+      <section class="generator-full"><div><h3>完整两轮沟通稿</h3><button id="combineCommunication" type="button">重新拼接</button></div><textarea id="generatorFullScript" rows="28" placeholder="完整长稿将在此按两轮直播结构拼接"></textarea></section>
+      <section class="generator-compliance"><h3>合规复核</h3><div id="generatorCompliance">生成后将显示复核结论、风险项和发布前确认项。</div></section>
+      <details class="generator-history"><summary>历史生成稿</summary><div id="generatorHistory">暂无已保存稿件。</div></details>
+      <footer><div id="generatorSources">来源尚未读取</div><button id="saveCommunicationDraft" type="button" disabled>保存稿件</button></footer>
+    </form>
+  </main>
+  <script src="communication-generator.js?v=20260907a"></script>
+</body>
+</html>

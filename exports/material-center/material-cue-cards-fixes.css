@@ -1,0 +1,14 @@
+.cue-layout { display: block; }
+.cue-layout.editor-open { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); }
+.cue-editor[hidden] { display: none !important; }
+.cue-page { width: 100%; max-width: none; margin: 0; }
+.cue-upload-preview { align-content: center; gap: 8px; padding: 12px; text-align: center; }
+.cue-upload-preview span { color: #758096; font-size: 10px; line-height: 1.6; }
+.prohibited-link-upload { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(260px, 1.6fr) auto; gap: 8px; margin-top: 9px; }
+.prohibited-link-upload input { min-width: 0; padding: 9px; border: 1px solid #dfd4d7; border-radius: 8px; background: #fff; }
+.prohibited-link-upload button { border: 0; border-radius: 8px; background: #176b4d; color: #fff; padding: 9px 14px; font-weight: 800; }
+
+@media (max-width: 920px) {
+  .cue-layout.editor-open, .prohibited-link-upload { grid-template-columns: 1fr; }
+}
+.cue-card-actions{justify-content:flex-start!important;gap:7px!important}.cue-card-actions button,.cue-card-actions a{display:inline-flex;align-items:center;justify-content:center;min-height:38px;border-radius:8px!important;padding:8px 11px!important;font-weight:750!important;text-decoration:none}.cue-action-edit{border-color:#abcbbd!important;background:#edf7f2!important;color:#176247!important}.cue-action-download{border:1px solid #a9bfd8!important;background:#eef5fb!important;color:#2c5d88!important}.cue-action-delete{margin-left:auto;border-color:#e4baba!important;background:#fff2f2!important;color:#a83e46!important}

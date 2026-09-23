@@ -1,0 +1,2 @@
+/* Distribution template: business snapshots intentionally omitted. */
+window.ANCHOR_ARCHIVE = {"updatedAt": "", "scoreDate": "", "scoreStatus": "待接入真实业务源", "trendRange": "", "latestDataDate": "", "metrics": {"active": null, "regular": null, "newcomer": null, "senior": null, "leaving": null}, "newcomer": {}, "performanceReminder": false, "rotationForecast": false, "rotationNote": "", "departed": [], "notes": [], "rooms": {}, "reviewCounts": {}, "schedules": {}, "latest": {}, "reviews": {}};
