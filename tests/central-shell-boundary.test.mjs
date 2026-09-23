@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { frameHeadersForHub } from "../frame-policy.mjs";
 
 const root = new URL("../", import.meta.url);
 
@@ -13,7 +14,15 @@ test("live hub keeps child modules single-level and recovers shell links", async
 
   assert.match(server, /<base target="_top">/);
   assert.match(server, /target="_top" rel="noreferrer">返回中枢/);
-  assert.match(server, /headers\['X-Frame-Options'\]='DENY'/);
+  assert.match(server, /Object\.assign\(headers, frameHeaders\)/);
+  assert.deepEqual(frameHeadersForHub(false), {
+    'X-Frame-Options': 'DENY',
+    'Content-Security-Policy': "frame-ancestors 'none'",
+  });
+  assert.deepEqual(frameHeadersForHub(true), {
+    'X-Frame-Options': 'SAMEORIGIN',
+    'Content-Security-Policy': "frame-ancestors 'self'",
+  });
   assert.match(shell, /recruitment-dashboard\.html\?embed=1&v=20260907a/);
   assert.match(shell, /material-center\.html\?embed=1&v=\d{8}[a-z0-9]*/);
   assert.match(shell, /liveHubNavigationGuard/);

@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { Readable } from 'node:stream';
-import {createCalendarUserReader} from './calendar-user-reader.mjs';
 import {
   chinaDateFor,
   isLifecycleRefreshDue,
@@ -12,10 +11,19 @@ import {
   parseLatestCoachSummary,
   parseEmploymentMessages, parseRecruitmentMessages, buildInterviewReminderPreview, extractAnchorEvaluation, verifiedAnchorEvidence, feishuDocumentLink
 } from './lifecycle-engine.mjs';
+import { frameHeadersForHub } from './frame-policy.mjs';
+import { createCalendarUserReader } from './calendar-user-reader.mjs';
+import { createCalendarAuthHandler } from './calendar-auth-http.mjs';
 
 const port = Number(process.env.PORT || 3000);
+const recoveryReadOnly = process.env.RECOVERY_READ_ONLY === '1';
+const recoveryMessage = '维护恢复中，仅供查看。已核验的原表资料按备份日期展示；历史手卡、上传素材与人工草稿尚待恢复，保存与写回已暂停。';
 const publicDir = join(process.cwd(), 'public');
 const basePath = (process.env.BASE_PATH || '/fd-027340/live-center-workbench').replace(/\/$/, '');
+// Enable embedding only behind the hub's same-origin route. The existing
+// standalone deployment keeps its explicit anti-framing policy by default.
+const hubSameOriginEmbed = process.env.HUB_SAME_ORIGIN_EMBED === 'true';
+const frameHeaders = frameHeadersForHub(hubSameOriginEmbed);
 const appId = process.env.FEISHU_APP_ID || '';
 const appSecret = process.env.FEISHU_APP_SECRET || '';
 const notificationBotAppId = 'cli_aa9c744d6ffa1cc4';
@@ -23,7 +31,7 @@ const notificationBotIdentityMatches = () => appId === notificationBotAppId;
 const centralAuthorityBase = String(process.env.CENTRAL_AUTHORITY_BASE || 'https://app.fandow.top/fd-026222/wis-video-center/api').replace(/\/+$/u, '');
 const centralAuthorityFallbackBase = String(process.env.CENTRAL_AUTHORITY_FALLBACK_BASE || '').replace(/\/+$/u, '');
 const requiredModule = 'live-room-management';
-const marketingHubUrl = 'https://app.fandow.top/fd-026222/wis-marketing-hub/';
+const marketingHubUrl = process.env.MARKETING_HUB_URL || 'https://app.fandow.top/fd-026222/wis-marketing-hub/';
 const minimaxApiKey = process.env.MINIMAX_API_KEY || '';
 const minimaxBaseUrl = (process.env.MINIMAX_BASE_URL || 'https://cloud.fandow.com/gpt/openclaw-jump/v1').replace(/\/$/, '');
 const minimaxModel = process.env.MINIMAX_MODEL || 'MiniMax-M2.7-highspeed';
@@ -49,7 +57,7 @@ const anchorDevelopmentPath = join(dataDir, 'anchor-development.json');
 const lifecycleRefreshTimes = [...new Set(String(process.env.LIFECYCLE_REFRESH_TIMES || '09:30,18:00')
   .split(',').map(value => value.trim()).filter(value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)))].sort();
 if (!lifecycleRefreshTimes.length) lifecycleRefreshTimes.push('09:30', '18:00');
-const lifecycleSchedulerEnabled = process.env.LIFECYCLE_SCHEDULER_ENABLED !== '0';
+const lifecycleSchedulerEnabled = !recoveryReadOnly && process.env.LIFECYCLE_SCHEDULER_ENABLED !== '0';
 const mime = { '.html':'text/html; charset=utf-8','.js':'application/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif','.svg':'image/svg+xml','.ico':'image/x-icon','.mp4':'video/mp4','.pdf':'application/pdf' };
 const feishuReady = () => Boolean(appId && appSecret);
 const visualThemeFolders = Object.freeze(['大促主题', '品牌色平销', '特殊内容场']);
@@ -67,7 +75,7 @@ const feishuDocs = Object.freeze({
 });
 // These are the Feishu documents linked from the material centre.  Keeping this
 // allow-list on the server makes the scheduled intelligence pass comprehensive
-// without exposing Feishu credentials or accepting arbitrary document URLs.
+// without exposing Coco credentials or accepting arbitrary document URLs.
 const materialFeishuDocUrls = Object.freeze([
   'https://jqx28l0j4lx.feishu.cn/docx/PKDkde7aAoYMlrx9yMMcwqOunSd',
   'https://jqx28l0j4lx.feishu.cn/docx/Q7pUdajw5oant3xglC3cvi0Ln9f',
@@ -120,13 +128,12 @@ const communicationBroadcastModes = Object.freeze(['单播', '双播']);
 const communicationPlatforms = Object.freeze(['抖音', '视频号']);
 const recruitmentReviewerOpenId = process.env.RECRUITMENT_REVIEWER_OPEN_ID || 'ou_308a92748ac8b66de306a99b2010d755';
 const recruitmentCalendarId = String(process.env.RECRUITMENT_CALENDAR_ID || '').trim();
-const recruitmentCalendarReader = createCalendarUserReader({
-  appId, appSecret, calendarId:recruitmentCalendarId,
-  expectedOpenId:String(process.env.RECRUITMENT_CALENDAR_READER_OPEN_ID || '').trim(),
-  redirectUri:String(process.env.RECRUITMENT_CALENDAR_OAUTH_REDIRECT_URI || '').trim(),
-  storePath:String(process.env.RECRUITMENT_CALENDAR_OAUTH_STORE_PATH || '').trim(),
-  encryptionKey:String(process.env.RECRUITMENT_CALENDAR_OAUTH_KEY || '').trim(),
-});
+const recruitmentCalendarReader = createCalendarUserReader({appId,appSecret,calendarId:recruitmentCalendarId,
+  expectedOpenId:process.env.RECRUITMENT_CALENDAR_READER_OPEN_ID || '',
+  redirectUri:process.env.RECRUITMENT_CALENDAR_OAUTH_REDIRECT_URI || '',
+  storePath:process.env.RECRUITMENT_CALENDAR_OAUTH_STORE_PATH || '',
+  encryptionKey:process.env.RECRUITMENT_CALENDAR_OAUTH_KEY || ''});
+const calendarAuth = createCalendarAuthHandler({reader:recruitmentCalendarReader,basePath,readOnly:recoveryReadOnly,json});
 const communicationProductSources = Object.freeze({
   '水润面膜': [
     'https://jqx28l0j4lx.feishu.cn/wiki/Jejow2SyBiEeHXkm2WGcGTXwnkc',
@@ -171,7 +178,7 @@ const lifecycleState = { running: null, lastAutomaticSlot: '', lastAttemptAt: nu
 class FeishuError extends Error { constructor(message, status = 502, details = '') { super(message); this.status = status; this.details = details; } }
 function json(res, status, payload) { res.writeHead(status, {'Content-Type':'application/json; charset=utf-8','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}); res.end(JSON.stringify(payload)); }
 async function getTenantToken() {
-  if (!feishuReady()) throw new FeishuError('服务器尚未配置飞书应用凭据。', 503, 'missing_feishu_credentials');
+  if (!feishuReady()) throw new FeishuError('服务器尚未配置 Coco 应用凭据。', 503, 'missing_feishu_credentials');
   if (tenantToken.value && tenantToken.expiresAt > Date.now() + 5 * 60 * 1000) return tenantToken.value;
   const response = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/', {
     method: 'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, signal: AbortSignal.timeout(10000),
@@ -303,7 +310,7 @@ async function findChatByName(name) {
       pageToken = data.page_token || '';
       if (!data.has_more || !pageToken) break;
     }
-    throw new FeishuError(`飞书应用无法在已授权会话中找到群聊：${name}`, 404, 'chat_not_found');
+    throw new FeishuError(`Coco 无法在已授权会话中找到群聊：${name}`, 404, 'chat_not_found');
   });
 }
 function normalizeChatMessage(item) {
@@ -376,7 +383,7 @@ async function documentViewer(res, rawValue) {
   const document = await cached(`doc-url:${rawValue}`, 5 * 60 * 1000, () => getDocumentByUrl(rawValue));
   const content = htmlEscape(document.content);
   const title = htmlEscape(document.title);
-  const body = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{margin:0;background:#f5f6f2;color:#17372c;font:15px/1.8 Inter,"PingFang SC","Microsoft YaHei",sans-serif}.bar{position:sticky;top:0;background:#123f32;color:#fff;padding:14px 24px;font-weight:700}.doc{max-width:1040px;margin:22px auto;padding:34px 42px;background:#fff;border:1px solid #dfe5df;border-radius:16px;box-shadow:0 8px 28px #17372c12}.doc h1{margin-top:0}.content{white-space:pre-wrap;overflow-wrap:anywhere}@media(max-width:700px){.doc{margin:0;padding:22px;border-radius:0}}</style></head><body><div class="bar">LIVE HUB · 飞书文档读取</div><main class="doc"><h1>${title}</h1><div class="content">${content}</div></main></body></html>`;
+  const body = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{margin:0;background:#f5f6f2;color:#17372c;font:15px/1.8 Inter,"PingFang SC","Microsoft YaHei",sans-serif}.bar{position:sticky;top:0;background:#123f32;color:#fff;padding:14px 24px;font-weight:700}.doc{max-width:1040px;margin:22px auto;padding:34px 42px;background:#fff;border:1px solid #dfe5df;border-radius:16px;box-shadow:0 8px 28px #17372c12}.doc h1{margin-top:0}.content{white-space:pre-wrap;overflow-wrap:anywhere}@media(max-width:700px){.doc{margin:0;padding:22px;border-radius:0}}</style></head><body><div class="bar">LIVE HUB · Coco 文档读取</div><main class="doc"><h1>${title}</h1><div class="content">${content}</div></main></body></html>`;
   res.writeHead(200, {'Content-Type':'text/html; charset=utf-8','Cache-Control':'private, max-age=300','X-Content-Type-Options':'nosniff'});
   res.end(body);
 }
@@ -400,7 +407,7 @@ async function proxyFeishuResource(req, res, rawValue) {
   const response = await fetch(`https://open.feishu.cn/open-apis${apiPath}`, {headers, signal:AbortSignal.timeout(30000)});
   if (!response.ok || !response.body) {
     const details = await response.text().catch(() => '');
-    throw new FeishuError('Feishu app could not download the resource.', response.status === 403 ? 403 : 502, details.slice(0, 300));
+    throw new FeishuError('Coco could not download the Feishu resource.', response.status === 403 ? 403 : 502, details.slice(0, 300));
   }
   const outputHeaders = {'Content-Type':response.headers.get('content-type') || 'application/octet-stream','Cache-Control':'private, max-age=300','X-Content-Type-Options':'nosniff'};
   for (const name of ['content-length','content-range','accept-ranges']) { const header = response.headers.get(name); if (header) outputHeaders[name] = header; }
@@ -415,7 +422,7 @@ async function proxyFeishuMessageResource(req, res, messageId, resourceKey, reso
   const headers = {Authorization:`Bearer ${token}`};
   if (req.headers.range) headers.Range = req.headers.range;
   const response = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(resourceKey)}?type=${resourceType}`, {headers, signal:AbortSignal.timeout(30000)});
-  if (!response.ok || !response.body) throw new FeishuError('Feishu app could not download the message resource.', response.status === 403 ? 403 : 502, `resource_${response.status}`);
+  if (!response.ok || !response.body) throw new FeishuError('Coco could not download the Feishu message resource.', response.status === 403 ? 403 : 502, `resource_${response.status}`);
   const outputHeaders = {'Content-Type':response.headers.get('content-type') || 'application/octet-stream','Cache-Control':'private, max-age=300','X-Content-Type-Options':'nosniff'};
   for (const name of ['content-length','content-range','accept-ranges']) { const header = response.headers.get(name); if (header) outputHeaders[name] = header; }
   res.writeHead(response.status, outputHeaders);
@@ -682,12 +689,12 @@ async function generateModuleData(force = false) {
     const fingerprint = createHash('sha256').update(JSON.stringify({compactSources,documents})).digest('hex');
     if (!force && moduleState.value && moduleState.fingerprint === fingerprint) return moduleState.value;
     let placements = [];
-    if (minimaxReady()) {
+    if (!recoveryReadOnly && minimaxReady()) {
       const instruction = `你是直播中心工作台的信息分发器。仅根据已授权飞书群聊和文档，输出严格 JSON：{placements:[{module,section,title,evidence,priority,sourceId}]}。module 只能是 recruitment、anchors、materials、collaboration。将候选人、面试、简历和录屏放 recruitment；主播表现、转化、排班放 anchors；妆造、背景、手卡、竞对、学习素材放 materials；违规、异常、待处理风险放 collaboration。只输出有明确证据的信息；不得创建“飞书同步”“AI洞察”栏目，不得臆造数值、人员或链接。sourceId 必须是给定消息或文档的 sourceId。`;
       try { placements = normalizeModulePlacement(await callMiniMaxJson(instruction, {chats:compactSources,documents}, 8192), sourceIds); }
       catch (error) { console.error('module placement analysis failed', error.details || error.message); }
     }
-    const value = { generatedAt:new Date().toISOString(), refreshMinutes:intelligenceRefreshMinutes, chats, documents:documents.map(({sourceId,title,sourceUrl}) => ({sourceId,title,sourceUrl})), placements, coverage:{chats:chats.length,documents:documents.length,failures} };
+    const value = { generatedAt:new Date().toISOString(), refreshMinutes:intelligenceRefreshMinutes, chats, documents:documents.map(({sourceId,title,sourceUrl}) => ({sourceId,title,sourceUrl})), placements, coverage:{chats:chats.length,documents:documents.length,failures}, ...(recoveryReadOnly ? {aiGeneration:{status:'paused_recovery',message:'维护恢复中，AI 摘要已暂停；已授权的原始来源仍可读取。'}} : {}) };
     moduleState.value = value; moduleState.fingerprint = fingerprint; moduleState.generatedAt = value.generatedAt; moduleState.lastError = null;
     return value;
   })();
@@ -787,15 +794,51 @@ const lifecycleSnapshotPath = module => join(lifecycleDir, `${module}.json`);
 const lifecycleLogPath = join(lifecycleDir, 'refresh-log.json');
 const anchorPhotoDir = join(lifecycleDir, 'anchor-photos');
 const bundledAnchorProfilePath = join(publicDir, 'modules', 'anchors', 'assets', 'anchor-profiles.json');
+const recoveryProtectedStores = new Set([materialCardPath, materialAssetPath, materialLinkPath, calendarOverridePath, communicationDraftPath, anchorDevelopmentPath]);
+function validRecoveryStore(path, value) {
+  const record = item => Boolean(item) && typeof item === 'object' && !Array.isArray(item);
+  if (!record(value)) return false;
+  if (path === anchorDevelopmentPath) return record(value.profiles);
+  const arrayField = new Map([[materialCardPath,'cards'],[materialAssetPath,'assets'],[materialLinkPath,'links'],[calendarOverridePath,'items'],[communicationDraftPath,'drafts']]).get(path);
+  if (!arrayField || !Array.isArray(value[arrayField])) return false;
+  return ['deletedCards','folders'].every(key => !Object.hasOwn(value,key) || Array.isArray(value[key]));
+}
+function historyRecoveryError() {
+  return new FeishuError('历史业务数据尚待恢复，暂时无法读取。请勿重新录入或重复上传原有资料。', 503, 'history_recovery_pending');
+}
+function recoveryPayload() {
+  return {readOnly:true, historyStatus:'pending_recovery', message:recoveryMessage};
+}
+function withRecoveryBanner(content) {
+  if (!recoveryReadOnly) return content;
+  const banner = `<style id="live-hub-recovery-style">html[data-live-hub-recovery-banner]{--live-hub-recovery-height:64px}html[data-live-hub-recovery-banner] body{padding-top:var(--live-hub-recovery-height)!important}html[data-live-hub-recovery-banner] .app{height:calc(100dvh - var(--live-hub-recovery-height))!important}html[data-live-hub-recovery-banner] .app-shell{min-height:calc(100dvh - var(--live-hub-recovery-height))!important}html[data-live-hub-recovery-banner] .app-shell>.sidebar{top:var(--live-hub-recovery-height)!important;height:calc(100dvh - var(--live-hub-recovery-height))!important;overflow-y:auto}#live-hub-recovery-notice{position:fixed;inset:0 0 auto;z-index:2147483647;min-height:64px;display:flex;align-items:center;justify-content:center;padding:10px 18px;box-sizing:border-box;background:#fff2cc;border-bottom:2px solid #c79226;color:#64450b;font:600 14px/1.5 system-ui,sans-serif;text-align:center}#live-hub-recovery-notice[hidden]{display:none!important}</style><aside id="live-hub-recovery-notice" role="status" hidden>${recoveryMessage}</aside><script>if(window.top===window.self){const root=document.documentElement;const notice=document.getElementById('live-hub-recovery-notice');root.setAttribute('data-live-hub-recovery-banner','true');notice.hidden=false;const measure=()=>root.style.setProperty('--live-hub-recovery-height',Math.ceil(notice.getBoundingClientRect().height)+'px');measure();if(typeof ResizeObserver!=='undefined')new ResizeObserver(measure).observe(notice);window.addEventListener('resize',measure)}</script>`;
+  let recoveredContent = String(content).replace(/<body([^>]*)>/iu, '<body$1>'+banner);
+  if (process.env.RECOVERY_ANCHOR_SNAPSHOT && recoveredContent.includes('function applyAnchorSnapshot(')) {
+    const originalBoot = 'renderAll();loadBundledProfiles();loadAnchorTrends();loadLifecycle();setInterval(loadLifecycle,5*60*1000);';
+    if (!recoveredContent.includes(originalBoot)) throw historyRecoveryError();
+    recoveredContent = recoveredContent.replace(originalBoot, '');
+    recoveredContent = recoveredContent.replace(/<\/body>/iu, `<script src="${basePath}/recovery-anchor-view.js"></script></body>`);
+  }
+  return recoveredContent;
+}
 const anchorProfileBase = Object.freeze({
   baseToken:'R5ntb369Tap1sisGt5dcPsIpnnf',
   tableId:'tblDHQ06n9PBtToW',
   viewId:'vewKuBxJAm'
 });
 async function readJsonFile(path, fallback = null) {
-  try { return JSON.parse(await readFile(path, 'utf8')); } catch { return fallback; }
+  try {
+    const value = JSON.parse(await readFile(path, 'utf8'));
+    if (recoveryReadOnly && recoveryProtectedStores.has(path) && !validRecoveryStore(path,value)) throw historyRecoveryError();
+    return value;
+  }
+  catch {
+    if (recoveryReadOnly && recoveryProtectedStores.has(path)) throw historyRecoveryError();
+    return fallback;
+  }
 }
 async function writeJsonAtomic(path, value) {
+  if (recoveryReadOnly) throw new FeishuError(recoveryMessage, 423, 'recovery_read_only');
   await mkdir(lifecycleDir, {recursive:true});
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(temporary, JSON.stringify(value), {encoding:'utf8',mode:0o600});
@@ -887,7 +930,7 @@ async function materialCardsApi(req, res, routePath, auth) {
     await writeJsonAtomic(materialCardPath, { cards:next, deletedCards:materialArray(store?.deletedCards), updatedAt:card.updatedAt });
     return json(res, 200, {ok:true,card});
   } catch (error) {
-    return json(res, Number(error?.status || 500), {ok:false,error:error?.message || '手卡保存失败。'});
+    return json(res, Number(error?.status || 500), {ok:false,error:error?.message || '手卡保存失败。',...(recoveryReadOnly && error?.details==='history_recovery_pending'?{code:error.details}:{})});
   }
 }
 
@@ -961,7 +1004,7 @@ async function materialAssetsApi(req, res, routePath, auth) {
     await writeJsonAtomic(materialAssetPath, {...store,assets:[asset,...assets],folders:[...new Set([...folders,...(folder?[folder]:[])])],updatedAt:now});
     return json(res,200,{ok:true,asset});
   } catch (error) {
-    return json(res,Number(error?.status||500),{ok:false,error:error?.message||'素材上传失败。'});
+    return json(res,Number(error?.status||500),{ok:false,error:error?.message||'素材上传失败。',...(recoveryReadOnly && error?.details==='history_recovery_pending'?{code:error.details}:{})});
   }
 }
 function normalizeMaterialLink(payload, actor) {
@@ -994,7 +1037,7 @@ async function materialLinksApi(req, res, routePath, auth) {
     await writeJsonAtomic(materialLinkPath, {links:next,updatedAt:link.createdAt});
     return json(res, 200, {ok:true,link});
   } catch (error) {
-    return json(res, Number(error?.status || 500), {ok:false,error:error?.message || '资料链接保存失败。'});
+    return json(res, Number(error?.status || 500), {ok:false,error:error?.message || '资料链接保存失败。',...(recoveryReadOnly && error?.details==='history_recovery_pending'?{code:error.details}:{})});
   }
 }
 
@@ -1024,7 +1067,7 @@ async function calendarOverridesApi(req, res, routePath, auth) {
     const store = await readJsonFile(calendarOverridePath, { items: [], updatedAt: null });
     const items = materialArray(store?.items);
     if (req.method === 'GET' && routePath === '/api/calendar-overrides') {
-      return json(res, 200, { ok:true, items, updatedAt:store?.updatedAt || null, source:'live_hub_storage' });
+      return json(res, 200, { ok:true, items, updatedAt:store?.updatedAt || null, source:'live_hub_storage', readOnly:recoveryReadOnly });
     }
     if (req.method !== 'POST' || routePath !== '/api/calendar-overrides') return json(res, 405, {ok:false,error:'Method not allowed'});
     if (auth?.mode !== 'internal' && req.headers['x-requested-with'] !== 'XMLHttpRequest') return json(res, 403, {ok:false,error:'缺少日历保存请求标识。'});
@@ -1038,7 +1081,7 @@ async function calendarOverridesApi(req, res, routePath, auth) {
     await writeJsonAtomic(calendarOverridePath, { items:next, updatedAt:override.updatedAt });
     return json(res, 200, {ok:true,item:override});
   } catch (error) {
-    return json(res, Number(error?.status || 500), {ok:false,error:error?.message || '直播日历保存失败。'});
+    return json(res, Number(error?.status || 500), {ok:false,error:error?.message || '直播日历保存失败。',...(recoveryReadOnly && error?.details==='history_recovery_pending'?{code:error.details}:{})});
   }
 }
 
@@ -1341,7 +1384,17 @@ async function anchorDevelopmentApi(req, res, routePath, auth) {
     return json(res, Number(error?.status || 500), {ok:false,error:error?.message || '主播成长档案保存失败。',code:error?.details || 'anchor_development_error'});
   }
 }
+async function readRecoveryAnchorSnapshot() {
+  if (!process.env.RECOVERY_ANCHOR_SNAPSHOT) return null;
+  const raw = await readFile(process.env.RECOVERY_ANCHOR_SNAPSHOT);
+  const hash = createHash('sha256').update(raw).digest('hex');
+  if (!process.env.RECOVERY_ANCHOR_SHA256 || hash !== process.env.RECOVERY_ANCHOR_SHA256) throw historyRecoveryError();
+  const snapshot = JSON.parse(raw.toString('utf8'));
+  if (snapshot?.recoverySource?.mode !== 'verified_backup' || snapshot?.module !== 'anchors' || !Array.isArray(snapshot?.profiles)) throw historyRecoveryError();
+  return snapshot;
+}
 async function readLifecycleSnapshot(module) {
+  if (module === 'anchors' && recoveryReadOnly && process.env.RECOVERY_ANCHOR_SNAPSHOT) return readRecoveryAnchorSnapshot();
   return lifecycleModules.includes(module) ? readJsonFile(lifecycleSnapshotPath(module), null) : null;
 }
 async function appendLifecycleLog(entry) {
@@ -1440,11 +1493,23 @@ async function loadAnchorProfiles() {
       try { return await fetchAnchorProfiles(); } catch(retryError) { error=retryError; }
     }
     const previous=await readLifecycleSnapshot('anchors');
-    if(previous?.profileSource?.source==='feishu_base'&&previous.profiles?.length) {
-      return {profiles:previous.profiles,source:'feishu_base',fetchedAt:previous.profileSource.fetchedAt,failures:[String(error?.message||'主播档案源暂不可用')+'；已保留上次真实读取档案。']};
+    let recovered=null, recoveryFailure='';
+    try { recovered=await readRecoveryAnchorSnapshot(); }
+    catch (recoveryError) { recoveryFailure='已配置主播档案备份未通过完整性校验，未使用该备份。'; }
+    const eligible = snapshot => snapshot && Array.isArray(snapshot.profiles) &&
+      ['feishu_base','verified_source_backup'].includes(snapshot.profileSource?.source) &&
+      Number.isFinite(Date.parse(snapshot.profileSource?.fetchedAt || ''));
+    const candidates=[previous,recovered].filter(eligible)
+      .sort((a,b)=>Date.parse(b.profileSource.fetchedAt)-Date.parse(a.profileSource.fetchedAt));
+    const failure=String(error?.message||'主播档案源暂不可用')+'；未取得本次更新，保留原资料及读取时间。';
+    if(candidates.length){
+      const selected=candidates[0];
+      return {profiles:selected.profiles,source:selected.profileSource.source,
+        fetchedAt:selected.profileSource.fetchedAt,
+        failures:[failure,...(recoveryFailure?[recoveryFailure]:[])]};
     }
     const bundled = await bundledAnchorProfiles();
-    return {...bundled,failures:[String(error?.message || '主播档案多维表读取失败')]};
+    return {...bundled,failures:[failure,...(recoveryFailure?[recoveryFailure]:[])]};
   }
 }
 async function serveAnchorPhoto(res, name) {
@@ -1527,14 +1592,21 @@ function recruitmentCycleRange(month) {
   };
 }
 async function readRecruitmentCalendar(cycle) {
-  const authStatus = await recruitmentCalendarReader.status();
-  if (!authStatus.authorized) return {events:{},status:`待授权：${authStatus.reason || '舒豪用户授权未生效'}；群聊记录不冒充正式面试日历。`};
+  if (!recruitmentCalendarId) return {events:{},status:'待配置：正式面试日历来源尚未配置，群聊记录不冒充正式日历。'};
+  const authorization=await recruitmentCalendarReader.status();
+  if(!authorization.authorized)return {events:{},status:`待授权：${authorization.reason}；无需在日历共享人中查找机器人。`};
   const query = new URLSearchParams({start_time:String(cycle.startTime),end_time:String(cycle.endTime),page_size:'1000'});
-  const data = await recruitmentCalendarReader.get(`/calendar/v4/calendars/${encodeURIComponent(recruitmentCalendarId)}/events?${query}`);
-  if (data.has_more) throw new FeishuError('正式面试日历时段查询超过上限，已停止展示。', 502, 'calendar_range_incomplete');
+  const items=[],seenPages=new Set();
+  for(let page=0;page<20;page++){
+    const data=await recruitmentCalendarReader.get(`/calendar/v4/calendars/${encodeURIComponent(recruitmentCalendarId)}/events?${query}`);
+    items.push(...materialArray(data.items));
+    if(!data.has_more)break;
+    if(page===19||!data.page_token||seenPages.has(data.page_token))throw new Error('正式面试日历未能完整翻页，已停止统计，不能以截断结果展示人数。');
+    seenPages.add(data.page_token);query.set('page_token',data.page_token);
+  }
   const events = {};
-  materialArray(data.items).forEach(item => {
-    if (item?.status === 'cancelled' || !/(?:面试|初试|复试|试播)/u.test(String(item?.summary || ''))) return;
+  items.forEach(item => {
+    if(item?.status==='cancelled'||!/(面试|初试|复试|试播)/u.test(item?.summary||''))return;
     const timestamp = Number(item?.start_time?.timestamp || 0);
     const date = item?.start_time?.date || (timestamp ? new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(timestamp * 1000)) : '');
     if (!/^20\d{2}-\d{2}-\d{2}$/u.test(String(date))) return;
@@ -1560,7 +1632,7 @@ async function recruitmentCycleSnapshot(month) {
     hiredCount:candidates.filter(item => item.inSubmissionCohort && item.stage === 'hired').length,
     assessmentPassedCount:candidates.filter(item => item.inSubmissionCohort && item.assessmentPassed).length,
   };
-  const calendar = calendarResult.status === 'fulfilled' ? calendarResult.value : {events:{},status:`待核验：正式面试日历读取失败（${truncateForModel(calendarResult.reason?.message || '用户授权无效', 120)}）；请核验舒豪授权及倪梦萍日历的订阅者权限。`};
+  const calendar = calendarResult.status === 'fulfilled' ? calendarResult.value : {events:{},status:`待核验：正式面试日历读取失败（${truncateForModel(calendarResult.reason?.message || '权限不足', 120)}）；请由舒豪在中枢“正式面试日历授权”入口核验个人只读授权，不需要共享给机器人。`};
   const interviewEvents = structuredClone(parsed.interviewEvents || {});
   Object.entries(calendar.events || {}).forEach(([date, items]) => { interviewEvents[date] = [...(interviewEvents[date] || []), ...items]; });
   return {
@@ -1882,35 +1954,6 @@ function canRefreshLifecycle(auth) {
   const permissions = auth?.permissions || {};
   return auth?.mode === 'internal' || permissions.super_admin || permissions.operation_admin || permissions.manage_permissions;
 }
-const calendarOAuthCookie = 'live_calendar_oauth_state';
-function calendarOAuthCookieValue(req) {
-  const cookie = String(req.headers.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith(`${calendarOAuthCookie}=`));
-  return cookie ? cookie.slice(calendarOAuthCookie.length + 1) : '';
-}
-function calendarOAuthCookieHeader(state, maxAge) {
-  return `${calendarOAuthCookie}=${state}; Max-Age=${maxAge}; Path=${basePath}/api/lifecycle/calendar-auth/callback; HttpOnly; Secure; SameSite=Lax`;
-}
-async function calendarAuthApi(req, res, url, routePath, auth) {
-  if (routePath === '/api/lifecycle/calendar-auth/callback') {
-    res.setHeader('Set-Cookie', calendarOAuthCookieHeader('', 0));
-    try {
-      if (url.searchParams.get('error')) return json(res, 400, {ok:false,error:'飞书日历授权被取消，未保存凭据。'});
-      const result = await recruitmentCalendarReader.complete({code:url.searchParams.get('code'),state:url.searchParams.get('state'),cookieState:calendarOAuthCookieValue(req)});
-      return json(res, 200, {ok:true,message:'正式面试日历用户授权已保存。',authorized:result.authorized});
-    } catch (error) {
-      return json(res, 400, {ok:false,error:error?.message || '日历授权失败。',code:error?.code || 'calendar_auth_failed'});
-    }
-  }
-  if (auth?.mode !== 'internal' && !auth?.permissions?.super_admin && !auth?.permissions?.manage_permissions) return json(res, 403, {ok:false,error:'仅中枢管理员可管理正式面试日历授权。'});
-  if (req.method === 'GET' && routePath === '/api/lifecycle/calendar-auth/status') return json(res, 200, {ok:true,calendar:await recruitmentCalendarReader.status()});
-  if (req.method === 'POST' && routePath === '/api/lifecycle/calendar-auth/start') {
-    if (req.headers['x-requested-with'] !== 'XMLHttpRequest') return json(res, 403, {ok:false,error:'缺少授权请求标识。'});
-    const attempt = recruitmentCalendarReader.begin();
-    res.setHeader('Set-Cookie', calendarOAuthCookieHeader(attempt.state, 600));
-    return json(res, 200, {ok:true,authorizeUrl:attempt.url});
-  }
-  return json(res, 405, {ok:false,error:'Method not allowed'});
-}
 async function lifecycleApi(req, res, url, routePath, auth) {
   try {
     if (req.method === 'GET' && routePath === '/api/lifecycle/status') return json(res, 200, await lifecycleStatus());
@@ -1959,6 +2002,7 @@ async function lifecycleApi(req, res, url, routePath, auth) {
 }
 function redirect(res, target) { res.writeHead(302, { Location: target, 'Cache-Control':'no-store' }); res.end(); }
 function directLocalRequest(req) {
+  if (hubSameOriginEmbed) return false;
   const forwarded = req.headers['x-forwarded-for'] || req.headers['x-real-ip'];
   const remote = String(req.socket.remoteAddress || '').replace(/^::ffff:/u, '');
   const privateAddress = remote === '127.0.0.1' || remote === '::1'
@@ -2056,7 +2100,7 @@ function centralSession(auth) {
     super_admin: Boolean(permissions.super_admin),
     operation_admin: Boolean(permissions.operation_admin),
     manage_permissions: Boolean(permissions.manage_permissions),
-  }, access: { required_module: requiredModule } };
+  }, access: { required_module: requiredModule }, ...(recoveryReadOnly ? {recovery:recoveryPayload()} : {}) };
 }
 function centralAccessDenied(res, auth) {
   const status = Number(auth.status || 403);
@@ -2070,19 +2114,18 @@ async function serveStatic(res, pathname) {
   if (requestPath === '/') requestPath = '/index.html';
   const filePath = normalize(join(publicDir, requestPath));
   if (!filePath.startsWith(publicDir)) { res.writeHead(403); return res.end(); }
-  try { const info=await stat(filePath); const target=info.isDirectory()?join(filePath,'index.html'):filePath; const extension=extname(target).toLowerCase(); const content=await readFile(target); const headers={'Content-Type':mime[extension] || 'application/octet-stream','X-Content-Type-Options':'nosniff'}; if(['.html','.css','.js'].includes(extension))headers['Cache-Control']='no-store';if(requestPath==='/index.html'){headers['X-Frame-Options']='DENY';headers['Content-Security-Policy']="frame-ancestors 'none'";} res.writeHead(200, headers); res.end(content); } catch { res.writeHead(404, {'Content-Type':'text/plain; charset=utf-8'}); res.end('Not found'); }
+  try { const info=await stat(filePath); const target=info.isDirectory()?join(filePath,'index.html'):filePath; const extension=extname(target).toLowerCase(); const content=await readFile(target); const headers={'Content-Type':mime[extension] || 'application/octet-stream','X-Content-Type-Options':'nosniff'}; if(['.html','.css','.js'].includes(extension))headers['Cache-Control']='no-store';if(requestPath==='/index.html')Object.assign(headers, frameHeaders); res.writeHead(200, headers); res.end(extension==='.html' ? withRecoveryBanner(content) : content); } catch { res.writeHead(404, {'Content-Type':'text/plain; charset=utf-8'}); res.end('Not found'); }
 }
 async function serveIndex(res, auth) {
   try {
     const session = JSON.stringify(centralSession(auth)).replace(/</gu, '\\u003c').replace(/-->/gu, '--\\u003e');
     const template = await readFile(join(publicDir, 'index.html'), 'utf8');
-    const content = template.replace('__PLATFORM_SESSION__', session);
+    const content = withRecoveryBanner(template.replace('__PLATFORM_SESSION__', session));
     res.writeHead(200, {
       'Content-Type':'text/html; charset=utf-8',
       'Cache-Control':'no-store',
       'X-Content-Type-Options':'nosniff',
-      'X-Frame-Options':'DENY',
-      'Content-Security-Policy':"frame-ancestors 'none'",
+      ...frameHeaders,
     });
     res.end(content);
   } catch {
@@ -2114,15 +2157,24 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/healthz') { res.writeHead(200, {'Content-Type':'text/plain'}); return res.end('ok'); }
   const routePath = url.pathname.startsWith(basePath) ? (url.pathname.slice(basePath.length) || '/') : url.pathname;
+  if(routePath==='/api/lifecycle/calendar-auth/callback')return calendarAuth(req,res,url,routePath,null);
   if (routePath === '/auth/login' || routePath === '/auth/callback') return redirect(res, marketingHubUrl);
-  if (routePath === '/api/lifecycle/calendar-auth/callback') {
-    if (recoveryReadOnly) return json(res, 423, {ok:false,error:recoveryMessage,code:'recovery_read_only'});
-    return calendarAuthApi(req,res,url,routePath,null);
-  }
   const auth = await authorizeCentral(req);
   if (!auth.ok) {
     if (routePath.startsWith('/api/')) return json(res, auth.status, { error: auth.detail });
     return centralAccessDenied(res, auth);
+  }
+  if (recoveryReadOnly) {
+    if (!['GET','HEAD'].includes(req.method) || ['/api/morning/report','/api/intelligence/briefing'].includes(routePath)) {
+      return json(res, 423, {ok:false,error:recoveryMessage,code:'recovery_read_only',recovery:recoveryPayload()});
+    }
+    if (routePath === '/api/recovery/status') return json(res, 200, {ok:true,recovery:recoveryPayload()});
+    if (routePath === '/api/lifecycle/snapshot') {
+      const module = url.searchParams.get('module') || '';
+      if (lifecycleModules.includes(module) && !await readLifecycleSnapshot(module)) {
+        return json(res, 503, {ok:false,error:'历史档案快照尚待恢复，暂不提供当前人数或排名。',code:'history_recovery_pending',recovery:recoveryPayload()});
+      }
+    }
   }
   if (req.method === 'GET' && (routePath === '/' || routePath === '/index.html')) return serveIndex(res, auth);
   if (req.method === 'GET' && routePath === '/api/session') return json(res, 200, centralSession(auth));
@@ -2136,7 +2188,7 @@ async function handleRequest(req, res) {
   if (routePath.startsWith('/api/calendar-overrides')) return calendarOverridesApi(req,res,routePath,auth);
   if (routePath.startsWith('/api/script-generator/')) return scriptGeneratorApi(req,res,routePath,auth);
   if (routePath.startsWith('/api/anchor-development')) return anchorDevelopmentApi(req,res,routePath,auth);
-  if (routePath.startsWith('/api/lifecycle/calendar-auth/')) return calendarAuthApi(req,res,url,routePath,auth);
+  if (routePath.startsWith('/api/lifecycle/calendar-auth/')) return calendarAuth(req,res,url,routePath,auth);
   if (routePath.startsWith('/api/lifecycle/')) return lifecycleApi(req,res,url,routePath,auth);
   if (routePath === '/modules/tasks' || routePath.startsWith('/modules/tasks/')) return proxyCollaboration(req,res,routePath,url.search);
   return serveStatic(res,routePath);

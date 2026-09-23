@@ -19,7 +19,7 @@ function Invoke-TransportRetry {
 
 Push-Location $projectRoot
 try {
-  & tar -czf $bundlePath --exclude=runtime/collaboration-center/node_modules --exclude=runtime/collaboration-center/.next --exclude=runtime/collaboration-center/dist --exclude=runtime/collaboration-center/.wrangler Dockerfile server.js container-entrypoint.sh deploy-remote.sh site exports/morning-dashboard exports/recruitment-pool exports/anchor-archives exports/material-center runtime/collaboration-center
+  & tar -czf $bundlePath --exclude=runtime/collaboration-center/node_modules --exclude=runtime/collaboration-center/.next --exclude=runtime/collaboration-center/dist --exclude=runtime/collaboration-center/.wrangler Dockerfile server.js calendar-user-reader.mjs calendar-auth-http.mjs frame-policy.mjs lifecycle-engine.mjs container-entrypoint.sh deploy-remote.sh site exports/morning-dashboard exports/recruitment-pool exports/anchor-archives exports/material-center runtime/collaboration-center
   if ($LASTEXITCODE -ne 0) { throw 'Local packaging failed.' }
   Write-Host '[1/4] Preparing server directories. Enter the SSH password.' -ForegroundColor Yellow
   Invoke-TransportRetry -FailureMessage 'Preparing the server upload directory failed after 3 attempts.' -Action { & ssh @sshOptions $remote "mkdir -p '$runtimeDir' '$incomingDir'" }

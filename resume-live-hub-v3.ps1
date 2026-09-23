@@ -30,7 +30,7 @@ try {
   try { & npm.cmd run build; if ($LASTEXITCODE -ne 0) { throw 'Business dashboard build failed.' } } finally { Pop-Location }
   & node --test (Join-Path $projectRoot 'runtime\collaboration-center\tests\violation-parser.test.ts')
   if ($LASTEXITCODE -ne 0) { throw 'Violation parser tests failed.' }
-  & tar -czf $bundle Dockerfile.live-hub-v3-main Dockerfile.live-hub-v3-data site exports/recruitment-pool exports/anchor-archives runtime/collaboration-center/dist runtime/data-center/dist
+  & tar -czf $bundle Dockerfile.live-hub-v3-main Dockerfile.live-hub-v3-data server.js calendar-user-reader.mjs calendar-auth-http.mjs frame-policy.mjs lifecycle-engine.mjs container-entrypoint.sh site exports/recruitment-pool exports/anchor-archives exports/material-center runtime/collaboration-center/dist runtime/data-center/dist
   if ($LASTEXITCODE -ne 0) { throw 'Packaging the corrected V3 candidate failed.' }
 
   Write-Host '[2/3] Uploading the corrected candidate. Enter the SSH password.' -ForegroundColor Yellow

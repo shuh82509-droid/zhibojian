@@ -29,7 +29,7 @@ try {
   $required = @('function resumeSubmissionName(text)','liveResumeCounts===null','const submissionKey=`${date}|${name}`')
   foreach ($item in $required) { if (-not $html.Contains($item)) { throw "Missing local recruitment rule: $item" } }
   if (-not (Select-String -LiteralPath (Join-Path $projectRoot 'server.js') -SimpleMatch "params.set('start_time'") ) { throw 'Missing recruitment time-window pagination in server.js.' }
-  & tar -czf $bundle Dockerfile.recruitment-resume-trend server.js exports/recruitment-pool/recruitment-dashboard.html
+  & tar -czf $bundle Dockerfile.recruitment-resume-trend server.js calendar-user-reader.mjs calendar-auth-http.mjs frame-policy.mjs lifecycle-engine.mjs exports/recruitment-pool/recruitment-dashboard.html
   if ($LASTEXITCODE -ne 0) { throw 'Packaging the recruitment overlay failed.' }
 
   Write-Host '[2/3] Uploading the recruitment overlay. Enter the SSH password.' -ForegroundColor Yellow

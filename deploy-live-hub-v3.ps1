@@ -81,7 +81,7 @@ try {
     'runtime\dispatch-center\live-status-shared.css'
   )
   foreach ($path in $required) { if (-not (Test-Path -LiteralPath (Join-Path $projectRoot $path))) { throw "Missing local artifact: $path" } }
-  & tar -czf $bundle Dockerfile.live-hub-v3-main Dockerfile.live-hub-v3-data server.js lifecycle-engine.mjs container-entrypoint.sh site exports/recruitment-pool exports/anchor-archives exports/material-center runtime/collaboration-center/dist runtime/data-center/dist
+  & tar -czf $bundle Dockerfile.live-hub-v3-main Dockerfile.live-hub-v3-data server.js calendar-user-reader.mjs calendar-auth-http.mjs frame-policy.mjs lifecycle-engine.mjs container-entrypoint.sh site exports/recruitment-pool exports/anchor-archives exports/material-center runtime/collaboration-center/dist runtime/data-center/dist
   if ($LASTEXITCODE -ne 0) { throw 'Packaging the V3 candidate failed.' }
   & tar -czf $dispatchBundle -C (Join-Path $projectRoot 'runtime') dispatch-center
   if ($LASTEXITCODE -ne 0) { throw 'Packaging the dispatch candidate failed.' }

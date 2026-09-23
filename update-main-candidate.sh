@@ -11,6 +11,12 @@ data=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.
 docker create --name "$builder" --user root --entrypoint /bin/sh "$base" -c 'sleep 600' >/dev/null
 docker start "$builder" >/dev/null
 docker cp "$incoming/server.js" "$builder:/app/server.js"
+test -s "$incoming/calendar-user-reader.mjs"
+test -s "$incoming/calendar-auth-http.mjs"
+test -s "$incoming/frame-policy.mjs"
+docker cp "$incoming/calendar-user-reader.mjs" "$builder:/app/calendar-user-reader.mjs"
+docker cp "$incoming/calendar-auth-http.mjs" "$builder:/app/calendar-auth-http.mjs"
+docker cp "$incoming/frame-policy.mjs" "$builder:/app/frame-policy.mjs"
 docker cp "$incoming/lifecycle-engine.mjs" "$builder:/app/lifecycle-engine.mjs"
 docker cp "$incoming/recruitment-dashboard-final.html" "$builder:/app/public/modules/recruitment/recruitment-dashboard.html"
 docker cp "$incoming/anchor-dashboard-final.html" "$builder:/app/public/modules/anchors/recruitment-dashboard.html"

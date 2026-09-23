@@ -10,6 +10,8 @@ WORKDIR /app
 RUN addgroup -S -g 10001 app && adduser -S -D -H -u 10001 -G app app
 COPY server.js ./
 COPY calendar-user-reader.mjs ./
+COPY calendar-auth-http.mjs ./
+COPY frame-policy.mjs ./
 COPY lifecycle-engine.mjs ./
 COPY container-entrypoint.sh ./
 COPY site/ ./public/
