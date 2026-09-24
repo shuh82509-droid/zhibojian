@@ -435,7 +435,11 @@ function planningStrictTimeRange(value) {
   const match = text.match(/^(\d{1,2}):(\d{2})\s*[-–—－]\s*(次日)?(\d{1,2}):(\d{2})$/u);
   if (!match) return null;
   const [startHour,startMinute,endHour,endMinute] = [match[1],match[2],match[4],match[5]].map(Number);
-  if (startHour > 23 || endHour > 24 || startMinute > 59 || endMinute > 59 || (endHour === 24 && endMinute !== 0)) return null;
+  // A source block may continue from 23:00-24:00 into 24:00-02:00.
+  // Midnight is only valid at exactly 24:00; all later start times remain
+  // invalid, and the duration check below still rejects an ambiguous span.
+  if (startHour > 24 || endHour > 24 || startMinute > 59 || endMinute > 59 ||
+      (startHour === 24 && startMinute !== 0) || (endHour === 24 && endMinute !== 0)) return null;
   const start = startHour * 60 + startMinute;
   const endClock = endHour * 60 + endMinute;
   const end = endClock + (match[3] || endClock < start ? 1440 : 0);
@@ -452,17 +456,31 @@ function planningStrictRosterShift(value) {
   return interval ? { code: match[1], ...interval } : null;
 }
 
+const VERIFIED_GOLD_GUIDE_NAMES = new Set(['李凯彤', '李彩红', '谷子晴', '邓淑环']);
+function planningVerifiedTimelineName(raw, roomCode, role) {
+  const text = flattenCell(raw).replace(/\s+/gu, '').trim();
+  if (roomCode !== 'wangou' || role !== 'anchor') return text;
+  const match = text.match(/^([\p{Script=Han}·]{2,12})[（(]金牌导购[）)]$/u);
+  return match && VERIFIED_GOLD_GUIDE_NAMES.has(match[1]) ? match[1] : text;
+}
+
 function planningRoomEvidence(room, rows, date, names) {
   const block = findDateBlock(rows, date);
   if (block.length < 2) return { valid: false, claims: [], roster: [], mentions: [] };
   const bounds = resolveTimelineBounds(room, block);
   if (flattenCell(block[0][bounds[1] - 1]) === '24小时') bounds[1] -= 1;
+  // A widened timeline must not be silently truncated when the old roster
+  // columns overlap it. Source attendance needs its own verified layout.
+  // Bare time-like cells after the inferred bound cannot be ignored as roster.
+  if (block.some((row) => row.slice(bounds[1]).some((cell) => /^\s*(?:\d{1,2}[:：]\d{1,2}|次日)/u.test(flattenCell(cell))))) {
+    return { valid: false, claims: [], roster: [], mentions: [] };
+  }
   const label = (row) => [row?.[2], row?.[3]].map(flattenCell).join(' ');
   const readPair = (role, rangeRow, nameRow) => {
     const shifts = []; let hasTime = false;
     for (let column = bounds[0]; column < bounds[1]; column += 1) {
       const raw = flattenCell(rangeRow[column]);
-      const person = flattenCell(nameRow?.[column]).replace(/\s+/gu, '').trim();
+      const person = planningVerifiedTimelineName(nameRow?.[column], room.code, role);
       if (!raw && !person) continue;
       if (column === bounds[0] && ((role === 'anchor' && raw === '时间' && person === '主播') ||
           (role === 'assistant' && raw === '助理' && !person))) continue;
@@ -502,7 +520,11 @@ function planningRoomEvidence(room, rows, date, names) {
   const rosterColumns = resolveRosterColumns(room, block);
   const roster = block.flatMap((row) => {
     const nameCell = flattenCell(row[rosterColumns[0]]).replace(/\s+/gu, '').trim();
-    const parsedNames = namesFromCell(row[rosterColumns[0]]).map((name) => name.replace(/\s+/gu, '').trim());
+    // Attendance cells must identify one person exactly. The display parser
+    // splits co-broadcast names, but that cannot prove either person's shift
+    // or rest for a write to the official monthly table.
+    const verifiedName = planningVerifiedTimelineName(nameCell, room.code, 'anchor');
+    const parsedNames = /^[\p{Script=Han}·]{2,12}$/u.test(verifiedName) ? [verifiedName] : [];
     const raw = flattenCell(row[rosterColumns[1]]);
     const exact = parsedNames.map((name) => ({ name, roomCode: room.code, raw }));
     // Annotated or compound roster names are not proof that a person is absent.

@@ -493,7 +493,7 @@ test('writeback proof rejects malformed or status-qualified times and roster shi
   const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
   const draft=(shiftCode='L')=>({roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode}]});
   const base=()=>liveRoleSheets({guanqi:{anchor:'赵媛'}});
-  for (const malformed of ['05:90-08:00','次日06:00-08:00','05:30-08:00（待定）','05:30-08:00取消','25:30-08:00','05:30-24:30']) {
+  for (const malformed of ['05:90-08:00','次日06:00-08:00','05:30-08:00（待定）','05:30-08:00取消','24:01-02:00','25:30-08:00','05:30-24:30']) {
     const sheets=base();sheets.guanqi.rows[0][3]=malformed;
     const proof=buildPlanningRoleEvidence(draft(),sheets);
     assert.deepEqual(proof.completeMonths,[],`${malformed} cannot prove an entire month`);
@@ -512,11 +512,56 @@ test('writeback proof rejects malformed or status-qualified times and roster shi
   }
   const fullwidth=base();fullwidth.guanqi.rows[0][3]='5:30-10：10';
   assert.equal(buildPlanningImportPlan(draft(),rows,504,target,buildPlanningRoleEvidence(draft(),fullwidth)).ranges.length,1);
-  for (const overnight of ['23:00-次日02:00','23:00-02:00','22:00-24:00']) {
+  for (const overnight of ['23:00-次日02:00','23:00-02:00','22:00-24:00','24:00-02:00']) {
     const sheets=base();sheets.guanqi.rows[0][3]=overnight;sheets.guanqi.rows[0][14]='ZBB(21:00-次日6:00)';
     const overnightRows=[[`${SHIFT_LEGEND}; ZBB(21:00-次日6:00): 21:00 ~ 次日 06:00`],...rows.slice(1)];
     const plan=buildPlanningImportPlan(draft('ZBB'),overnightRows,504,target,buildPlanningRoleEvidence(draft('ZBB'),sheets));
     assert.equal(plan.ranges.length,1,`${overnight} is a valid overnight subset of attendance: ${JSON.stringify(plan.unresolved)}`);
+  }
+});
+
+test('expanded live-room timeline beyond inferred roster columns blocks entire month', () => {
+  const draft={roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode:'L'}]};
+  const sheets=liveRoleSheets({guanqi:{anchor:'赵媛'}});
+  sheets.guanqi.rows[0][13]='23:00-24:00';
+  sheets.guanqi.rows[1][13]='赵媛';
+  sheets.guanqi.rows[0][14]='24:00-02:00';
+  sheets.guanqi.rows[1][14]='赵媛';
+  const proof=buildPlanningRoleEvidence(draft,sheets);
+  assert.deepEqual(proof.completeMonths,[], 'a wide source timeline must not be treated as a short complete day');
+  const assistantExpanded=liveRoleSheets({guanqi:{anchor:'赵媛',assistant:'尹珩瑞'}});
+  assistantExpanded.guanqi.rows[2][13]='23:00-次日02:00';
+  assistantExpanded.guanqi.rows[3][13]='尹珩瑞';
+  assert.deepEqual(buildPlanningRoleEvidence(draft,assistantExpanded).completeMonths,[], 'a wide assistant timeline must not be ignored');
+});
+
+test('a compound attendance name is a mention, never an exact writeback identity', () => {
+  const draft={roomCode:'wangou',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'李凯彤',shiftCode:'休',rest:true}]};
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-王鸥美肤','FD-1','李凯彤','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  const sheets=liveRoleSheets({wangou:{anchor:(day)=>day===1?'':'李凯彤'}});
+  sheets.wangou.rows[0][1]='李凯彤&郑总';
+  sheets.wangou.rows[0][2]='休息';
+  const proof=buildPlanningRoleEvidence(draft,sheets);
+  assert.deepEqual(proof.roster['2026-09-01|李凯彤'],[{roomCode:'wangou',raw:'休息',unverifiedName:true}]);
+  const plan=buildPlanningImportPlan(draft,rows,504,target,proof);
+  assert.equal(plan.ranges.length,0);
+  assert.match(plan.unresolved[0].reason,/姓名带未核验备注/u);
+});
+
+test('only four confirmed Wangou gold-guide annotations resolve to the named anchor', () => {
+  const draft={assignments:[{date:'2026-09-01',name:'李凯彤'}]};
+  for (const name of ['李凯彤','李彩红','谷子晴','邓淑环']) {
+    const sheets=liveRoleSheets({wangou:{anchor:name}});
+    sheets.wangou.rows[1][3]=`${name}（金牌导购）`;
+    const proof=buildPlanningRoleEvidence(draft,sheets);
+    assert.deepEqual(proof.completeMonths,['2026-09']);
+    assert.deepEqual(proof.claims[`2026-09-01|${name}`],[{roomCode:'wangou',role:'anchor'}]);
+  }
+  for (const unapproved of ['王颖慧（金牌导购）','李凯彤（支援）','李凯彤&曹总（老板场）']) {
+    const sheets=liveRoleSheets({wangou:{anchor:'李凯彤'}});
+    sheets.wangou.rows[1][3]=unapproved;
+    assert.deepEqual(buildPlanningRoleEvidence(draft,sheets).completeMonths,[],unapproved);
   }
 });
 
