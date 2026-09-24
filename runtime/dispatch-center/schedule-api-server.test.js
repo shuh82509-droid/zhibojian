@@ -107,6 +107,69 @@ test('detects the current official-room roster columns without mistaking attenda
   ]);
 });
 
+test('confirmed 官旗 co-broadcast keeps 曹总 display-only and never creates a separate duty name', () => {
+  const rows = guanqiCurrent.map((row) => [...row]);
+  rows[0][13] = '赵媛 & 曹总（老板场）';
+  rows[1][3] = '赵媛 & 曹总（老板场）';
+  rows[1][13] = '潘小慧';
+  rows[1][4] = '潘小慧';
+  const parsed = parseScheduleSheets({ guanqi: rows, brand_selection: [], youxuan: [], wangou: [] }, '2026-08-21');
+  const officialRoom = parsed.rooms.find((item) => item.code === 'guanqi');
+  assert.deepEqual(officialRoom.anchors, [
+    ['05:30', '08:00', '赵媛', '赵媛&曹总（老板场）'],
+    ['08:00', '10:00', '潘小慧'],
+  ]);
+  assert(parsed.roster.some((person) => person.name === '赵媛' && person.shift.startsWith('A')));
+  assert(!parsed.roster.some((person) => person.name === '曹总' || person.name.includes('&')));
+});
+
+test('官旗 9/25 confirmed wide timeline retains all 13 shifts, 6 co-broadcast labels and the 05:30 tail', () => {
+  const times = ['05:30-07:00', '07:00-08:00', '08:00-10:00', '10:00-11:00', '11:00-13:00',
+    '13:00-14:00', '14:00-16:00', '16:00-18:00', '18:00-20:00', '20:00-23:00',
+    '23:00-24:00', '24:00-02:00', '02:00-05:30'];
+  const names = ['丁阳虹', '丁阳虹&曹总（老板场）', '潘小慧&曹总（老板场）',
+    '丁阳虹&曹总（老板场）', '丁阳虹', '潘小慧', '潘小慧&曹总（老板场）',
+    '林惠敏', '李晓茏', '林惠敏&曹总（老板场）', '李晓茏&曹总（老板场）',
+    '李晓茏', '林羽浠'];
+  const rows = [
+    ['9月25日\n星期五', 'wis官旗', '时间', ...times],
+    ['', '', '主播', ...names],
+    ['', '', '', '5:30-10：10', '10：10-15：00', '15：00-19：50', '19：50-0：30', '00：30-5：30'],
+    ['', '', '', '韦彩云', '林梓烁', '曾睿琳', '杨冰', '尹珩瑞'],
+  ];
+  const parsed = parseScheduleSheets({ guanqi: rows, brand_selection: [], youxuan: [], wangou: [] }, '2026-09-25');
+  const anchors = parsed.rooms.find((room) => room.code === 'guanqi').anchors;
+  assert.equal(anchors.length, 13);
+  assert.equal(anchors.filter((shift) => shift[3] === `${shift[2]}&曹总（老板场）`).length, 6);
+  assert.deepEqual(anchors.at(-1), ['02:00', '05:30', '林羽浠']);
+  assert.deepEqual(parsed.roster, []);
+});
+
+test('genuine P/Q attendance remains separate from the 官旗 timeline', () => {
+  const parsed = parseScheduleSheets({ guanqi, brand_selection: [], youxuan: [], wangou: [] }, '2026-08-18');
+  const officialRoom = parsed.rooms.find((room) => room.code === 'guanqi');
+  assert.deepEqual(parsed.sourceStatus.guanqi.rosterColumns, ['P', 'Q']);
+  assert(officialRoom.anchors.some((shift) => shift[2] === '王明玥' && shift[0] === '02:00'));
+  assert(!officialRoom.anchors.some((shift) => /\d{1,2}:\d{2}/u.test(shift[2])));
+  assert(parsed.roster.some((person) => person.name === '潘小慧' && person.shift.startsWith('GJ2')));
+  assert(!parsed.roster.some((person) => /\d{1,2}:\d{2}/u.test(person.name)));
+});
+
+test('unknown ampersand labels never infer opening principals or roster duties', () => {
+  for (const label of ['赵媛&曹总（其他场）', '赵媛&其他人', '赵媛＆曹总&其他人']) {
+    const rows = guanqiCurrent.map((row) => [...row]);
+    rows[0][13] = label;
+    rows[1][3] = label;
+    rows[1][13] = '';
+    rows[1][4] = '潘小慧';
+    const parsed = parseScheduleSheets({ guanqi: rows, brand_selection: [], youxuan: [], wangou: [] }, '2026-08-21');
+    const first = parsed.rooms.find((item) => item.code === 'guanqi').anchors[0];
+    assert.equal(first[2], label);
+    assert.equal(first[3], undefined);
+    assert(!parsed.roster.some((person) => person.name === '赵媛' || person.name === '曹总'));
+  }
+});
+
 test('creates an exact preview plan and changes the fingerprint when target cells change', () => {
   const room = ROOMS.find((item) => item.code === 'guanqi');
   const input = {

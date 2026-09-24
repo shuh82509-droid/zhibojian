@@ -59,11 +59,17 @@
   }
 
   function currentScheduleDate() { try { return pDateKey(typeof currentDate !== 'undefined' ? currentDate : new Date()); } catch { return pDateKey(new Date()); } }
+  function verifiedDefaultAnchorName(shift) {
+    const name = String(shift?.[2] ?? '').trim();
+    // The display timeline may retain an unresolved co-broadcast label for
+    // human review. It is not a person's identity or a default draft row.
+    return /^[\p{Script=Han}·]{2,12}$/u.test(name) && !/主播|助理|时间|待定|待排|未知|暂无|停播|取消/u.test(name) && name !== '曹总' ? name : '';
+  }
   function anchorsFromCurrentSchedule(roomCode) {
     try {
       const daily = typeof scheduleData === 'object' ? scheduleData[currentScheduleDate()] || [] : [];
       const room = daily.find((item) => item.code === roomCode || item.roomCode === roomCode || ({ guanqi: '官旗', brand_selection: '品牌精选', youxuan: '优选', wangou: '王鸥美肤' }[roomCode] === item.name));
-      return [...new Set((room?.anchors || []).map((shift) => shift?.[2]).filter(Boolean))];
+      return [...new Set((room?.anchors || []).map(verifiedDefaultAnchorName).filter(Boolean))];
     } catch { return []; }
   }
 

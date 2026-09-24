@@ -39,6 +39,27 @@ test('candidate dispatch page keeps planning API requests within its own route',
   }
 });
 
+test('planning defaults include only verified single anchor names, never unresolved co-broadcast labels', () => {
+  const script = fs.readFileSync(path.join(__dirname, 'planning-workbench.js'), 'utf8');
+  const start = script.indexOf('  function verifiedDefaultAnchorName(');
+  const end = script.indexOf('\n  function matchingSavedDraft(', start);
+  assert(start > 0 && end > start);
+  const date = '2026-09-25';
+  const scheduleData = { [date]: [{ code:'guanqi', name:'官旗', anchors:[
+    ['05:30','07:00','丁阳虹'],
+    ['07:00','08:00','丁阳虹','丁阳虹&曹总（老板场）'],
+    ['08:00','10:00','潘小慧&其他人'],
+    ['10:00','11:00','待定'],
+    ['11:00','13:00','潘小慧'],
+    ['13:00','14:00','曹总'],
+  ] }] };
+  const readDefaults = vm.runInNewContext(`${script.slice(start,end)}\nanchorsFromCurrentSchedule`, {
+    scheduleData, currentScheduleDate:()=>date,
+  });
+  assert.deepEqual([...readDefaults('guanqi')], ['丁阳虹','潘小慧']);
+  assert.equal(scheduleData[date][0].anchors[2][2], '潘小慧&其他人');
+});
+
 test('supports independent assistant rosters in all four rooms and rotates shift types', () => {
   assert.deepEqual(ROOM_PLANNING.guanqi.assistants, ['尹珩瑞', '杨冰', '陈嘉欣', '蒙万叶', '韦彩云', '林梓烁', '雷惠朝']);
   for (const roomCode of ['brand_selection', 'youxuan', 'wangou']) {

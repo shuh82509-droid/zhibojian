@@ -149,7 +149,7 @@ function renderLiveStatus() {
     return `<article class="live-room ${escapeHtml(room.className)}${online ? '' : ' is-offline'}">
       <div class="live-room-head"><span class="room-status"><i></i>${status}</span><span>${escapeHtml(room.platform)}</span></div>
       <h3>${escapeHtml(room.name)}直播间</h3>
-      <div class="live-person"><span>排班主播</span><b>${anchor ? `${escapeHtml(anchor[2])} · ${anchor[0]}–${anchor[1]}` : '暂无当班主播'}</b></div>
+      <div class="live-person"><span>排班主播</span><b>${anchor ? `${escapeHtml(anchor[3] || anchor[2])} · ${anchor[0]}–${anchor[1]}` : '暂无当班主播'}</b></div>
       <div class="live-person"><span>排班助理</span><b>${assistant ? `${escapeHtml(assistant[2])} · ${assistant[0]}–${assistant[1]}` : '暂无当班助理'}</b></div>
     </article>`;
   }).join('') + `<article class="shared-makeup-row"><span>四个直播间共享值班化妆师</span><b>${escapeHtml(makeupLabel)}</b><small>${escapeHtml(makeupDutyData.source?.permissionStatus || '待回传')}</small></article>`;
@@ -188,7 +188,7 @@ function renderTimeline() {
       const blocks = shifts.map((shift) => {
         const start = ((scheduleMinute(shift[0]) - 330) / 1440) * 100;
         const duration = ((scheduleMinute(shift[1], true) - scheduleMinute(shift[0])) / 1440) * 100;
-        return `<div class="shift s-${escapeHtml(room.className)} ${roleClass}" style="left:calc(${start}% + 4px);width:calc(${duration}% - 8px)"><b>${escapeHtml(shift[2])}</b><small>${shift[0]}–${shift[1]}</small></div>`;
+        return `<div class="shift s-${escapeHtml(room.className)} ${roleClass}" style="left:calc(${start}% + 4px);width:calc(${duration}% - 8px)"><b>${escapeHtml(shift[3] || shift[2])}</b><small>${shift[0]}–${shift[1]}</small></div>`;
       }).join('');
       return `<div class="schedule-role-line"><span class="role-name">${role}</span><div class="schedule-track">${blocks}</div></div>`;
     }).join('');

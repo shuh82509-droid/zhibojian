@@ -228,6 +228,28 @@ function namesFromCell(value) {
     .filter((name) => name && !/主播|姓名|打卡|班次|休息|待定|无/u.test(name));
 }
 
+// The six confirmed 官旗 co-broadcast cells have one opening principal.
+// Keep 曹总 in the display label, never as a separate roster/assignment name.
+function confirmedGuanqiCoBroadcast(value) {
+  const text = flattenCell(value).replace(/\s+/gu, '');
+  const match = text.match(/^([\p{Script=Han}·]{2,12})[&＆]曹总(?:（老板场）)?$/u);
+  return match && match[1] !== '曹总' ? { principal: match[1], display: text } : null;
+}
+
+function displayRosterNames(room, value) {
+  const text = flattenCell(value);
+  // A time/shift cell in a widened 官旗 timeline is not a person, even when
+  // the old roster candidate column happens to overlap that timeline.
+  if (timeRangeFromCell(text)) return [];
+  if (room.code === 'guanqi') {
+    const coBroadcast = confirmedGuanqiCoBroadcast(text);
+    if (coBroadcast) return [coBroadcast.principal];
+  }
+  // Unknown compound labels do not establish either person's duty in any room.
+  if (/[&＆]/u.test(text)) return [];
+  return namesFromCell(text);
+}
+
 function normalizeTime(hours, minutes) {
   return `${String(Number(hours)).padStart(2, '0')}:${String(Number(minutes)).padStart(2, '0')}`;
 }
@@ -348,8 +370,44 @@ function resolveTimelineBounds(room, block) {
   return [room.timelineColumns[0], end];
 }
 
-function findTimelinePairs(room, block) {
-  const bounds = resolveTimelineBounds(room, block);
+// Display may consume a confirmed wider timeline, but the independent monthly
+// writeback proof above keeps its original strict source-layout boundaries.
+function displayRosterScore(room, block, columns) {
+  return block.reduce((score, row) => {
+    const names = displayRosterNames(room, row[columns[0]]);
+    const attendance = shiftFromCell(row[columns[1]]);
+    return score + (names.length && (attendance.shift === '休息' || attendance.range) ? names.length : 0);
+  }, 0);
+}
+
+function resolveDisplayRosterColumns(room, block) {
+  return room.rosterCandidates.reduce((best, columns) => (
+    displayRosterScore(room, block, columns) > displayRosterScore(room, block, best) ? columns : best
+  ), room.rosterCandidates[0]);
+}
+
+function bareDisplayTimeRange(value) {
+  const text = flattenCell(value).replace(/：/gu, ':').trim();
+  return /^\d{1,2}:\d{1,2}\s*[-–—－]\s*(?:次日)?\d{1,2}:\d{1,2}$/u.test(text) && timeRangeFromCell(text);
+}
+
+function resolveDisplayTimelineBounds(room, block, rosterColumns) {
+  const start = room.timelineColumns[0];
+  const end = rosterColumns[0] > start ? Math.min(room.timelineColumns[1], rosterColumns[0]) : room.timelineColumns[1];
+  if (room.code !== 'guanqi' || !block[0] || !block[1]) return [start, end];
+  // On the confirmed 官旗 special day, N/O are live time slots, not roster.
+  // Extend only over a consecutive bare-time / person pair; a coded P/Q
+  // attendance shift or an unpaired value can never widen the timeline.
+  let expandedEnd = end;
+  for (let column = end; column < 16; column += 1) {
+    const name = timelineName(block[1][column]);
+    if (!bareDisplayTimeRange(block[0][column]) || !name || timeRangeFromCell(name)) break;
+    expandedEnd = column + 1;
+  }
+  return [start, expandedEnd];
+}
+
+function findTimelinePairs(room, block, bounds = resolveTimelineBounds(room, block)) {
   let headerIndex = -1;
   let headerRun = [];
   block.forEach((row, index) => {
@@ -381,19 +439,23 @@ function parseRoomSchedule(room, rows, requestedDate) {
     return { room: parsedRoom, roster, source: { found: false, sheetId: room.sheetId, firstRow: null, lastRow: null, marker: '' } };
   }
 
-  const rosterColumns = resolveRosterColumns(room, block);
+  const rosterColumns = resolveDisplayRosterColumns(room, block);
   block.forEach((row) => {
-    const names = namesFromCell(row[rosterColumns[0]]);
+    const names = displayRosterNames(room, row[rosterColumns[0]]);
     const attendance = shiftFromCell(row[rosterColumns[1]]);
-    if (!names.length || !attendance.shift) return;
+    if (!names.length || !(attendance.shift === '休息' || attendance.range)) return;
     names.forEach((name) => roster.push({ name, shift: attendance.shift, room: room.name, range: attendance.range }));
   });
 
-  const pairs = findTimelinePairs(room, block);
-  const timelineBounds = resolveTimelineBounds(room, block);
+  const timelineBounds = resolveDisplayTimelineBounds(room, block, rosterColumns);
+  const pairs = findTimelinePairs(room, block, timelineBounds);
   const anchorPair = pairs.find((pair) => pair.role === 'anchor');
   if (anchorPair) {
-    parsedRoom.anchors = shiftsFromPairedRows(block[anchorPair.rangeRowIndex], block[anchorPair.nameRowIndex], timelineBounds);
+    parsedRoom.anchors = shiftsFromPairedRows(block[anchorPair.rangeRowIndex], block[anchorPair.nameRowIndex], timelineBounds)
+      .map((shift) => {
+        const coBroadcast = room.code === 'guanqi' ? confirmedGuanqiCoBroadcast(shift[2]) : null;
+        return coBroadcast ? [shift[0], shift[1], coBroadcast.principal, coBroadcast.display] : shift;
+      });
   }
   pairs.filter((pair) => pair.role === 'assistant').forEach((pair) => {
     parsedRoom.assistants.push(...shiftsFromPairedRows(block[pair.rangeRowIndex], block[pair.nameRowIndex], timelineBounds));
@@ -1642,10 +1704,13 @@ async function verifiedAnchorRoomsForMonth(month) {
     const date = `${month}-${String(day).padStart(2, '0')}`;
     ROOMS.forEach((room) => {
       const parsed = parseRoomSchedule(room, sheetRows(sheets[room.code]), date);
-      parsed.room.anchors.forEach((shift) => namesFromCell(shift[2]).forEach((name) => {
+      parsed.room.anchors.forEach((shift) => {
+        const names = namesFromCell(shift[2]);
+        if (names.length !== 1 || names[0] !== shift[2]) return;
+        const name = names[0];
         if (!/^[\p{Script=Han}·]{2,12}$/u.test(name)) return;
         const rooms = observed.get(name) || new Set(); rooms.add(room.name); observed.set(name, rooms);
-      }));
+      });
     });
   }
   observed.forEach((rooms, name) => { verified[name] = rooms.size === 1 ? [...rooms][0] : '直播间待核验'; });
