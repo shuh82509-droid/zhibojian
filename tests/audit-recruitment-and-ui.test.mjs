@@ -70,12 +70,12 @@ test('recruitment page and 17:00 reminder use the same 25th cycle boundary',asyn
  assert.match(server,/const cycleMonth=recruitmentCycleMonthForDate\(targetDate\)/);
  assert.match(server,/const cycleMonth=recruitmentCycleMonthForDate\(date\)/);
  assert.doesNotMatch(server,/day>25/);
- assert.match(server,/if \(interviewWindow === 'open'\) \{/);
- assert.match(server,/if \(coachWindow === 'open'\) \{/);
+ assert.match(server,/if \(lifecycleInterviewReminderEnabled && interviewWindow === 'open'\) \{/);
+ assert.match(server,/if \(lifecycleCoachReminderEnabled && coachWindow === 'open'\) \{/);
  assert.match(server,/已错过 17:00—18:00 窗口，未补发/);
   assert.match(server,/已错过 17:30—18:30 窗口，未补发/);
   assert.match(server,/verifyBeforePost:async\(\)=>\{[\s\S]*?const latestSource=await recruitmentCycleSnapshot\(cycleMonth,\{fresh:true\}\);[\s\S]*?interviewReminderSourceFingerprint\(latestSource,date\)!==expectedSource[\s\S]*?lifecycleReminderWindow\('interview',chinaMinutes\(new Date\(\)\)\) !== 'open'/);
-  const durableIntent=server.indexOf('await writeJsonAtomic(lifecycleReminderPath,journal);',server.indexOf('async function deliverLifecycleReminder'));
+  const durableIntent=server.indexOf('await writeReminderJournal(journal);',server.indexOf('async function deliverLifecycleReminder'));
   const check=server.indexOf('if (verifyBeforePost)',durableIntent);
   const post=server.indexOf("const data = await feishuPost('/im/v1/messages",check);
   assert.ok(durableIntent>=0&&check>durableIntent&&post>check,'fresh source check must happen after durable intent and before Feishu POST');
