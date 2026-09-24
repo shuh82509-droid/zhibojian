@@ -12,6 +12,7 @@ const guardPath = path.join(directory, 'planning-import-guard.json');
 const auditPath = path.join(directory, 'planning-audit.ndjson');
 const spreadsheetToken = 'Wj4zs3oDfhGUfetlTXicxblmnHe';
 const sheetId = '0jFdXf';
+const sourceRevision = 8;
 const manifestPath = path.join(directory, 'planning-baseline-manifest.json');
 const epochPath = path.join(directory, 'planning-epoch.json');
 const storePath = path.join(directory, 'planning-workbench.json');
@@ -54,10 +55,10 @@ test('planning import intent survives process-independent file read and malforme
   global.fetch = async (url) => {
     if (String(url).includes('/values_batch_update')) {postCount++; throw Object.assign(new Error('local timeout simulation'),{name:'TimeoutError'});}
     if (String(url).includes('/tenant_access_token/internal')) return {ok:true,status:200,json:async()=>({code:0,tenant_access_token:'local-token',expire:7200})};
-    if (String(url).includes('/values/')) return {ok:true,status:200,json:async()=>({code:0,data:{valueRange:{range:'',values:[]}}})};
+    if (String(url).includes('/values/')) return {ok:true,status:200,json:async()=>({code:0,data:{revision:sourceRevision,valueRange:{range:'',values:[]}}})};
     throw new Error(`Unexpected mocked request: ${url}`);
   };
-  const write = () => guardedSheetWrite({kind:'planning-import',auth:admin,plan:{expectedHash:'test-hash',month:'2026-09',target:{spreadsheetToken,sheetId}},token:'local-token',spreadsheetToken,ranges:[{range:`${sheetId}!E3:E3`,before:[''],after:['L']}],auditAction:'planning-import'});
+  const write = () => guardedSheetWrite({kind:'planning-import',auth:admin,plan:{expectedHash:'test-hash',revision:sourceRevision,month:'2026-09',target:{spreadsheetToken,sheetId}},token:'local-token',spreadsheetToken,ranges:[{range:`${sheetId}!E3:E3`,before:[''],after:['L']}],auditAction:'planning-import'});
   await assert.rejects(guardedSheetWrite({kind:'planning-import',auth:member,plan:{target:{spreadsheetToken,sheetId}},token:'local-token',spreadsheetToken,ranges:[{range:`${sheetId}!E3:E3`,before:[''],after:['L']}],auditAction:'planning-import'}),error=>error.status===403&&error.code==='PLANNING_ADMIN_REQUIRED');
   await assert.rejects(write(),error=>error.code==='SCHEDULE_WRITE_UNCERTAIN');
   assert.equal(postCount,1);
@@ -66,11 +67,35 @@ test('planning import intent survives process-independent file read and malforme
   await assert.rejects(write(),error=>error.code==='SCHEDULE_WRITE_UNCERTAIN');
   assert.equal(postCount,1,'a retry must not send a second Feishu write');
   fs.rmSync(guardPath);
+  const preflightCases = [
+    {revision:0,value:'',code:'TOTAL_SCHEDULE_CHANGED'},
+    {revision:sourceRevision-1,value:'',code:'TOTAL_SCHEDULE_CHANGED'},
+    {revision:sourceRevision,value:'P',code:'TOTAL_SCHEDULE_CHANGED'},
+    {revision:sourceRevision,value:'',formula:'=1',code:'TOTAL_SCHEDULE_FORMULA_PROTECTED'},
+  ];
+  for (const item of preflightCases) {
+    let attempts=0;
+    global.fetch = async url => {
+      if (String(url).includes('/values_batch_update')) { attempts++; throw new Error('preflight must block POST'); }
+      if (String(url).includes('/values/')) {
+        const formula = new URL(String(url)).searchParams.get('valueRenderOption') === 'Formula';
+        const value = formula ? item.formula ?? item.value : item.value;
+        return {ok:true,status:200,json:async()=>({code:0,data:{revision:item.revision,valueRange:value?{range:`${sheetId}!E3:E3`,values:[[value]]}:{range:'',values:[]}}})};
+      }
+      throw new Error(`Unexpected mocked request: ${url}`);
+    };
+    await assert.rejects(write(),error=>error.code===item.code);
+    assert.equal(attempts,0,'a changed or formula-backed target cannot be posted');
+    assert.equal(await readPlanningImportGuard(),null,'a preflight failure cannot create a write intent');
+  }
+  await assert.rejects(guardedSheetWrite({kind:'planning-import',auth:admin,plan:{revision:0,target:{spreadsheetToken,sheetId}},token:'local-token',spreadsheetToken,ranges:[{range:`${sheetId}!E3:E3`,before:[''],after:['L']}],auditAction:'planning-import'}),error=>error.code==='TOTAL_SCHEDULE_REVISION_UNVERIFIED');
+  assert.equal(await readPlanningImportGuard(),null);
   let sentBody;
+  let successReads=0;
   global.fetch = async (url,options) => {
     if (String(url).includes('/values_batch_update')) { sentBody=JSON.parse(options.body);assert.equal(options.headers['Content-Type'],'application/json; charset=utf-8');return {ok:true,status:200,json:async()=>({code:0,data:{revision:9,spreadsheetToken,responses:[{spreadsheetToken,updatedRange:`${sheetId}!E3:E3`,updatedRows:1,updatedColumns:1,updatedCells:1}]}})}; }
     if (String(url).includes('/tenant_access_token/internal')) return {ok:true,status:200,json:async()=>({code:0,tenant_access_token:'local-token',expire:7200})};
-    if (String(url).includes('/values/')) return {ok:true,status:200,json:async()=>({code:0,data:{valueRange:{range:`${sheetId}!E3:E3`,values:[['L']]}}})};
+    if (String(url).includes('/values/')) {const value=++successReads>2?'L':'';return {ok:true,status:200,json:async()=>({code:0,data:{revision:value?9:sourceRevision,valueRange:value?{range:`${sheetId}!E3:E3`,values:[[value]]}:{range:'',values:[]}}})};}
     throw new Error(`Unexpected mocked request: ${url}`);
   };
   const success = await write();
@@ -79,10 +104,29 @@ test('planning import intent survives process-independent file read and malforme
   assert.equal((await readPlanningImportGuard()).state,'verified');
   await assert.rejects(guardedSheetWrite({kind:'planning-import',auth:{mode:'internal'},plan:{target:{spreadsheetToken,sheetId}},token:'local-token',spreadsheetToken,ranges:[{range:`${sheetId}!E3:E3`,before:['L'],after:['L']}],auditAction:'planning-import'}),error=>error.code==='TOTAL_SCHEDULE_RANGE_INVALID');
   fs.rmSync(guardPath);
+  let formulaRacePosts=0;
+  let formulaRaceReads=0;
+  global.fetch = async url => {
+    if (String(url).includes('/values_batch_update')) {formulaRacePosts++;return {ok:true,status:200,json:async()=>({code:0,data:{revision:9,spreadsheetToken,responses:[{spreadsheetToken,updatedRange:`${sheetId}!E3:E3`,updatedRows:1,updatedColumns:1,updatedCells:1}]}})};}
+    if (String(url).includes('/values/')) {
+      const readNumber=++formulaRaceReads;
+      const formula=new URL(String(url)).searchParams.get('valueRenderOption')==='Formula';
+      const value=readNumber<=2?'':formula?'=1':'L';
+      return {ok:true,status:200,json:async()=>({code:0,data:{revision:readNumber<=2?sourceRevision:9,valueRange:value?{range:`${sheetId}!E3:E3`,values:[[value]]}:{range:'',values:[]}}})};
+    }
+    throw new Error(`Unexpected mocked request: ${url}`);
+  };
+  await assert.rejects(write(),error=>error.code==='SCHEDULE_WRITE_UNCERTAIN');
+  assert.equal(formulaRacePosts,1);
+  assert.equal((await readPlanningImportGuard()).state,'uncertain','post-write formula race cannot be marked verified');
+  await assert.rejects(write(),error=>error.code==='SCHEDULE_WRITE_UNCERTAIN');
+  assert.equal(formulaRacePosts,1,'uncertain formula readback cannot produce a duplicate POST');
+  fs.rmSync(guardPath);
   let malformedPosts=0;
+  let malformedReads=0;
   global.fetch = async url => {
     if (String(url).includes('/values_batch_update')) {malformedPosts++;return {ok:true,status:200,json:async()=>({code:0,data:{revision:10,spreadsheetToken,responses:[{spreadsheetToken,updatedRange:`${sheetId}!F3:F3`,updatedRows:1,updatedColumns:1,updatedCells:1}]}})};}
-    if (String(url).includes('/values/')) return {ok:true,status:200,json:async()=>({code:0,data:{valueRange:{range:`${sheetId}!E3:E3`,values:[['L']]}}})};
+    if (String(url).includes('/values/')) {const value=++malformedReads>2?'L':'';return {ok:true,status:200,json:async()=>({code:0,data:{revision:sourceRevision,valueRange:value?{range:`${sheetId}!E3:E3`,values:[[value]]}:{range:'',values:[]}}})};}
     throw new Error(`Unexpected mocked request: ${url}`);
   };
   await assert.rejects(write(),error=>error.code==='SCHEDULE_WRITE_UNCERTAIN');
@@ -91,9 +135,10 @@ test('planning import intent survives process-independent file read and malforme
   assert.equal(malformedPosts,1,'an ambiguous Feishu response must not trigger another write');
   fs.rmSync(guardPath);
   let verifiedPosts=0;
+  let verifiedReads=0;
   global.fetch = async url => {
     if (String(url).includes('/values_batch_update')) {verifiedPosts++;return {ok:true,status:200,json:async()=>({code:0,data:{revision:11,spreadsheetToken,responses:[{spreadsheetToken,updatedRange:`${sheetId}!E3:E3`,updatedRows:1,updatedColumns:1,updatedCells:1}]}})};}
-    if (String(url).includes('/values/')) return {ok:true,status:200,json:async()=>({code:0,data:{valueRange:{range:`${sheetId}!E3:E3`,values:[['L']]}}})};
+    if (String(url).includes('/values/')) {const value=++verifiedReads>2?'L':'';return {ok:true,status:200,json:async()=>({code:0,data:{revision:value?11:sourceRevision,valueRange:value?{range:`${sheetId}!E3:E3`,values:[[value]]}:{range:'',values:[]}}})};}
     throw new Error(`Unexpected mocked request: ${url}`);
   };
   let auditWrites=0;

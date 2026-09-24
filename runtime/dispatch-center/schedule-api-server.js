@@ -967,6 +967,9 @@ function buildPlanningImportPlan(draft, rows, revision = 0, target = { spreadshe
 async function previewPlanningImport(draft) {
   const target = await resolveTotalScheduleTarget();
   const source = await readSpreadsheetRange(target.spreadsheetToken, fullScheduleRange(target));
+  if (!Number.isSafeInteger(source.revision) || source.revision < 1) {
+    throw Object.assign(new Error('正式总表未返回可核验的当前版本，已停止导入预览。'), {status:503,code:'TOTAL_SCHEDULE_REVISION_UNVERIFIED'});
+  }
   const plan = buildPlanningImportPlan(draft, source.rows, source.revision, target);
   await assertNoPlanningFormulaCells(plan);
   return { plan, source };
@@ -1031,6 +1034,29 @@ function assertPlanningFormulaRow(item, row) {
   }
 }
 
+// This is a final optimistic guard, not an atomic compare-and-swap supplied
+// by Feishu. Re-read both displayed values and formulas at the exact target
+// coordinates immediately before persisting an intent and issuing any POST.
+// A collaborator edit after this check is still possible and must be handled
+// by the durable unknown-result/readback path rather than a blind retry.
+async function assertPlanningWriteTargetsFresh(plan, ranges) {
+  if (!Number.isSafeInteger(plan?.revision) || plan.revision < 1) {
+    throw Object.assign(new Error('正式总表版本不可核验，已阻断写回。'), {status:409,code:'TOTAL_SCHEDULE_REVISION_UNVERIFIED'});
+  }
+  for (const item of ranges) {
+    const displayed = await readSpreadsheetRange(plan.target.spreadsheetToken, item.range, 'ToString');
+    const formulas = await readSpreadsheetRange(plan.target.spreadsheetToken, item.range, 'Formula');
+    if (![displayed.revision, formulas.revision].every(revision=>Number.isSafeInteger(revision) && revision === plan.revision)) {
+      throw Object.assign(new Error(`正式总表 ${item.range} 的版本已变化或不可核验，请重新预览。`), {status:409,code:'TOTAL_SCHEDULE_CHANGED'});
+    }
+    const valueRow = alignPlanningRangeRow(item.range, displayed.actualRange, displayed.rows);
+    if (valueRow.length !== item.before.length || valueRow.some((value,index)=>value !== item.before[index])) {
+      throw Object.assign(new Error(`正式总表 ${item.range} 的原值已变化，请重新预览。`), {status:409,code:'TOTAL_SCHEDULE_CHANGED'});
+    }
+    assertPlanningFormulaRow(item, alignPlanningRangeRow(item.range, formulas.actualRange, formulas.rows));
+  }
+}
+
 async function readPlanningImportGuard() {
   const epoch = RECOVERY_READ_ONLY ? null : (await readPlanningEpoch()).epoch;
   try {
@@ -1065,11 +1091,18 @@ function planningReadbackState(ranges, readbacks) {
   }
   return allAfter ? 'after' : allBefore ? 'before' : 'mixed';
 }
-async function readPlanningImportTargets(guard) {
+async function readPlanningImportTargets(guard, minimumRevision = guard.resultRevision || guard.sourceRevision) {
   const values = [];
   for (const item of guard.ranges) {
     const checked = await readSpreadsheetRange(guard.spreadsheetToken, item.range);
-    values.push(alignPlanningRangeRow(item.range, checked.actualRange, checked.rows));
+    const formulas = await readSpreadsheetRange(guard.spreadsheetToken, item.range, 'Formula');
+    if (Number.isSafeInteger(minimumRevision) && minimumRevision > 0 &&
+        (![checked.revision, formulas.revision].every(revision=>Number.isSafeInteger(revision) && revision >= minimumRevision) || checked.revision !== formulas.revision)) {
+      throw Object.assign(new Error(`正式总表 ${item.range} 的回读版本不可核验。`), {status:502,code:'SHEET_READBACK_UNVERIFIED'});
+    }
+    const valueRow = alignPlanningRangeRow(item.range, checked.actualRange, checked.rows);
+    assertPlanningFormulaRow(item, alignPlanningRangeRow(item.range, formulas.actualRange, formulas.rows));
+    values.push(valueRow);
   }
   return values;
 }
@@ -1139,16 +1172,20 @@ async function guardedSheetWrite({kind,auth,plan,token,spreadsheetToken,ranges,a
   const previous = await readPlanningImportGuard();
   if (previous && ['intent','uncertain'].includes(previous.state)) throw planningUncertainError(previous.id);
   const {epoch}=await readPlanningEpoch();
-  const intent = {schemaVersion:1,id:randomUUID(),epochId:epoch.epochId,baselineHash:epoch.baselineHash,kind,state:'intent',at:new Date().toISOString(),actor:actorFromAuth(auth),spreadsheetToken,expectedHash:plan.expectedHash,roomCode:plan.roomCode || null,role:plan.role || null,month:plan.month || null,date:plan.date || null,ranges:ranges.map(({range,before,after})=>({range,before,after}))};
+  await assertPlanningWriteTargetsFresh(plan, ranges);
+  const intent = {schemaVersion:1,id:randomUUID(),epochId:epoch.epochId,baselineHash:epoch.baselineHash,kind,state:'intent',at:new Date().toISOString(),actor:actorFromAuth(auth),spreadsheetToken,sourceRevision:plan.revision,expectedHash:plan.expectedHash,roomCode:plan.roomCode || null,role:plan.role || null,month:plan.month || null,date:plan.date || null,ranges:ranges.map(({range,before,after})=>({range,before,after}))};
   await writePlanningImportGuard(intent);
   try { await appendAudit({id:intent.id,at:intent.at,action:`${kind}-intent`,actor:intent.actor,ranges:intent.ranges}); }
   catch (error) {
     await writePlanningImportGuard({...intent,state:'not_applied',checkedAt:new Date().toISOString(),errorCode:'intent_audit_failed'});
     throw error;
   }
+  let writeRevision = 0;
   try {
     const result = await writePlanningRanges(token,spreadsheetToken,ranges);
-    const values = await readPlanningImportTargets(intent);
+    writeRevision = result.revision;
+    if (writeRevision <= plan.revision) throw Object.assign(new Error('飞书写入版本未前进，写回结果需人工核验。'), {code:'SHEET_WRITE_RESPONSE_UNVERIFIED'});
+    const values = await readPlanningImportTargets(intent, writeRevision);
     if (planningReadbackState(intent.ranges,values) !== 'after') throw new Error('readback_mismatch');
     const verified = {...intent,state:'verified',verifiedAt:new Date().toISOString(),resultRevision:Number(result.revision || result.updatedRevision || 0)};
     // Keep the write intent blocking until both evidence records are synced.
@@ -1157,9 +1194,9 @@ async function guardedSheetWrite({kind,auth,plan,token,spreadsheetToken,ranges,a
     return {auditId:intent.id,readbacks:intent.ranges.map((item,index)=>({range:item.range,values:values[index]})),readbackVerified:true,resultRevision:verified.resultRevision};
   } catch (error) {
     let observed = 'unverified';
-    try { observed = planningReadbackState(intent.ranges,await readPlanningImportTargets(intent)); }
+    try { observed = planningReadbackState(intent.ranges,await readPlanningImportTargets(intent,writeRevision || intent.sourceRevision)); }
     catch { /* A failed read never proves that a remote write was not applied. */ }
-    const uncertain = {...intent,state:'uncertain',checkedAt:new Date().toISOString(),observed,errorCode:String(error?.code || error?.name || 'write_result_unknown').slice(0,80)};
+    const uncertain = {...intent,state:'uncertain',checkedAt:new Date().toISOString(),observed,...(writeRevision>0?{resultRevision:writeRevision}:{}),errorCode:String(error?.code || error?.name || 'write_result_unknown').slice(0,80)};
     try { await writePlanningImportGuard(uncertain); }
     catch (guardError) { console.error('写回结果待核验且持久状态更新失败；写前意图仍应阻断重试',String(guardError?.code || guardError?.message || 'guard_failed')); }
     try { await appendAudit({id:intent.id,at:uncertain.checkedAt,action:`${kind}-uncertain`,actor:intent.actor,observed,errorCode:uncertain.errorCode}); }
