@@ -36,12 +36,13 @@ function harness({ openKind = 'interview', post = async () => ({ message_id: 'om
   const sandbox = {
     randomUUID, createHash,
     lifecycleReminderEnabled: true,
+    lifecycleInterviewReminderEnabled: openKind === 'interview',
+    lifecycleCoachReminderEnabled: openKind === 'coach',
     notificationBotIdentityMatches: () => true,
     verifiedReminderRecipient: async () => true,
     withReminderJournalLock: async operation => operation(),
     readReminderJournal: async () => structuredClone(journal),
-    lifecycleReminderPath: '/never-written/notification-receipts.json',
-    writeJsonAtomic: async (_path, value) => { journal = structuredClone(value); },
+    writeReminderJournal: async value => { journal = structuredClone(value); },
     verifyReminderReadback: async () => false,
     getTenantToken: async () => {
       calls.tokens++;

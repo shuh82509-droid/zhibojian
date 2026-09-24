@@ -297,6 +297,9 @@ test('makeup update refuses duplicate names in the formal month block', () => {
 
 test('dispatch UI exposes four-room anchor and assistant planning, global rest entitlement and shared makeup duty', () => {
   const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8'); const script = fs.readFileSync(path.join(__dirname, 'planning-workbench.js'), 'utf8'); const app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8'); const css = fs.readFileSync(path.join(__dirname, 'planning-workbench-20260829.css'), 'utf8');
+  assert.match(html, /id="planningSourceLink"[^>]+href="https:\/\/jqx28l0j4lx\.feishu\.cn\/wiki\/UKVDwxpz7iKAv8k5KxTcxiDVnuf"/u);
+  assert.doesNotMatch(html, /Eui1waw7FiNSGdkQU0jcov2HnPe/u);
+  assert.match(script, /const sourceLink = \$\('#planningSourceLink'\)/u);
   for (const label of ['化妆师月度排班', '预览导入化妆师表', '确认导入并回读', '月度排班工作台', '助理预排', '主播休息统计与连播预警', '全员固定月应休', '保存月应休', '筛选主播', '导入上期排班', '预览导入总表']) assert.match(html, new RegExp(label));
   assert.equal((html.match(/data-planning-role="assistant"/gu) || []).length, 4);
   assert.doesNotMatch(html, /肖慧萍|邓艳佳|曾恩彤/u);
