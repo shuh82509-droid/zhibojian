@@ -14,6 +14,8 @@ import {
 import { frameHeadersForHub } from './frame-policy.mjs';
 import { createCalendarUserReader } from './calendar-user-reader.mjs';
 import { createReminderJournalLock } from './lifecycle-reminder-lock.mjs';
+import { writeDurableJsonAtomic } from './durable-journal.mjs';
+import { reminderScheduleConfig } from './reminder-gates.mjs';
 import { createCalendarAuthHandler } from './calendar-auth-http.mjs';
 import { createCoachCalendarAuth } from './coach-calendar-auth.mjs';
 
@@ -63,13 +65,16 @@ const anchorDevelopmentPath = join(dataDir, 'anchor-development.json');
 const lifecycleRefreshTimes = [...new Set(String(process.env.LIFECYCLE_REFRESH_TIMES || '09:30,18:00')
   .split(',').map(value => value.trim()).filter(value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)))].sort();
 if (!lifecycleRefreshTimes.length) lifecycleRefreshTimes.push('09:30', '18:00');
-const lifecycleSchedulerEnabled = !recoveryReadOnly && process.env.LIFECYCLE_SCHEDULER_ENABLED !== '0';
+const reminderSchedule = reminderScheduleConfig(process.env,recoveryReadOnly);
+const lifecycleSchedulerEnabled = reminderSchedule.scheduler;
 // Sending is separately gated from read-only lifecycle refreshes. Enabling it
 // requires the verified brand-marketing bot, named recipients and sources.
 // Only one production replica may schedule outbound reminders. The journal
 // remains a second line of defence, never a substitute for leader selection.
-const lifecycleReminderLeader = process.env.LIFECYCLE_REMINDER_LEADER === 'true';
-const lifecycleReminderEnabled = lifecycleSchedulerEnabled && lifecycleReminderLeader && process.env.LIFECYCLE_REMINDERS_ENABLED === 'true';
+const lifecycleReminderLeader = reminderSchedule.leader;
+const lifecycleReminderEnabled = reminderSchedule.enabled;
+const lifecycleInterviewReminderEnabled = reminderSchedule.interview;
+const lifecycleCoachReminderEnabled = reminderSchedule.coach;
 const coachRankingBook = 'L5cZsxjochgfrWtyLeQc54v1nHd';
 const coachRankingSheet = 'jbO54B';
 const liveCenterDepartmentId = 'od-3044f2fd1042f68162820d6e770680d0';
@@ -1862,6 +1867,9 @@ async function readReminderJournal() {
     throw error;
   }
 }
+async function writeReminderJournal(journal) {
+  await writeDurableJsonAtomic(lifecycleReminderPath,journal);
+}
 async function withReminderJournalLock(operation) {
   return lifecycleReminderLock.run(operation);
 }
@@ -1890,7 +1898,7 @@ async function deliverLifecycleReminder({key,date,kind,recipientId,recipientName
     if (receipt) {
       if (receipt.state === 'sent_unverified' && receipt.messageId) {
         try {
-          if (await verifyReminderReadback(receipt)) { receipt.state='verified'; receipt.verifiedAt=new Date().toISOString(); await writeJsonAtomic(lifecycleReminderPath,journal); }
+          if (await verifyReminderReadback(receipt)) { receipt.state='verified'; receipt.verifiedAt=new Date().toISOString(); await writeReminderJournal(journal); }
         } catch { /* A failed GET never licenses another send. */ }
       }
       return {state:receipt.state,messageId:receipt.messageId || null};
@@ -1898,7 +1906,7 @@ async function deliverLifecycleReminder({key,date,kind,recipientId,recipientName
     if (verifyBeforeSend) await verifyBeforeSend();
     receipt = {id:randomUUID(),key,date,kind,recipientName,recipientId,createdAt:new Date().toISOString(),state:'sending',messageId:null};
     journal.receipts.push(receipt);
-    await writeJsonAtomic(lifecycleReminderPath,journal);
+    await writeReminderJournal(journal);
     let sendToken;
     try {
       // Token acquisition can block. Do it before the final source check so
@@ -1910,7 +1918,7 @@ async function deliverLifecycleReminder({key,date,kind,recipientId,recipientName
       // same-day source can still be sent; if the journal write fails, the
       // old `sending` intent remains a conservative duplicate barrier.
       journal.receipts=journal.receipts.filter(item=>item.id!==receipt.id);
-      await writeJsonAtomic(lifecycleReminderPath,journal);
+      await writeReminderJournal(journal);
       throw error;
     }
     try {
@@ -1923,16 +1931,16 @@ async function deliverLifecycleReminder({key,date,kind,recipientId,recipientName
       receipt.messageId = String(data.message_id);
       receipt.sentAt = new Date().toISOString();
       receipt.state = 'sent_unverified';
-      await writeJsonAtomic(lifecycleReminderPath,journal);
+      await writeReminderJournal(journal);
       try {
-        if (await verifyReminderReadback(receipt)) { receipt.state='verified'; receipt.verifiedAt=new Date().toISOString(); await writeJsonAtomic(lifecycleReminderPath,journal); }
+        if (await verifyReminderReadback(receipt)) { receipt.state='verified'; receipt.verifiedAt=new Date().toISOString(); await writeReminderJournal(journal); }
       } catch { /* Keep the message ID for a later read-only receipt check. */ }
     } catch (error) {
       // A timeout or crash can happen after Feishu accepts the message. The
       // persisted key and stable UUID prevent an automatic duplicate.
       receipt.state='uncertain';
       receipt.error=String(error?.details || error?.code || 'send_result_unknown').slice(0,100);
-      await writeJsonAtomic(lifecycleReminderPath,journal);
+      await writeReminderJournal(journal);
     }
     return {state:receipt.state,messageId:receipt.messageId};
   });
@@ -1945,7 +1953,7 @@ async function refreshReminderReadbacks() {
       try { if (await verifyReminderReadback(receipt)) {receipt.state='verified';receipt.verifiedAt=new Date().toISOString();changed=true;} }
       catch { /* Remain pending; never resend a message with an ID. */ }
     }
-    if (changed) await writeJsonAtomic(lifecycleReminderPath,journal);
+    if (changed) await writeReminderJournal(journal);
   });
 }
 async function runLifecycleReminders(now = new Date()) {
@@ -1958,8 +1966,8 @@ async function runLifecycleReminders(now = new Date()) {
     const gates={};
     await refreshReminderReadbacks();
     const interviewWindow=lifecycleReminderWindow('interview',minutes);
-    gates.interview=interviewWindow==='before'?'未到 17:00 发送窗口':interviewWindow==='missed'?'已错过 17:00—18:00 窗口，未补发':'发送窗口待核验';
-    if (interviewWindow === 'open') {
+    gates.interview=!lifecycleInterviewReminderEnabled?'17:00 面评提醒未启用':interviewWindow==='before'?'未到 17:00 发送窗口':interviewWindow==='missed'?'已错过 17:00—18:00 窗口，未补发':'发送窗口待核验';
+    if (lifecycleInterviewReminderEnabled && interviewWindow === 'open') {
       try {
         const cycleMonth=recruitmentCycleMonthForDate(date);
         const source=await recruitmentCycleSnapshot(cycleMonth,{fresh:true});
@@ -1980,8 +1988,8 @@ async function runLifecycleReminders(now = new Date()) {
       } catch(error) { gates.interview='来源或授权待核验';failures.push(`17:00 面评：${String(error?.message||'检查失败').slice(0,120)}`); }
     }
     const coachWindow=lifecycleReminderWindow('coach',minutes);
-    gates.coach=coachWindow==='before'?'未到 17:30 发送窗口':coachWindow==='missed'?'已错过 17:30—18:30 窗口，未补发':'17:30 发送窗口已开放';
-    if (coachWindow === 'open') {
+    gates.coach=!lifecycleCoachReminderEnabled?'17:30 教练提醒未启用':coachWindow==='before'?'未到 17:30 发送窗口':coachWindow==='missed'?'已错过 17:30—18:30 窗口，未补发':'17:30 发送窗口已开放';
+    if (lifecycleCoachReminderEnabled && coachWindow === 'open') {
       try {
         const review=await coachReviewSnapshot(date,{freshRanking:true});
         for (const [room,coachName] of Object.entries(coachNames)) {
@@ -2351,8 +2359,8 @@ async function lifecycleApi(req, res, url, routePath, auth) {
     if (req.method === 'GET' && routePath === '/api/lifecycle/interview-reminder-preview') {
       const date = String(url.searchParams.get('date') || '');
       if (!/^20\d{2}-\d{2}-\d{2}$/u.test(date)) return json(res, 400, {ok:false,error:'请提供 YYYY-MM-DD 格式的面试日期。'});
-      const [year, month, day] = date.split('-').map(Number);
-      const cycleMonth = new Date(Date.UTC(year, month - 1 + (day > 25 ? 1 : 0), 1)).toISOString().slice(0, 7);
+      const cycleMonth = recruitmentCycleMonthForDate(date);
+      if (!cycleMonth) return json(res,400,{ok:false,error:'面试日期无效。'});
       return json(res, 200, {ok:true,preview:buildInterviewReminderPreview(await recruitmentCycleSnapshot(cycleMonth), date)});
     }
     if (routePath === '/api/lifecycle/recruitment-assessment') {
@@ -2382,7 +2390,7 @@ async function lifecycleApi(req, res, url, routePath, auth) {
       try { journal=await readReminderJournal(); }
       catch { journal={receipts:[]};journalStatus='待核验：发送记录不可读，已停止自动发送。'; }
       const receipts=journal.receipts.slice(-60).map(item=>({key:item.key,date:item.date,kind:item.kind,recipientName:item.recipientName,state:item.state,messageId:item.messageId,sentAt:item.sentAt,verifiedAt:item.verifiedAt,error:item.error}));
-      return json(res,200,{ok:true,enabled:lifecycleReminderEnabled,leader:lifecycleReminderLeader,botVerified:notificationBotIdentityMatches(),scheduler:lifecycleReminderState,
+      return json(res,200,{ok:true,enabled:lifecycleReminderEnabled,interviewEnabled:lifecycleInterviewReminderEnabled,coachEnabled:lifecycleCoachReminderEnabled,leader:lifecycleReminderLeader,botVerified:notificationBotIdentityMatches(),scheduler:lifecycleReminderState,
         lock,lastLockRecovery:lifecycleReminderLock.recentRecovery(),journalStatus,unresolvedReceiptCount:journal.receipts.filter(item=>['sending','uncertain','sent_unverified'].includes(item.state)).length,
         configured:{interviewRecipient:Boolean(recruitmentReviewerOpenId),coaches:Object.fromEntries(Object.keys(coachNames).map(room=>[room,{recipient:Boolean(coachCalendarConfig[room]?.openId),calendar:Boolean(coachCalendarConfig[room]?.calendarId)}]))},
         receipts});
@@ -2665,7 +2673,7 @@ createServer((req, res) => {
     setInterval(refreshLifecycleIfDue, 5 * 60 * 1000).unref();
   }
   if (lifecycleReminderEnabled) {
-    console.log('Verified lifecycle reminders scheduled at 17:00 and 17:30 Asia/Shanghai.');
+    console.log(`Verified lifecycle reminder checks enabled: interview=${lifecycleInterviewReminderEnabled}, coach=${lifecycleCoachReminderEnabled}.`);
     setTimeout(() => runLifecycleReminders().catch(error => console.error('initial lifecycle reminder check failed',error?.message||error)),20000);
     setInterval(() => runLifecycleReminders().catch(error => console.error('scheduled lifecycle reminder check failed',error?.message||error)),5*60*1000).unref();
   }

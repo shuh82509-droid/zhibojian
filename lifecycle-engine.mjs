@@ -448,6 +448,9 @@ export function buildInterviewReminderPreview(snapshot, date) {
     matches.push({name:named[0].name,eventId:event.eventId || ''});
   }
   const unique = [...new Set(matches.map(item => item.name))];
+  if (unique.length !== matches.length || matches.some(item => !item.eventId) ||
+      new Set(matches.map(item => item.eventId)).size !== matches.length)
+    return pending('正式面试日程与候选人或事件编号未能一一对应');
   return {
     status:'preview', date, matches, sourceReady:true, readyForSend:false,
     text:`【今日主播面试结果提醒｜${date}】\n今日面试候选人：${unique.join('、')}。\n请在面评群逐一确认“通过 / 未通过”，未取得明确结论的保留待核验。`,
