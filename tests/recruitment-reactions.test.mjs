@@ -108,6 +108,83 @@ test('cycle source reads beyond the former 500-message limit and still flags a r
   const capped=await getChatMessages('coaching',1000,{fresh:true});
   assert.equal(capped.sourceMessageCount,1000);
   assert.equal(capped.truncated,true);
+  assert.equal(capped.paginationIssue,'message_safety_limit');
+});
+
+test('recruitment cursor reads a complete cycle even when Feishu returns 19 items per 50-item page',async()=>{
+  const raw=Array.from({length:437},(_,index)=>({
+    message_id:`om_cycle_${index}`,deleted:index%60===0,body:{content:'{"text":"本月来源消息"}'},
+    create_time:String(1790000000000+index),
+  }));
+  let offset=0,calls=0;
+  const context={
+    feishuChats:{recruitment:{chatId:'oc_recruitment',name:'招聘群'}},FeishuError:Error,
+    feishuGet:async path=>{
+      calls+=1;
+      assert.match(path,/page_size=(50|[1-9][0-9]?)/);
+      if(calls===3)return {items:[],has_more:true,page_token:'empty_page'};
+      const items=raw.slice(offset,offset+19);
+      offset+=items.length;
+      return {items,has_more:offset<raw.length,page_token:offset<raw.length?`p${offset}`:''};
+    },
+    getMessageReactions:async ids=>new Map(ids.map(id=>[id,{counts:[],details:[]}])),
+    activeChatMessages,parseMessageContent:rawContent=>JSON.parse(rawContent),messageText:value=>value.text,
+    messageResources:()=>[],cached:(_key,_ttl,load)=>load(),feishuCache:new Map(),URLSearchParams,Date,
+  };
+  const getChatMessages=isolatedServerFunction('getChatMessages','findChatByName',context);
+  const complete=await getChatMessages('recruitment',1000,{fresh:true});
+  assert.ok(calls>20,'the old requested/50 page bound would have stopped at 380 messages');
+  assert.equal(complete.sourceMessageCount,437);
+  assert.equal(complete.deletedMessageCount,8);
+  assert.equal(complete.messages.length,429);
+  assert.equal(complete.truncated,false);
+  assert.equal(complete.paginationIssue,'');
+  assert.equal(complete.reactionStatus,'已核验');
+});
+
+test('repeated cursors, missing cursors and overlapping message ids fail closed',async()=>{
+  const one={message_id:'om_one',deleted:false,body:{content:'{"text":"一条来源"}'},create_time:'1790000000000'};
+  const context={
+    feishuChats:{coaching:{chatId:'oc_coaching',name:'直播战队'}},FeishuError:Error,
+    feishuGet:async()=>({items:[one],has_more:true,page_token:'next'}),
+    getMessageReactions:async()=>{throw new Error('coaching should not query reactions');},
+    activeChatMessages,parseMessageContent:rawContent=>JSON.parse(rawContent),messageText:value=>value.text,
+    messageResources:()=>[],cached:(_key,_ttl,load)=>load(),feishuCache:new Map(),URLSearchParams,Date,
+  };
+  const getChatMessages=isolatedServerFunction('getChatMessages','findChatByName',context);
+  const repeated=await getChatMessages('coaching',1000,{fresh:true});
+  assert.equal(repeated.sourceMessageCount,1);
+  assert.equal(repeated.truncated,true);
+  assert.equal(repeated.paginationIssue,'duplicate_or_missing_message_id');
+  context.feishuGet=async()=>({items:[one],has_more:true,page_token:''});
+  const missing=await getChatMessages('coaching',1000,{fresh:true});
+  assert.equal(missing.truncated,true);
+  assert.equal(missing.paginationIssue,'missing_or_repeated_page_token');
+  context.feishuGet=async()=>({items:[one]});
+  const malformed=await getChatMessages('coaching',1000,{fresh:true});
+  assert.equal(malformed.truncated,true);
+  assert.equal(malformed.paginationIssue,'invalid_page_shape');
+  let calls=0;
+  context.feishuGet=async()=>{
+    calls+=1;
+    return calls===1 ? {items:[],has_more:true,page_token:'empty'} : {items:[one],has_more:false};
+  };
+  const resumed=await getChatMessages('coaching',1000,{fresh:true});
+  assert.equal(resumed.sourceMessageCount,1);
+  assert.equal(resumed.truncated,false);
+  calls=0;
+  context.feishuGet=async()=>({items:[],has_more:true,page_token:`empty_${++calls}`});
+  const emptyLimit=await getChatMessages('coaching',1000,{fresh:true});
+  assert.equal(calls,10);
+  assert.equal(emptyLimit.truncated,true);
+  assert.equal(emptyLimit.paginationIssue,'too_many_empty_pages');
+  calls=0;
+  context.feishuGet=async()=>({items:[{...one,message_id:`om_${++calls}`}],has_more:true,page_token:`p${calls}`});
+  const pageLimit=await getChatMessages('coaching',1000,{fresh:true});
+  assert.equal(calls,200);
+  assert.equal(pageLimit.sourceMessageCount,200);
+  assert.equal(pageLimit.truncated,true);
+  assert.equal(pageLimit.paginationIssue,'page_safety_limit');
 });
 
 test('background recruitment snapshot reads the full current cycle for both source chats and calendar',async()=>{

@@ -327,16 +327,48 @@ async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
     const items = [];
     let pageToken = '';
     let truncated = false;
-    for (let page = 0; page < Math.ceil(requested / 50); page += 1) {
+    let paginationIssue = '';
+    let emptyPages = 0;
+    const seenTokens = new Set();
+    const seenMessageIds = new Set();
+    // Feishu can return fewer than page_size items while has_more is true.
+    // Count actual messages, not requested/50 pages; retain a finite API bound.
+    const maxPages = Math.min(200, Math.max(20, Math.ceil(requested / 5)));
+    for (let page = 0; page < maxPages; page += 1) {
       const params = new URLSearchParams({container_id_type:'chat',container_id:source.chatId,sort_type:'ByCreateTimeDesc',page_size:String(Math.min(50, requested - items.length))});
       if (startTime) params.set('start_time', String(Math.floor(startTime)));
       if (endTime) params.set('end_time', String(Math.floor(endTime)));
       if (pageToken) params.set('page_token', pageToken);
       const data = await feishuGet(`/im/v1/messages?${params}`);
-      items.push(...(data.items || []));
-      pageToken = data.page_token || '';
-      truncated = Boolean(data.has_more);
-      if (!data.has_more || !pageToken || items.length >= requested) break;
+      if (!Array.isArray(data.items) || typeof data.has_more !== 'boolean') {
+        truncated = true;
+        paginationIssue = 'invalid_page_shape';
+        break;
+      }
+      const pageItems = data.items;
+      const remaining = requested - items.length;
+      let duplicateOrMissingId = false;
+      for (const item of pageItems.slice(0, remaining)) {
+        const id = String(item?.message_id || '');
+        if (!id || seenMessageIds.has(id)) { duplicateOrMissingId = true; continue; }
+        seenMessageIds.add(id);
+        items.push(item);
+      }
+      truncated = Boolean(data.has_more) || pageItems.length > remaining || duplicateOrMissingId;
+      if (duplicateOrMissingId) { paginationIssue = 'duplicate_or_missing_message_id'; break; }
+      if (pageItems.length > remaining) { paginationIssue = 'page_exceeded_remaining_limit'; break; }
+      if (!data.has_more) break;
+      if (items.length >= requested) { paginationIssue = 'message_safety_limit'; break; }
+      const nextToken = String(data.page_token || '');
+      if (!nextToken || nextToken === pageToken || seenTokens.has(nextToken)) {
+        paginationIssue = 'missing_or_repeated_page_token';
+        break;
+      }
+      emptyPages = pageItems.length ? 0 : emptyPages + 1;
+      if (emptyPages >= 10) { paginationIssue = 'too_many_empty_pages'; break; }
+      seenTokens.add(nextToken);
+      pageToken = nextToken;
+      if (page === maxPages - 1) paginationIssue = 'page_safety_limit';
     }
     const activeItems = activeChatMessages(items.slice(0, requested));
     let reactions = new Map(); let reactionStatus = sourceKey === 'recruitment' ? '待读取' : '不适用'; let reactionFailure = '';
@@ -362,7 +394,7 @@ async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
     });
     return { key: sourceKey, name: source.name, chatId: source.chatId, messages,
       sourceMessageCount:items.length, deletedMessageCount:items.length - activeItems.length,
-      truncated, fetchedAt: new Date().toISOString(), reactionStatus, reactionFailure };
+      truncated, paginationIssue, fetchedAt: new Date().toISOString(), reactionStatus, reactionFailure };
   };
   // The send path bypasses the UI cache, then refreshes it after a complete
   // read. Otherwise a new submission inside the last 60 seconds can be missed.
