@@ -60,6 +60,21 @@ test('planning import intent survives process-independent file read and malforme
   };
   const write = () => guardedSheetWrite({kind:'planning-import',auth:admin,plan:{expectedHash:'test-hash',revision:sourceRevision,month:'2026-09',target:{spreadsheetToken,sheetId}},token:'local-token',spreadsheetToken,ranges:[{range:`${sheetId}!E3:E3`,before:[''],after:['L']}],auditAction:'planning-import'});
   await assert.rejects(guardedSheetWrite({kind:'planning-import',auth:member,plan:{target:{spreadsheetToken,sheetId}},token:'local-token',spreadsheetToken,ranges:[{range:`${sheetId}!E3:E3`,before:[''],after:['L']}],auditAction:'planning-import'}),error=>error.status===403&&error.code==='PLANNING_ADMIN_REQUIRED');
+  await assert.rejects(guardedSheetWrite({kind:'planning-import',auth:admin,plan:{expectedHash:'test-hash',revision:sourceRevision,target:{spreadsheetToken,sheetId}},token:'local-token',spreadsheetToken,ranges:[{range:`${sheetId}!E3:E3`,before:[''],after:['L']}],auditAction:'planning-import',beforeIntent:async()=>{throw Object.assign(new Error('role source changed'),{code:'PLANNING_ROLE_SOURCE_CHANGED'});}}),error=>error.code==='PLANNING_ROLE_SOURCE_CHANGED');
+  assert.equal(postCount,0,'a changed room-role source cannot send a Feishu write');
+  assert.equal(await readPlanningImportGuard(),null,'a changed room-role source cannot persist a write intent');
+  const timeoutFetch=global.fetch;
+  let targetChangedDuringRoleRefresh=false, racePosts=0;
+  global.fetch=async url=>{
+    if(String(url).includes('/values_batch_update')){racePosts++;throw new Error('target race must block POST');}
+    if(String(url).includes('/tenant_access_token/internal'))return {ok:true,status:200,json:async()=>({code:0,tenant_access_token:'local-token',expire:7200})};
+    if(String(url).includes('/values/')){const value=targetChangedDuringRoleRefresh?'P':'';return {ok:true,status:200,json:async()=>({code:0,data:{revision:targetChangedDuringRoleRefresh?sourceRevision+1:sourceRevision,valueRange:value?{range:`${sheetId}!E3:E3`,values:[[value]]}:{range:'',values:[]}}})};}
+    throw new Error(`Unexpected mocked request: ${url}`);
+  };
+  await assert.rejects(guardedSheetWrite({kind:'planning-import',auth:admin,plan:{expectedHash:'test-hash',revision:sourceRevision,target:{spreadsheetToken,sheetId}},token:'local-token',spreadsheetToken,ranges:[{range:`${sheetId}!E3:E3`,before:[''],after:['L']}],auditAction:'planning-import',beforeIntent:async()=>{targetChangedDuringRoleRefresh=true;}}),error=>error.code==='TOTAL_SCHEDULE_CHANGED');
+  assert.equal(racePosts,0,'a target edit during room-source refresh cannot send a Feishu write');
+  assert.equal(await readPlanningImportGuard(),null,'a target race cannot persist a write intent');
+  global.fetch=timeoutFetch;
   await assert.rejects(write(),error=>error.code==='SCHEDULE_WRITE_UNCERTAIN');
   assert.equal(postCount,1);
   assert.equal((await readPlanningImportGuard()).state,'uncertain');

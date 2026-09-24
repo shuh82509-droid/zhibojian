@@ -7,7 +7,25 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { ROOM_PLANNING, SHIFT_TIMES, formatShiftCell, generateDraft, generateMakeupDraft, parseRestSource, parseRestSources, restAdjustmentFromNote, transitionAllowed } = require('./planning-engine');
 const SHIFT_LEGEND = '班次信息: L（05:30-14:30）: 05:30 ~ 14:30; R（06:30-15:30）: 06:30 ~ 15:30; M（21:30-05:00）: 21:30 ~ 次日 05:00; P（16:30-01:00）: 16:30 ~ 次日 01:00; J2（14:30-23:00）: 14:30 ~ 23:00';
-const { alignPlanningRangeRow, assertPlanningFormulaRow, buildMakeupImportPlan, buildPlanningImportPlan, changedRowRanges, fullScheduleRange, headerDateKey, parseMakeupScheduleRows, planningReadbackState, spreadsheetValueRows, validateWriteOrigin } = require('./schedule-api-server');
+const { alignPlanningRangeRow, assertPlanningFormulaRow, buildMakeupImportPlan, buildPlanningImportPlan, buildPlanningRoleEvidence, changedRowRanges, fullScheduleRange, headerDateKey, parseMakeupScheduleRows, planningReadbackState, spreadsheetValueRows, validateWriteOrigin } = require('./schedule-api-server');
+
+function provenRole(draft) {
+  const claims = {}, monthlyClaims = {}, timelineShifts = {}, roster = {};
+  for (const item of draft.assignments) {
+    const claim = {roomCode:draft.roomCode,role:draft.role};
+    const key = `${item.date}|${item.name}`;
+    claims[key] = [claim];
+    monthlyClaims[`${item.date.slice(0,7)}|${item.name}`] = [claim];
+    if (item.shiftCode !== '休' && !item.rest) {
+      const [start,end] = String(item.shiftTime || SHIFT_TIMES[item.shiftCode]).replace(/次日/gu,'').split(/[–—-]/u);
+      const minutes=(clock)=>{const [hour,minute]=clock.split(':').map(Number);return hour*60+minute;};
+      const startMinute=minutes(start),endMinute=minutes(end);
+      timelineShifts[key] = [{...claim,startMinute,endMinute:endMinute<=startMinute?endMinute+1440:endMinute}];
+      roster[key] = [{roomCode:draft.roomCode,raw:`${item.shiftCode}（${item.shiftTime || SHIFT_TIMES[item.shiftCode]}）`}];
+    }
+  }
+  return {completeDates:[...new Set(draft.assignments.map((item)=>item.date))],completeMonths:[...new Set(draft.assignments.map((item)=>item.date.slice(0,7)))],claims,monthlyClaims,timelineShifts,roster,timelineMentions:{},signature:'test-role-source'};
+}
 
 test('candidate dispatch page keeps planning API requests within its own route',()=>{
   for(const [file,variable] of [['planning-workbench.js','planningBase'],['app.js','apiBase']]){
@@ -164,7 +182,7 @@ test('compensation note adjusts the global rest entitlement without treating it 
 test('builds an exact total-schedule import preview and exposes unresolved names', () => {
   const rows = [[SHIFT_LEGEND], ['UID', '部门', '工号', '', '2026/9/1', '2026/9/2'], ['u-1', '凡岛-品牌营销部-直播中心-优选', 'FD-1', '甲', '', 'R'], ['u-2', '凡岛-品牌营销部-直播中心-优选', 'FD-2', '乙', 'M', '']];
   const draft = { roomCode: 'youxuan', roomName: '优选', role: 'anchor', startDate: '2026-09-01', endDate: '2026-09-02', dates: ['2026-09-01', '2026-09-02'], assignments: [{ date: '2026-09-01', name: '甲', shiftCode: 'R' }, { date: '2026-09-02', name: '乙', shiftCode: 'M' }, { date: '2026-09-02', name: '未入总表', shiftCode: 'X' }] };
-  const plan = buildPlanningImportPlan(draft, rows, 12);
+  const plan = buildPlanningImportPlan(draft, rows, 12, undefined, provenRole(draft));
   assert.equal(plan.resolvedCount, 2); assert.equal(plan.unresolved.length, 1); assert.equal(plan.ranges.length, 2); assert.equal(plan.overwrites.length, 0); assert.match(plan.expectedHash, /^[a-f0-9]{64}$/u); assert.equal(headerDateKey('9月2日', '2026'), '2026-09-02');
   assert.equal(plan.ranges[0].after.includes('R（06:30-15:30）'), true);
   assert.equal(formatShiftCell({shiftCode:'休',rest:true}), '休息');
@@ -173,7 +191,7 @@ test('builds an exact total-schedule import preview and exposes unresolved names
 test('total-schedule preview uses the currently resolved spreadsheet target', () => {
   const rows = [[SHIFT_LEGEND], ['UID', '部门', '工号', '', '2026/9/1'], ['u-1', '凡岛-品牌营销部-直播中心-官旗', 'FD-1', '甲', '']];
   const draft = { roomCode:'guanqi', roomName:'官旗', role:'anchor', startDate:'2026-09-01', endDate:'2026-09-01', dates:['2026-09-01'], assignments:[{date:'2026-09-01',name:'甲',shiftCode:'L'}] };
-  const target = {spreadsheetToken:'current-token',sheetId:'current-sheet',label:'当前总表'}; const plan = buildPlanningImportPlan(draft, rows, 3, target);
+  const target = {spreadsheetToken:'current-token',sheetId:'current-sheet',label:'当前总表'}; const plan = buildPlanningImportPlan(draft, rows, 3, target, provenRole(draft));
   assert.equal(plan.target.spreadsheetToken, 'current-token'); assert.match(plan.ranges[0].range, /^current-sheet!/u);
 });
 
@@ -181,16 +199,16 @@ test('total import fingerprint binds the exact after value and leaves intervenin
   const rows = [[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1','2026/9/2','2026/9/3'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','甲','','他人公式结果','']];
   const base = {roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-03',dates:['2026-09-01','2026-09-03'],assignments:[{date:'2026-09-01',name:'甲',shiftCode:'L'},{date:'2026-09-03',name:'甲',shiftCode:'P'}]};
   const target = {spreadsheetToken:'current-token',sheetId:'0jFdXf',label:'正式排班表'};
-  const plan = buildPlanningImportPlan(base, rows, 498, target);
+  const plan = buildPlanningImportPlan(base, rows, 498, target, provenRole(base));
   assert.deepEqual(plan.ranges.map((range) => range.range), ['0jFdXf!E3:E3','0jFdXf!G3:G3']);
   assert.equal(plan.ranges.some((range) => range.range.includes('F3')), false);
-  assert.notEqual(buildPlanningImportPlan({...base,assignments:[{...base.assignments[0],shiftCode:'J2'},base.assignments[1]]},rows,498,target).expectedHash,plan.expectedHash);
+  assert.notEqual(buildPlanningImportPlan({...base,assignments:[{...base.assignments[0],shiftCode:'J2'},base.assignments[1]]},rows,498,target,provenRole(base)).expectedHash,plan.expectedHash);
 });
 
 test('total import omits already-correct cells instead of rewriting their formulas or formatting', () => {
   const rows = [[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1','2026/9/2'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','甲','L（05:30-14:30）','']];
   const draft = {roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-02',dates:['2026-09-01','2026-09-02'],assignments:[{date:'2026-09-01',name:'甲',shiftCode:'L'},{date:'2026-09-02',name:'甲',shiftCode:'P'}]};
-  const plan = buildPlanningImportPlan(draft,rows,498,{spreadsheetToken:'test-token',sheetId:'test-sheet'});
+  const plan = buildPlanningImportPlan(draft,rows,498,{spreadsheetToken:'test-token',sheetId:'test-sheet'},provenRole(draft));
   assert.equal(plan.noChangeCount,1);
   assert.deepEqual(plan.ranges.map(item=>item.range),['test-sheet!F3:F3']);
   assert.equal(plan.overwrites.length,0);
@@ -243,7 +261,7 @@ test('dispatch write origin accepts only the two exact hub origins', () => {
 test('total import blocks duplicate names and unrelated departments instead of choosing first match', () => {
   const rows = [[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','甲',''],['u-2','凡岛-品牌营销部-直播中心-品牌精选','FD-2','甲',''],['u-3','凡岛-电商部','FD-3','乙','']];
   const draft = {roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'甲',shiftCode:'L'},{date:'2026-09-01',name:'乙',shiftCode:'P'}]};
-  const plan = buildPlanningImportPlan(draft,rows,498,{spreadsheetToken:'current-token',sheetId:'0jFdXf'});
+  const plan = buildPlanningImportPlan(draft,rows,498,{spreadsheetToken:'current-token',sheetId:'0jFdXf'},provenRole(draft));
   assert.equal(plan.ranges.length,0);
   assert.deepEqual(plan.unresolved.map((item)=>item.reason),['正式总表存在同名人员，须用唯一身份核验','人员不在直播中心部门']);
 });
@@ -252,9 +270,9 @@ test('total import selects the exact attendance template when a shift code has m
   const legend = '班次信息: ZBB（18:30-次日2:00）: 18:30 ~ 次日 02:00; ZBB(21:00-次日6:00): 21:00 ~ 次日 06:00; WB(17:30-次日02:00): 17:30 ~ 次日 02:00; WB(22：30—次日6：00): 22:30 ~ 次日 06:00';
   const rows = [[legend],['UID','部门','工号','','2026/9/1','2026/9/2'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','甲','','']];
   const draft = {roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-02',dates:['2026-09-01','2026-09-02'],assignments:[{date:'2026-09-01',name:'甲',shiftCode:'ZBB',shiftTime:'18:30–次日02:00'},{date:'2026-09-02',name:'甲',shiftCode:'WB',shiftTime:'22:30–次日06:00'}]};
-  const plan = buildPlanningImportPlan(draft,rows,498,{spreadsheetToken:'current-token',sheetId:'0jFdXf'});
+  const plan = buildPlanningImportPlan(draft,rows,498,{spreadsheetToken:'current-token',sheetId:'0jFdXf'},provenRole(draft));
   assert.deepEqual(plan.ranges[0].after,['ZBB（18:30-次日2:00）','WB(22：30—次日6：00)']);
-  const bad = buildPlanningImportPlan({...draft,assignments:[{...draft.assignments[0],shiftTime:'20:00-次日03:00'},draft.assignments[1]]},rows,498,{spreadsheetToken:'current-token',sheetId:'0jFdXf'});
+  const bad = buildPlanningImportPlan({...draft,assignments:[{...draft.assignments[0],shiftTime:'20:00-次日03:00'},draft.assignments[1]]},rows,498,{spreadsheetToken:'current-token',sheetId:'0jFdXf'},provenRole(draft));
   assert.equal(bad.unresolved[0].reason,'班次时间不符合原表考勤模板');
 });
 
@@ -267,6 +285,179 @@ test('rest source surfaces duplicate anchor rows as unverified rather than calcu
   const rows = [['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','休息'],['u-2','凡岛-品牌营销部-直播中心-官旗','FD-2','赵媛','L']];
   const [person] = parseRestSource(rows,'2026-09');
   assert.equal(person.sourceStatus,'ambiguous'); assert.equal(person.usedRest,null); assert.equal(person.calendar.length,0);
+});
+
+test('rest source does not double-count a repeated date column', () => {
+  const rows = [['UID','部门','工号','','2026/9/1','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','休息','休息']];
+  const [person] = parseRestSource(rows,'2026-09');
+  assert.equal(person.sourceStatus,'ambiguous');
+  assert.match(person.sourceReason,/重复日期列/u);
+  assert.equal(person.usedRest,null);assert.equal(person.remainingRest,null);assert.deepEqual(person.calendar,[]);
+});
+
+function liveRoleSheets(people={}) {
+  const selected=(value,day)=>typeof value==='function'?value(day):value||'';
+  const block=(roomCode,day,anchor='',assistant='')=>{
+    const anchorName=selected(anchor,day);
+    const rows=[[`9月${day}日`,'','时间','05:30-08:00'],['','','主播',anchorName],['','','','05:30-10:00'],['','','',selected(assistant,day)]];
+    if(anchorName){const personColumn=roomCode==='guanqi'?13:1;rows[0][personColumn]=anchorName;rows[0][personColumn+1]='L（05:30-14:30）';}
+    return rows;
+  };
+  return Object.fromEntries(['guanqi','brand_selection','youxuan','wangou'].map(roomCode=>[roomCode,{rows:Array.from({length:30},(_,index)=>block(roomCode,index+1,people[roomCode]?.anchor,people[roomCode]?.assistant)).flat(),revision:189107}]));
+}
+
+test('full-month four-room timelines prove role and rest; missing, conflicting, or stale sources block total import', () => {
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛',''],['u-2','凡岛-品牌营销部-直播中心-官旗','FD-2','尹珩瑞','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  const assignment=(name,shiftCode='L')=>({date:'2026-09-01',name,shiftCode});
+  const draft=(name,role='anchor',roomCode='guanqi',shiftCode='L')=>({roomCode,role,startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[assignment(name,shiftCode)]});
+  const sheets=liveRoleSheets({guanqi:{anchor:'赵媛',assistant:'尹珩瑞'}});
+  const anchor=draft('赵媛');
+  const proof=buildPlanningRoleEvidence(anchor,sheets);
+  assert.deepEqual(proof.claims['2026-09-01|赵媛'],[{roomCode:'guanqi',role:'anchor'}]);
+  assert.deepEqual(proof.claims['2026-09-01|尹珩瑞'],[{roomCode:'guanqi',role:'assistant'}]);
+  assert.deepEqual(proof.completeMonths,['2026-09']);
+  assert.equal(buildPlanningImportPlan(anchor,rows,504,target,proof).ranges.length,1);
+  const wrongRole=buildPlanningImportPlan(draft('尹珩瑞'),rows,504,target,proof);
+  assert.equal(wrongRole.ranges.length,0);assert.match(wrongRole.unresolved[0].reason,/岗位或直播间/u);
+  const wrongRoom=buildPlanningImportPlan(draft('赵媛','anchor','youxuan'),rows,504,target,proof);
+  assert.equal(wrongRoom.ranges.length,0);assert.match(wrongRoom.unresolved[0].reason,/总表部门直播间/u);
+  const rest=buildPlanningImportPlan(draft('未在时间轴','anchor','guanqi','休'),[[SHIFT_LEGEND],rows[1],['u-3','凡岛-品牌营销部-直播中心-官旗','FD-3','未在时间轴','']],504,target,proof);
+  assert.equal(rest.ranges.length,0);assert.match(rest.unresolved[0].reason,/休息或未排班待核验/u);
+  assert.equal(rest.assignmentCount,1,'休息草稿仍保留在预览中');
+  const restingAnchor=draft('赵媛','anchor','guanqi','休');
+  const restingProof=buildPlanningRoleEvidence(restingAnchor,liveRoleSheets({guanqi:{anchor:(day)=>day===1?'':'赵媛'}}));
+  assert.equal(buildPlanningImportPlan(restingAnchor,rows,504,target,restingProof).ranges.length,1,'other days prove the home role while the rest day has no live shift');
+  const workingOnRest=buildPlanningImportPlan(restingAnchor,rows,504,target,proof);
+  assert.equal(workingOnRest.ranges.length,0);assert.match(workingOnRest.unresolved[0].reason,/仍有排播/u);
+  const conflictSheets=liveRoleSheets({guanqi:{anchor:'赵媛'},brand_selection:{assistant:'赵媛'}});
+  const conflict=buildPlanningImportPlan(anchor,rows,504,target,buildPlanningRoleEvidence(anchor,conflictSheets));
+  assert.equal(conflict.ranges.length,0);assert.match(conflict.unresolved[0].reason,/跨房或兼任/u);
+  const laterConflict=buildPlanningImportPlan(anchor,rows,504,target,buildPlanningRoleEvidence(anchor,liveRoleSheets({guanqi:{anchor:'赵媛'},brand_selection:{assistant:(day)=>day===2?'赵媛':''}})));
+  assert.equal(laterConflict.ranges.length,0);assert.match(laterConflict.unresolved[0].reason,/整月跨房/u);
+  const missingSheets=liveRoleSheets({guanqi:{anchor:'赵媛'}});missingSheets.wangou.rows=[];
+  const missing=buildPlanningImportPlan(anchor,rows,504,target,buildPlanningRoleEvidence(anchor,missingSheets));
+  assert.equal(missing.ranges.length,0);assert.match(missing.unresolved[0].reason,/来源不完整/u);
+  const driftedSheets=liveRoleSheets({guanqi:{anchor:'赵媛'}});driftedSheets.wangou.revision=189108;
+  assert.equal(buildPlanningRoleEvidence(anchor,driftedSheets).completeDates.length,0);
+  const repeatedSheets=liveRoleSheets({guanqi:{anchor:'赵媛'}});repeatedSheets.wangou.rows.push(...repeatedSheets.wangou.rows);
+  assert.equal(buildPlanningRoleEvidence(anchor,repeatedSheets).completeDates.length,0);
+  assert.notEqual(buildPlanningRoleEvidence(anchor,sheets).signature,buildPlanningRoleEvidence(anchor,liveRoleSheets({guanqi:{anchor:'赵媛'},youxuan:{assistant:'另一人'}})).signature);
+});
+
+test('role proof anchors to the dated first pair and rejects unsupported work or occupied rest', () => {
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心','FD-1','赵媛','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  const draft=(shiftCode='L',rest=false)=>({roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode,rest}]});
+  const sheets=liveRoleSheets({guanqi:{anchor:'赵媛',assistant:'尹珩瑞'}});
+  sheets.guanqi.rows[2][4]='08:00-10:00';sheets.guanqi.rows[3][4]='尹珩瑞';
+  const proof=buildPlanningRoleEvidence(draft(),sheets);
+  assert.deepEqual(proof.claims['2026-09-01|赵媛'],[{roomCode:'guanqi',role:'anchor'}]);
+  assert.deepEqual(proof.claims['2026-09-01|尹珩瑞'],[{roomCode:'guanqi',role:'assistant'}], 'a longer assistant range must not become the anchor');
+  assert.equal(buildPlanningImportPlan(draft(),rows,504,target,proof).ranges.length,1,'the live-center department is allowed only with unique source-backed room and role');
+
+  const wrongTime=liveRoleSheets({guanqi:{anchor:'赵媛'}});wrongTime.guanqi.rows[0][3]='20:00-23:00';
+  const timePlan=buildPlanningImportPlan(draft(),rows,504,target,buildPlanningRoleEvidence(draft(),wrongTime));
+  assert.equal(timePlan.ranges.length,0);assert.match(timePlan.unresolved[0].reason,/时间未覆盖/u);
+  const wrongCode=liveRoleSheets({guanqi:{anchor:'赵媛'}});wrongCode.guanqi.rows[0][14]='GJ3(05:30-13:00)';
+  const codePlan=buildPlanningImportPlan(draft(),rows,504,target,buildPlanningRoleEvidence(draft(),wrongCode));
+  assert.equal(codePlan.ranges.length,0);assert.match(codePlan.unresolved[0].reason,/代码或时间/u);
+  const missingRoster=liveRoleSheets({guanqi:{anchor:'赵媛'}});missingRoster.guanqi.rows[0][13]='';missingRoster.guanqi.rows[0][14]='';
+  const missingPlan=buildPlanningImportPlan(draft(),rows,504,target,buildPlanningRoleEvidence(draft(),missingRoster));
+  assert.equal(missingPlan.ranges.length,0);assert.match(missingPlan.unresolved[0].reason,/考勤班次缺失/u);
+
+  const restDraft=draft('休',true);
+  const workRoster=liveRoleSheets({guanqi:{anchor:(day)=>day===1?'':'赵媛'}});
+  workRoster.guanqi.rows[0][13]='赵媛';workRoster.guanqi.rows[0][14]='L（05:30-14:30）';
+  const workRest=buildPlanningImportPlan(restDraft,rows,504,target,buildPlanningRoleEvidence(restDraft,workRoster));
+  assert.equal(workRest.ranges.length,0);assert.match(workRest.unresolved[0].reason,/考勤名单仍有工作/u);
+  const pending=liveRoleSheets({guanqi:{anchor:(day)=>day===1?'':'赵媛'}});
+  pending.guanqi.rows[2][3]='待定';pending.guanqi.rows[3][3]='赵媛';
+  const pendingRest=buildPlanningImportPlan(restDraft,rows,504,target,buildPlanningRoleEvidence(restDraft,pending));
+  assert.equal(pendingRest.ranges.length,0);assert.match(pendingRest.unresolved[0].reason,/来源不完整/u);
+  const contrary=liveRoleSheets({guanqi:{anchor:'赵媛'}});contrary.guanqi.rows[1][2]='助理';
+  assert.deepEqual(buildPlanningRoleEvidence(draft(),contrary).completeMonths,[]);
+  assert.notEqual(buildPlanningRoleEvidence(draft(),sheets).signature,buildPlanningRoleEvidence(draft(),wrongCode).signature,'roster evidence changes the source signature');
+  assert.notEqual(buildPlanningRoleEvidence(draft(),sheets).signature,buildPlanningRoleEvidence(draft(),wrongTime).signature,'timeline times change the source signature');
+});
+
+test('a blank or pending attendance cell is not evidence of rest', () => {
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  const draft={roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode:'休',rest:true}]};
+  const sheets=liveRoleSheets({guanqi:{anchor:(day)=>day===1?'':'赵媛'}});
+  sheets.guanqi.rows[0][13]='赵媛';
+  for (const raw of ['', '待排']) {
+    sheets.guanqi.rows[0][14]=raw;
+    const proof=buildPlanningRoleEvidence(draft,sheets);
+    assert.deepEqual(proof.completeMonths,['2026-09']);
+    assert.deepEqual(proof.roster['2026-09-01|赵媛'],[{roomCode:'guanqi',raw}]);
+    const plan=buildPlanningImportPlan(draft,rows,504,target,proof);
+    assert.equal(plan.ranges.length,0,`attendance ${JSON.stringify(raw)} must block a rest write`);
+    assert.match(plan.unresolved[0].reason,/考勤名单仍有工作或待定/u);
+  }
+  sheets.guanqi.rows[0][13]='赵媛（待排）';
+  for (const raw of ['', '休息']) {
+    sheets.guanqi.rows[0][14]=raw;
+    const annotated=buildPlanningRoleEvidence(draft,sheets);
+    assert.deepEqual(annotated.roster['2026-09-01|赵媛'],[{roomCode:'guanqi',raw,unverifiedName:true}]);
+    const plan=buildPlanningImportPlan(draft,rows,504,target,annotated);
+    assert.equal(plan.ranges.length,0,'an annotated roster identity is not proof of rest');
+    assert.match(plan.unresolved[0].reason,/姓名带未核验备注/u);
+  }
+  sheets.guanqi.rows[0][13]='赵媛';
+  sheets.guanqi.rows[0][14]='休息';
+  const valid=buildPlanningRoleEvidence(draft,sheets);
+  assert.equal(buildPlanningImportPlan(draft,rows,504,target,valid).ranges.length,1,'an explicit rest entry is allowed when four-room timelines are complete');
+});
+
+test('a work shift cannot ignore an unparsed same-day support mention in another room', () => {
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  const draft={roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode:'L'}]};
+  const sheets=liveRoleSheets({guanqi:{anchor:'赵媛'}});
+  const clean=buildPlanningRoleEvidence(draft,sheets);
+  assert.deepEqual(clean.timelineMentionRooms['2026-09-01|赵媛'],['guanqi']);
+  assert.equal(buildPlanningImportPlan(draft,rows,504,target,clean).ranges.length,1);
+  sheets.brand_selection.rows.splice(4,0,['','','','赵媛支援']);
+  const ambiguous=buildPlanningRoleEvidence(draft,sheets);
+  assert.deepEqual(ambiguous.completeMonths,['2026-09'],'the note is not a parsed shift, but must still block this individual');
+  assert.deepEqual(ambiguous.timelineMentionRooms['2026-09-01|赵媛'],['brand_selection','guanqi']);
+  const plan=buildPlanningImportPlan(draft,rows,504,target,ambiguous);
+  assert.equal(plan.ranges.length,0);
+  assert.match(plan.unresolved[0].reason,/跨房或未解析的支援标注/u);
+});
+
+test('writeback proof rejects malformed or status-qualified times and roster shifts without weakening valid overnight slots', () => {
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  const draft=(shiftCode='L')=>({roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode}]});
+  const base=()=>liveRoleSheets({guanqi:{anchor:'赵媛'}});
+  for (const malformed of ['05:90-08:00','次日06:00-08:00','05:30-08:00（待定）','05:30-08:00取消','25:30-08:00','05:30-24:30']) {
+    const sheets=base();sheets.guanqi.rows[0][3]=malformed;
+    const proof=buildPlanningRoleEvidence(draft(),sheets);
+    assert.deepEqual(proof.completeMonths,[],`${malformed} cannot prove an entire month`);
+    assert.equal(buildPlanningImportPlan(draft(),rows,504,target,proof).ranges.length,0);
+  }
+  for (const malformed of ['05:90-08:00','05:30-08:00（待定）','安排中']) {
+    const sheets=base();sheets.guanqi.rows[2][3]=malformed;sheets.guanqi.rows[3][3]='尹珩瑞';
+    assert.deepEqual(buildPlanningRoleEvidence(draft(),sheets).completeMonths,[],`ambiguous assistant time ${malformed} cannot prove the month`);
+  }
+  for (const malformed of ['L（05:30-14:30）待定','L（05:30-14:30）取消','L（05:30-14:30）未知','L（05:90-14:30）']) {
+    const sheets=base();sheets.guanqi.rows[0][14]=malformed;
+    const proof=buildPlanningRoleEvidence(draft(),sheets);
+    const plan=buildPlanningImportPlan(draft(),rows,504,target,proof);
+    assert.equal(plan.ranges.length,0,`${malformed} cannot attest a work shift`);
+    assert.match(plan.unresolved[0].reason,/代码或时间/u);
+  }
+  const fullwidth=base();fullwidth.guanqi.rows[0][3]='5:30-10：10';
+  assert.equal(buildPlanningImportPlan(draft(),rows,504,target,buildPlanningRoleEvidence(draft(),fullwidth)).ranges.length,1);
+  for (const overnight of ['23:00-次日02:00','23:00-02:00','22:00-24:00']) {
+    const sheets=base();sheets.guanqi.rows[0][3]=overnight;sheets.guanqi.rows[0][14]='ZBB(21:00-次日6:00)';
+    const overnightRows=[[`${SHIFT_LEGEND}; ZBB(21:00-次日6:00): 21:00 ~ 次日 06:00`],...rows.slice(1)];
+    const plan=buildPlanningImportPlan(draft('ZBB'),overnightRows,504,target,buildPlanningRoleEvidence(draft('ZBB'),sheets));
+    assert.equal(plan.ranges.length,1,`${overnight} is a valid overnight subset of attendance: ${JSON.stringify(plan.unresolved)}`);
+  }
 });
 
 test('makeup import appends a new month without overwriting historical rows', () => {

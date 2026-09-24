@@ -428,6 +428,155 @@ function parseScheduleSheets(sheets, requestedDate) {
   };
 }
 
+// Deliberately stricter than the legacy display parser: writeback proof must
+// never salvage a malformed or status-qualified time by matching a substring.
+function planningStrictTimeRange(value) {
+  const text = flattenCell(value).replace(/：/gu, ':').trim();
+  const match = text.match(/^(\d{1,2}):(\d{2})\s*[-–—－]\s*(次日)?(\d{1,2}):(\d{2})$/u);
+  if (!match) return null;
+  const [startHour,startMinute,endHour,endMinute] = [match[1],match[2],match[4],match[5]].map(Number);
+  if (startHour > 23 || endHour > 24 || startMinute > 59 || endMinute > 59 || (endHour === 24 && endMinute !== 0)) return null;
+  const start = startHour * 60 + startMinute;
+  const endClock = endHour * 60 + endMinute;
+  const end = endClock + (match[3] || endClock < start ? 1440 : 0);
+  if (end <= start || end - start > 12 * 60) return null;
+  return { startMinute: start, endMinute: end };
+}
+
+function planningStrictRosterShift(value) {
+  const text = flattenCell(value).trim();
+  if (/^(休息|OFF)$/iu.test(text)) return { rest: true };
+  const match = text.match(/^([A-Za-z][A-Za-z0-9]*)\s*[（(]([^）)]+)[）)]$/u);
+  if (!match) return null;
+  const interval = planningStrictTimeRange(match[2]);
+  return interval ? { code: match[1], ...interval } : null;
+}
+
+function planningRoomEvidence(room, rows, date, names) {
+  const block = findDateBlock(rows, date);
+  if (block.length < 2) return { valid: false, claims: [], roster: [], mentions: [] };
+  const bounds = resolveTimelineBounds(room, block);
+  if (flattenCell(block[0][bounds[1] - 1]) === '24小时') bounds[1] -= 1;
+  const label = (row) => [row?.[2], row?.[3]].map(flattenCell).join(' ');
+  const readPair = (role, rangeRow, nameRow) => {
+    const shifts = []; let hasTime = false;
+    for (let column = bounds[0]; column < bounds[1]; column += 1) {
+      const raw = flattenCell(rangeRow[column]);
+      const person = flattenCell(nameRow?.[column]).replace(/\s+/gu, '').trim();
+      if (!raw && !person) continue;
+      if (column === bounds[0] && ((role === 'anchor' && raw === '时间' && person === '主播') ||
+          (role === 'assistant' && raw === '助理' && !person))) continue;
+      if (!raw && person) return null;
+      const interval = planningStrictTimeRange(raw);
+      if (!interval) return null;
+      hasTime = true;
+      if (!person) continue;
+      if (!/^[\p{Script=Han}·]{2,12}$/u.test(person) || /待定|取消|未知|待排|暂无|停播/u.test(person)) return null;
+      shifts.push({ name: person, roomCode: room.code, role, ...interval });
+    }
+    return hasTime ? shifts : null;
+  };
+  // The dated row and its immediate successor are the anchor pair. Choosing
+  // the row with the most slots can silently turn a longer assistant row into
+  // an anchor row. Explicit contrary labels invalidate the entire date.
+  if (/助理/u.test(label(block[0]) + label(block[1]))) {
+    return { valid: false, claims: [], roster: [], mentions: [] };
+  }
+  const anchor = readPair('anchor', block[0], block[1]);
+  if (!anchor) return { valid: false, claims: [], roster: [], mentions: [] };
+  const claims = [...anchor];
+  for (let index = 2; index < block.length; index += 1) {
+    const cells = block[index].slice(bounds[0], bounds[1]).map(flattenCell);
+    const nextCells = block[index + 1]?.slice(bounds[0], bounds[1]).map(flattenCell) || [];
+    const followedByName = cells.some((cell, offset) => cell && /^[\p{Script=Han}·]{2,12}$/u.test(nextCells[offset]?.replace(/\s+/gu, '') || '') &&
+      !/主播|助理|时间|待定|待排|取消|未知|暂无/u.test(nextCells[offset]));
+    if (!followedByName && !cells.some((cell) => /[:：]|次日|待定|待排|取消|未知|暂无|未定|TBD|助理/iu.test(cell))) continue;
+    if (!block[index + 1] || /主播/u.test(label(block[index]) + label(block[index + 1]))) {
+      return { valid: false, claims: [], roster: [], mentions: [] };
+    }
+    const assistant = readPair('assistant', block[index], block[index + 1]);
+    if (!assistant) return { valid: false, claims: [], roster: [], mentions: [] };
+    claims.push(...assistant);
+    index += 1;
+  }
+  const rosterColumns = resolveRosterColumns(room, block);
+  const roster = block.flatMap((row) => {
+    const nameCell = flattenCell(row[rosterColumns[0]]).replace(/\s+/gu, '').trim();
+    const parsedNames = namesFromCell(row[rosterColumns[0]]).map((name) => name.replace(/\s+/gu, '').trim());
+    const raw = flattenCell(row[rosterColumns[1]]);
+    const exact = parsedNames.map((name) => ({ name, roomCode: room.code, raw }));
+    // Annotated or compound roster names are not proof that a person is absent.
+    // Keep a fail-closed mention for any draft person whom the normal parser
+    // cannot identify exactly; neither a blank shift nor an explicit rest may
+    // then be written from this ambiguous source cell.
+    const unresolved = [...names].filter((name) => nameCell.includes(name) && !parsedNames.includes(name))
+      .map((name) => ({ name, roomCode: room.code, raw, unverifiedName: true }));
+    return [...exact, ...unresolved];
+  });
+  // Include cells even when the neighboring time is pending or malformed.
+  // Absence from parsed shifts must never be treated as proof of rest.
+  const timelineCells = block.flatMap((row) => row.slice(bounds[0], bounds[1]).map(flattenCell).filter(Boolean));
+  const mentions = [...names].filter((name) => timelineCells.some((cell) => cell.includes(name)));
+  return { valid: true, claims, roster, mentions };
+}
+
+// A month of room timelines establishes a home room/role only when all four
+// sources and every date block are readable at one workbook revision. A rest
+// day may then be verified without inventing a same-day timeline assignment.
+function buildPlanningRoleEvidence(draft, sheets) {
+  const months = [...new Set((draft.assignments || []).map((item) => String(item.date || '').slice(0,7)))].sort();
+  const dates = months.flatMap((month) => {
+    const [year,number] = month.split('-').map(Number);
+    const count = new Date(Date.UTC(year,number,0)).getUTCDate();
+    return Array.from({length:count},(_,index)=>`${month}-${String(index+1).padStart(2,'0')}`);
+  });
+  const revisions = ROOMS.map((room) => [room.code, sheetRevision(sheets?.[room.code])]);
+  const coherent = revisions.every(([, revision]) => Number.isSafeInteger(revision) && revision > 0 && revision === revisions[0][1]);
+  const completeDates = [], claims = {}, monthlyClaims = {}, timelineShifts = {}, roster = {}, timelineMentions = {}, timelineMentionRooms = {};
+  const names = new Set((draft.assignments || []).map((item) => String(item.name || '').replace(/\s+/gu, '').trim()).filter(Boolean));
+  for (const date of dates) {
+    const parsed = parseScheduleSheets(sheets || {}, date);
+    const roomEvidence = ROOMS.map((room) => [room, planningRoomEvidence(room, sheetRows(sheets?.[room.code]), date, names)]);
+    const complete = coherent && roomEvidence.every(([room, proof]) => proof.valid && parsed.sourceStatus[room.code].found &&
+      sheetRows(sheets[room.code]).filter((row) => dateMarkerMatches(row?.[0], date)).length === 1);
+    if (complete) completeDates.push(date);
+    for (const [room, proof] of roomEvidence) {
+      for (const shift of proof.claims) {
+        const { name, startMinute, endMinute, ...claim } = shift;
+        const key = `${date}|${name}`;
+        claims[key] ||= [];
+        if (!claims[key].some((item) => item.roomCode === claim.roomCode && item.role === claim.role)) claims[key].push(claim);
+        timelineShifts[key] ||= [];
+        timelineShifts[key].push({ ...claim, startMinute, endMinute });
+      }
+      for (const item of proof.roster) {
+        const key = `${date}|${item.name}`;
+        roster[key] ||= [];
+        if (!roster[key].some((entry) => entry.roomCode === item.roomCode && entry.raw === item.raw && Boolean(entry.unverifiedName) === Boolean(item.unverifiedName))) {
+          roster[key].push({ roomCode: item.roomCode, raw: item.raw, ...(item.unverifiedName ? {unverifiedName:true} : {}) });
+        }
+      }
+      for (const name of proof.mentions) {
+        const key = `${date}|${name}`;
+        timelineMentions[key] = true;
+        timelineMentionRooms[key] ||= [];
+        if (!timelineMentionRooms[key].includes(room.code)) timelineMentionRooms[key].push(room.code);
+      }
+    }
+  }
+  for (const value of Object.values(claims)) value.sort((a,b)=>a.roomCode.localeCompare(b.roomCode)||a.role.localeCompare(b.role));
+  for (const [key,value] of Object.entries(claims)) {
+    const monthKey = `${key.slice(0,7)}|${key.slice(11)}`;
+    monthlyClaims[monthKey] ||= [];
+    for (const claim of value) if (!monthlyClaims[monthKey].some((item)=>item.roomCode===claim.roomCode&&item.role===claim.role)) monthlyClaims[monthKey].push(claim);
+  }
+  for (const value of Object.values(monthlyClaims)) value.sort((a,b)=>a.roomCode.localeCompare(b.roomCode)||a.role.localeCompare(b.role));
+  const completeMonths = months.filter((month)=>dates.filter((date)=>date.startsWith(month)).every((date)=>completeDates.includes(date)));
+  for (const value of Object.values(timelineMentionRooms)) value.sort();
+  return {completeDates,completeMonths,claims,monthlyClaims,timelineShifts,roster,timelineMentions,timelineMentionRooms,
+    signature:hashValue({revisions,completeDates,claims,timelineShifts,roster,timelineMentions,timelineMentionRooms})};
+}
+
 function availabilityFromRoster(roster, rooms, date) {
   const now = new Date();
   const currentNames = new Set(rooms.flatMap((room) => room.anchors
@@ -900,7 +1049,61 @@ function parseMakeupScheduleRows(rows, date, now = new Date()) {
   return { dateColumn, headerRow, roster: activeRows.map((row) => flattenCell(row[0]).replace(/\s+/gu, ' ').trim()), people };
 }
 
-function buildPlanningImportPlan(draft, rows, revision = 0, target = { spreadsheetToken: TOTAL_SCHEDULE_SPREADSHEET_TOKEN, sheetId: TOTAL_SCHEDULE_SHEET_ID, label: '直播中心排班总表' }) {
+function planningAttendanceInterval(value) {
+  const range = planningStrictTimeRange(value);
+  return range ? { start: range.startMinute, end: range.endMinute } : null;
+}
+
+function planningTimelineCovered(item, shifts) {
+  const attendance = planningAttendanceInterval(item.shiftTime || SHIFT_TIMES[item.shiftCode]);
+  if (!attendance || !shifts.length) return false;
+  return shifts.every(({startMinute,endMinute}) => {
+    if (!Number.isInteger(startMinute) || !Number.isInteger(endMinute) || endMinute <= startMinute) return false;
+    return [0,1440].some((offset) => startMinute + offset >= attendance.start && endMinute + offset <= attendance.end);
+  });
+}
+
+function planningImportIdentityIssue({item,name,matches,columnIndex,formattedShift,draft,roleEvidence}) {
+  if (!matches.length) return '正式总表姓名列未找到此人';
+  if (matches.length !== 1) return '正式总表存在同名人员，须用唯一身份核验';
+  const department = matches[0].department.replace(/\s+/gu, '');
+  const centerDepartment = '凡岛-品牌营销部-直播中心';
+  if (!(department === centerDepartment || department.startsWith(`${centerDepartment}-`))) return '人员不在直播中心部门';
+  const room = ROOM_PLANNING[draft.roomCode];
+  const expectedDepartment = `${centerDepartment}-${room?.name || ''}`;
+  if (!room || (department !== centerDepartment && !(department === expectedDepartment || department.startsWith(`${expectedDepartment}-`)))) return '总表部门直播间与草稿不一致';
+  if (!matches[0].uid || !matches[0].employeeNo) return '人员唯一标识不完整';
+  if (!Number.isInteger(columnIndex)) return '总表未找到日期列';
+  if (!formattedShift) return '班次时间不符合原表考勤模板';
+  const month = item.date.slice(0,7);
+  if (!roleEvidence?.completeMonths?.includes(month)) return '四房整月班表来源不完整，岗位待核验';
+  const monthlyClaims = roleEvidence.monthlyClaims?.[`${month}|${name}`] || [];
+  if (monthlyClaims.length !== 1) return monthlyClaims.length ? '同人整月跨房或兼任多个角色，岗位待核验' : '四房整月时间轴无本人岗位，休息或未排班待核验';
+  if (monthlyClaims[0].roomCode !== draft.roomCode || monthlyClaims[0].role !== draft.role) return '四房整月班表岗位或直播间与草稿不一致';
+  const key = `${item.date}|${name}`;
+  const sameDayClaims = roleEvidence.claims?.[key] || [];
+  const roster = roleEvidence.roster?.[key] || [];
+  if (roster.some((entry) => entry.unverifiedName)) return '四房考勤名单中的本人姓名带未核验备注或同名包含，须先核对来源';
+  if (item.rest === true || item.shiftCode === '休') {
+    if (sameDayClaims.length || roleEvidence.timelineMentions?.[key]) return '拟休息日期在四房时间轴仍有排播或待定姓名，须先核对来源';
+    return roster.some((entry) => !/^(休息|OFF)$/iu.test(entry.raw.replace(/\s+/gu,''))) ? '拟休息日期在四房考勤名单仍有工作或待定，须先核对来源' : '';
+  }
+  if (sameDayClaims.length !== 1) return '拟上班日期在四房时间轴无唯一岗位，须先核对来源';
+  if (sameDayClaims[0].roomCode !== draft.roomCode || sameDayClaims[0].role !== draft.role) return '四房同日班表岗位或直播间与草稿不一致';
+  if ((roleEvidence.timelineMentionRooms?.[key] || []).some((roomCode) => roomCode !== draft.roomCode)) return '四房同日时间轴存在本人跨房或未解析的支援标注，须先核对来源';
+  const shifts = roleEvidence.timelineShifts?.[key] || [];
+  if (!planningTimelineCovered(item, shifts)) return '拟上班班次时间未覆盖四房本人排播时段';
+  if (roster.length !== 1 || roster[0].roomCode !== draft.roomCode) return '四房同日考勤班次缺失或来源冲突，无法核对班次代码';
+  const sourceShift = planningStrictRosterShift(roster[0].raw);
+  const proposedShift = planningAttendanceInterval(item.shiftTime || SHIFT_TIMES[item.shiftCode]);
+  if (!sourceShift || sourceShift.rest || !proposedShift || sourceShift.code !== item.shiftCode ||
+      sourceShift.startMinute !== proposedShift.start || sourceShift.endMinute !== proposedShift.end) {
+    return '拟上班班次代码或时间与四房正式考勤名单不一致';
+  }
+  return '';
+}
+
+function buildPlanningImportPlan(draft, rows, revision = 0, target = { spreadsheetToken: TOTAL_SCHEDULE_SPREADSHEET_TOKEN, sheetId: TOTAL_SCHEDULE_SHEET_ID, label: '直播中心排班总表' }, roleEvidence = null) {
   const dates = new Set(draft.dates || []); const yearHint = String(draft.startDate || '').slice(0, 4);
   let headerRow = -1; let headerMap = new Map();
   rows.forEach((row, rowIndex) => {
@@ -938,7 +1141,7 @@ function buildPlanningImportPlan(draft, rows, revision = 0, target = { spreadshe
   for (const item of draft.assignments || []) {
     const name = String(item.name || '').replace(/\s+/gu, '').trim(); const matches = nameRows.get(name) || []; const columnIndex = headerMap.get(item.date);
     const formattedShift = attendanceShiftCell(item, templates);
-    const reason = !matches.length ? '正式总表姓名列未找到此人' : matches.length !== 1 ? '正式总表存在同名人员，须用唯一身份核验' : !matches[0].department.startsWith('凡岛-品牌营销部-直播中心') ? '人员不在直播中心部门' : !matches[0].uid || !matches[0].employeeNo ? '人员唯一标识不完整' : !Number.isInteger(columnIndex) ? '总表未找到日期列' : !formattedShift ? '班次时间不符合原表考勤模板' : '';
+    const reason = planningImportIdentityIssue({item,name,matches,columnIndex,formattedShift,draft,roleEvidence});
     if (reason) { unresolved.push({ date: item.date, name: item.name, reason }); continue; }
     const { rowIndex } = matches[0];
     if (flattenCell(rows[rowIndex]?.[columnIndex]) === formattedShift) { noChangeCount++; continue; }
@@ -961,8 +1164,8 @@ function buildPlanningImportPlan(draft, rows, revision = 0, target = { spreadshe
     });
   });
   const overwrites = ranges.flatMap((range) => range.before.map((value, index) => value && value !== range.after[index] ? ({ range: range.range, before: value, after: range.after[index] }) : null).filter(Boolean));
-  const fingerprint = { roomCode: draft.roomCode, role: draft.role, startDate: draft.startDate, endDate: draft.endDate, headerRow, revision, assignments: (draft.assignments || []).map(({ date, name, shiftCode, rest, shiftTime }) => ({ date, name, shiftCode, rest: Boolean(rest), shiftTime })), ranges: ranges.map(({ range, before, after }) => ({ range, before, after })) };
-  return { target, roomCode: draft.roomCode, roomName: draft.roomName, role: draft.role, startDate: draft.startDate, endDate: draft.endDate, headerRow: headerRow + 1, assignmentCount: (draft.assignments || []).length, resolvedCount: (draft.assignments || []).length - unresolved.length, noChangeCount, ranges, unresolved, overwrites, revision: Number(revision || 0), expectedHash: hashValue({ ...fingerprint, target }) };
+  const fingerprint = { roomCode: draft.roomCode, role: draft.role, startDate: draft.startDate, endDate: draft.endDate, headerRow, revision, roleEvidenceSignature:roleEvidence?.signature || '', assignments: (draft.assignments || []).map(({ date, name, shiftCode, rest, shiftTime }) => ({ date, name, shiftCode, rest: Boolean(rest), shiftTime })), ranges: ranges.map(({ range, before, after }) => ({ range, before, after })) };
+  return { target, roomCode: draft.roomCode, roomName: draft.roomName, role: draft.role, startDate: draft.startDate, endDate: draft.endDate, headerRow: headerRow + 1, assignmentCount: (draft.assignments || []).length, resolvedCount: (draft.assignments || []).length - unresolved.length, noChangeCount, ranges, unresolved, overwrites, revision: Number(revision || 0), roleEvidenceSignature:roleEvidence?.signature || '', expectedHash: hashValue({ ...fingerprint, target }) };
 }
 async function previewPlanningImport(draft) {
   const target = await resolveTotalScheduleTarget();
@@ -970,7 +1173,8 @@ async function previewPlanningImport(draft) {
   if (!Number.isSafeInteger(source.revision) || source.revision < 1) {
     throw Object.assign(new Error('正式总表未返回可核验的当前版本，已停止导入预览。'), {status:503,code:'TOTAL_SCHEDULE_REVISION_UNVERIFIED'});
   }
-  const plan = buildPlanningImportPlan(draft, source.rows, source.revision, target);
+  const roleEvidence = buildPlanningRoleEvidence(draft, await readScheduleSheets(true));
+  const plan = buildPlanningImportPlan(draft, source.rows, source.revision, target, roleEvidence);
   await assertNoPlanningFormulaCells(plan);
   return { plan, source };
 }
@@ -1159,7 +1363,7 @@ async function writePlanningRanges(token, spreadsheetToken, ranges) {
   return data;
 }
 
-async function guardedSheetWrite({kind,auth,plan,token,spreadsheetToken,ranges,auditAction,auditDetails={}}) {
+async function guardedSheetWrite({kind,auth,plan,token,spreadsheetToken,ranges,auditAction,auditDetails={},beforeIntent=null}) {
   assertPlanningManager(auth);
   await assertTotalImportReady(plan.target);
   if (spreadsheetToken !== plan.target.spreadsheetToken || kind !== 'planning-import') throw Object.assign(new Error('当前写回目标没有获准的新基线，已阻断。'), {status:423,code:'planning_source_unbaselined'});
@@ -1172,6 +1376,9 @@ async function guardedSheetWrite({kind,auth,plan,token,spreadsheetToken,ranges,a
   const previous = await readPlanningImportGuard();
   if (previous && ['intent','uncertain'].includes(previous.state)) throw planningUncertainError(previous.id);
   const {epoch}=await readPlanningEpoch();
+  if (beforeIntent) await beforeIntent();
+  // This must be the last remote read before intent/POST: the room-source
+  // refresh above can take long enough for a colleague to edit target cells.
   await assertPlanningWriteTargetsFresh(plan, ranges);
   const intent = {schemaVersion:1,id:randomUUID(),epochId:epoch.epochId,baselineHash:epoch.baselineHash,kind,state:'intent',at:new Date().toISOString(),actor:actorFromAuth(auth),spreadsheetToken,sourceRevision:plan.revision,expectedHash:plan.expectedHash,roomCode:plan.roomCode || null,role:plan.role || null,month:plan.month || null,date:plan.date || null,ranges:ranges.map(({range,before,after})=>({range,before,after}))};
   await writePlanningImportGuard(intent);
@@ -1220,7 +1427,10 @@ async function commitPlanningImport(input, auth) {
     await appendAudit(audit);
     return {ok:true,plan,auditId:audit.id,readbacks:[],readbackVerified:true,noChange:true};
   }
-  const result = await guardedSheetWrite({kind:'planning-import',auth,plan,token:source.token,spreadsheetToken:plan.target.spreadsheetToken,ranges:plan.ranges,auditAction:'planning-import',auditDetails:{roomCode:plan.roomCode,roomName:plan.roomName,role:plan.role,startDate:plan.startDate,endDate:plan.endDate,assignmentCount:plan.assignmentCount,overwrites:plan.overwrites.length}});
+  const result = await guardedSheetWrite({kind:'planning-import',auth,plan,token:source.token,spreadsheetToken:plan.target.spreadsheetToken,ranges:plan.ranges,auditAction:'planning-import',auditDetails:{roomCode:plan.roomCode,roomName:plan.roomName,role:plan.role,startDate:plan.startDate,endDate:plan.endDate,assignmentCount:plan.assignmentCount,overwrites:plan.overwrites.length},beforeIntent:async()=>{
+    const fresh=buildPlanningRoleEvidence(draft,await readScheduleSheets(true));
+    if (fresh.signature!==plan.roleEvidenceSignature) throw Object.assign(new Error('四房正式班表在预览后发生变化，请重新预览。'),{status:409,code:'PLANNING_ROLE_SOURCE_CHANGED'});
+  }});
   return {ok:true,plan,...result};
 }
 
@@ -1799,6 +2009,7 @@ module.exports = {
   ROOMS,
   REST_SCHEDULE_SOURCES,
   TOTAL_SCHEDULE_WIKI_URL,
+  buildPlanningRoleEvidence,
   buildPlanningImportPlan,
   alignPlanningRangeRow,
   assertPlanningFormulaRow,

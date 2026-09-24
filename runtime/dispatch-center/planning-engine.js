@@ -257,6 +257,7 @@ function parseRestSource(rows, month, profiles = {}, verifiedAnchorRooms = VERIF
   const yearHint = safeMonth.slice(0, 4); let headerIndex = -1; let dateColumns = [];
   rows.forEach((row, rowIndex) => { const matches = (Array.isArray(row) ? row : []).map((cell, columnIndex) => ({ date: scheduleDateKey(cell, yearHint), columnIndex })).filter((item) => item.date.startsWith(safeMonth)); if (matches.length > dateColumns.length) { headerIndex = rowIndex; dateColumns = matches; } });
   if (headerIndex < 0 || !dateColumns.length) return [];
+  const duplicateDateColumns = new Set(dateColumns.map((item) => item.date)).size !== dateColumns.length;
   const header = rows[headerIndex] || []; const foundNameColumn = header.findIndex((cell) => /姓名|主播/u.test(cellText(cell))); const employeeNumberColumn = header.findIndex((cell) => /工号/u.test(cellText(cell))); const nameColumn = foundNameColumn >= 0 ? foundNameColumn : employeeNumberColumn >= 0 ? employeeNumberColumn + 1 : 0;
   const eligible = new Set([...Object.keys(verifiedAnchorRooms), ...Object.keys(profiles || {})]); const people = [];
   const nameCounts = new Map();
@@ -268,8 +269,8 @@ function parseRestSource(rows, month, profiles = {}, verifiedAnchorRooms = VERIF
   rows.slice(headerIndex + 1).forEach((row) => {
     const name = cellText((row || [])[nameColumn]); if (!name || !eligible.has(name)) return;
     const profile = profiles[name] || {}; const roomName = ['官旗', '品牌精选', '优选', '王鸥美肤'].includes(profile.roomName) ? profile.roomName : verifiedAnchorRooms[name] || '直播间待核验';
-    if (nameCounts.get(name) !== 1) {
-      if (!ambiguous.has(name)) people.push({ name, roomName, sourceStatus: 'ambiguous', sourceReason: '总表同名人员不唯一，休息统计待核验', usedRest: null, remainingRest: null, maximumConsecutiveWorkDays: null, suggestedRestDate: null, calendar: [], alert: '' });
+    if (nameCounts.get(name) !== 1 || duplicateDateColumns) {
+      if (!ambiguous.has(name)) people.push({ name, roomName, sourceStatus: 'ambiguous', sourceReason: duplicateDateColumns ? '总表存在重复日期列，休息统计待核验' : '总表同名人员不唯一，休息统计待核验', usedRest: null, remainingRest: null, maximumConsecutiveWorkDays: null, suggestedRestDate: null, calendar: [], alert: '' });
       ambiguous.add(name);
       return;
     }
