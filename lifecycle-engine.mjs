@@ -265,12 +265,155 @@ function calendarTitleNamesPerson(title, name) {
     // An event entitled 王丽娜面试/复盘 must never be attributed to 王丽. The
     // limited role/interview/review labels cover normal calendar title shapes;
     // any other ambiguous title stays pending for a human to reconcile.
-    const left = !before || !/\p{Script=Han}$/u.test(before) || /(?:面试|初试|复试|试播|复盘|候选人|主播|姓名)$/u.test(before);
-    const right = !after || !/^\p{Script=Han}/u.test(after) || /^(?:面试|初试|复试|试播|复盘|主播)/u.test(after);
+    const left = !before || !/\p{Script=Han}$/u.test(before) || /(?:(?:正式|线上|线下|视频)?面试|初试|复试|试播|复盘|候选人|主播|姓名)$/u.test(before);
+    const right = !after || !/^\p{Script=Han}/u.test(after) || /^(?:(?:正式|线上|线下|视频)?面试|初试|复试|试播|复盘|主播)/u.test(after);
     if (left && right) return true;
     from = index + candidate.length;
   }
   return false;
+}
+
+/** Join formal calendar events to the single, source-backed recruitment submission.
+ * A title mentioning two cohort members, duplicate event, or repeated submission
+ * cannot silently become an interview-stage transition. A missing source is null,
+ * not a measured zero. Existing later-stage conclusions are never rewritten.
+ */
+export function linkVerifiedRecruitmentCalendar(candidates = [], calendarEvents = {}, submissionMessageCounts = {}, {
+  sourceReady = false, advanceStage = false
+} = {}) {
+  const original = Array.isArray(candidates) ? candidates : [];
+  if (!sourceReady) return {candidates:original, matchedCount:null, pendingCount:null};
+  const cohort = original.filter(item => item?.inSubmissionCohort && safeName(item?.name) === item?.name);
+  const candidateCounts = new Map();
+  const sourceIdCounts = new Map();
+  for (const item of cohort) {
+    candidateCounts.set(item.name, (candidateCounts.get(item.name) || 0) + 1);
+    const sourceId = String(item.submissionEvidence?.sourceId || '');
+    if (sourceId) sourceIdCounts.set(sourceId, (sourceIdCounts.get(sourceId) || 0) + 1);
+  }
+  const hits = new Map(), conflicted = new Set();
+  let pendingCount = 0;
+  for (const [date, events] of Object.entries(calendarEvents || {})) {
+    for (const event of Array.isArray(events) ? events : []) {
+      if (event?.status !== 'calendar') continue;
+      const named = cohort.filter(item => calendarTitleNamesPerson(event.name, item.name));
+      if (!named.length) continue; // An unrelated event is not a missing cohort interview.
+      const names = [...new Set(named.map(item => item.name))];
+      const validEvent = /^20\d{2}-\d{2}-\d{2}$/u.test(date) && Boolean(String(event.eventId || '').trim());
+      if (names.length !== 1 || !validEvent) {
+        names.forEach(name => conflicted.add(name));
+        pendingCount += 1;
+        continue;
+      }
+      const name = names[0];
+      const matches = hits.get(name) || [];
+      matches.push({date, title:String(event.name || ''), eventId:String(event.eventId)});
+      hits.set(name, matches);
+    }
+  }
+  const eventIdCounts = new Map();
+  for (const matches of hits.values()) for (const item of matches)
+    eventIdCounts.set(item.eventId, (eventIdCounts.get(item.eventId) || 0) + 1);
+  const verified = new Map();
+  for (const [name, matches] of hits) {
+    const candidate = cohort.find(item => item.name === name);
+    const submission = candidate?.submissionEvidence;
+    const validSubmission = candidateCounts.get(name) === 1 && submissionMessageCounts?.[name] === 1
+      && /^om_[A-Za-z0-9_]+$/u.test(String(submission?.sourceId || ''))
+      && sourceIdCounts.get(submission?.sourceId) === 1
+      && submission?.name === name && /^20\d{2}-\d{2}-\d{2}$/u.test(String(submission?.date || ''));
+    if (conflicted.has(name) || matches.length !== 1 || !validSubmission || matches[0].date < submission.date
+      || eventIdCounts.get(matches[0]?.eventId) !== 1
+      || candidate.stage !== 'initial_pass' || submission.initialReview !== 'OK') {
+      conflicted.add(name);
+      pendingCount += matches.length;
+      continue;
+    }
+    verified.set(name, matches[0]);
+  }
+  const linked = original.map(candidate => {
+    if (!candidate?.inSubmissionCohort) return candidate;
+    if (conflicted.has(candidate.name)) return {...candidate, calendarScheduleStatus:'待核验：日历与唯一送审记录未能一一对应'};
+    const event = verified.get(candidate.name);
+    if (!event) return candidate;
+    const evidence = {source:'正式面试日历', eventId:event.eventId, date:event.date, title:event.title};
+    const base = {...candidate, calendarEvidence:evidence, calendarScheduleStatus:'已核验：正式面试日历唯一匹配'};
+    if (!advanceStage || candidate.stage !== 'initial_pass' || candidate.submissionEvidence?.initialReview !== 'OK') return base;
+    const note = `正式面试日历已安排：${event.title}`;
+    const timeline = [...(candidate.timeline || [])];
+    if (!timeline.some(item => item[0] === event.date && item[1] === note)) timeline.push([event.date,note]);
+    return {...base, stage:'pending_feedback', status:'已安排正式面试 · 待面评', date:event.date, timeline};
+  });
+  return {candidates:linked, matchedCount:pendingCount ? null : verified.size, pendingCount};
+}
+
+/** Recalled messages remain in Feishu list pages, but their reaction records
+ * are inaccessible. Exclude them from both review lookup and candidate parsing.
+ */
+export function activeChatMessages(messages = []) {
+  if (!Array.isArray(messages)) throw new Error('招聘群消息列表无法核验。');
+  return messages.filter(message => message && message.deleted !== true);
+}
+
+/** A partial reaction response must never turn an unknown review into zero.
+ * The Feishu batch endpoint pages each message independently after ten
+ * reactions, and can report per-message failures while the outer call succeeds.
+ */
+export async function readCompleteMessageReactions(messageIds = [], requestBatch) {
+  if (!Array.isArray(messageIds) || typeof requestBatch !== 'function') throw new Error('招聘表情读取参数无效。');
+  const ids = [...new Set(messageIds)];
+  if (ids.some(id => !/^om_[A-Za-z0-9_]+$/u.test(id))) throw new Error('招聘消息编号无法核验。');
+  const results = new Map();
+  for (let start = 0; start < ids.length; start += 20) {
+    const states = new Map(ids.slice(start,start + 20).map(id => [id,{counts:null,items:[],pageTokens:new Set(),signatures:new Set()}]));
+    let pending = [...states.keys()].map(message_id => ({message_id}));
+    for (let page = 0; pending.length; page += 1) {
+      if (page >= 100) throw new Error('招聘表情分页超过安全上限，结果待核验。');
+      const response = await requestBatch({queries:pending,page_size_per_message:10});
+      if (!Array.isArray(response?.success_msg_reaction_details) || !Array.isArray(response?.success_msg_reaction_counts)
+        || !Array.isArray(response?.fail_msg_reaction_details) || response.fail_msg_reaction_details.length) {
+        throw new Error('招聘表情批量读取不完整，结果待核验。');
+      }
+      const details = new Map(response.success_msg_reaction_details.map(row => [row.message_id,row]));
+      const counts = new Map(response.success_msg_reaction_counts.map(row => [row.message_id,row]));
+      if (details.size !== response.success_msg_reaction_details.length || counts.size !== response.success_msg_reaction_counts.length)
+        throw new Error('招聘表情批量结果包含重复消息，结果待核验。');
+      const next = [];
+      for (const query of pending) {
+        const detail = details.get(query.message_id), count = counts.get(query.message_id), state = states.get(query.message_id);
+        if (!detail || !count || !Array.isArray(detail.message_reaction_items) || !Array.isArray(count.reaction_count)
+          || typeof detail.has_more !== 'boolean') throw new Error('招聘表情缺少完整消息记录，结果待核验。');
+        const normalizedCounts = count.reaction_count.map(row => ({reactionType:row.reaction_type,count:Number(row.count)}))
+          .sort((left,right) => left.reactionType.localeCompare(right.reactionType));
+        if (normalizedCounts.some(row => !row.reactionType || !Number.isSafeInteger(row.count) || row.count < 0))
+          throw new Error('招聘表情计数无法核验。');
+        if (state.counts === null) state.counts = normalizedCounts;
+        else if (JSON.stringify(state.counts) !== JSON.stringify(normalizedCounts))
+          throw new Error('招聘表情在分页期间发生变化，结果待重新核验。');
+        for (const item of detail.message_reaction_items) {
+          const signature = JSON.stringify([item?.operator?.operator_id,item?.emoji_type,item?.action_time]);
+          if (!item?.operator?.operator_id || !item?.emoji_type || !item?.action_time || state.signatures.has(signature))
+            throw new Error('招聘表情详情缺失或跨页重复，结果待核验。');
+          state.signatures.add(signature);
+          state.items.push({emojiType:item.emoji_type,actionTime:item.action_time,operatorId:item.operator.operator_id});
+        }
+        if (detail.has_more) {
+          const token = detail.page_token;
+          if (typeof token !== 'string' || !token || state.pageTokens.has(token))
+            throw new Error('招聘表情分页标记无效，结果待核验。');
+          state.pageTokens.add(token);
+          next.push({message_id:query.message_id,page_token:token});
+        }
+      }
+      pending = next;
+    }
+    for (const [id,state] of states) {
+      if (state.counts.reduce((sum,row) => sum + row.count,0) !== state.items.length)
+        throw new Error('招聘表情总数与详情不符，结果待核验。');
+      results.set(id,{counts:state.counts,details:state.items});
+    }
+  }
+  return results;
 }
 
 export function interviewReminderSourceFingerprint(snapshot, date) {

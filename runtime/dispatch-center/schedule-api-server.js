@@ -1324,6 +1324,18 @@ async function previewMakeupImport(draft) {
   await assertNoPlanningFormulaCells(plan);
   return { plan, source };
 }
+
+async function readVerifiedTotalScheduleSource(baseline) {
+  if (!baseline || baseline.historyStatus !== 'pending_recovery') {
+    throw Object.assign(new Error('正式排班总表的新基线尚未核验。'), {status:503,code:'planning_baseline_invalid'});
+  }
+  const target = await resolveTotalScheduleTarget();
+  const source = await readSpreadsheetRange(target.spreadsheetToken, fullScheduleRange(target));
+  if (!source.rows.length || !Number.isSafeInteger(source.revision) || source.revision < baseline.revision) {
+    throw Object.assign(new Error('正式排班总表未返回可核验的当前版本，不能把旧基线当作当前班表。'), {status:503,code:'planning_source_unverified'});
+  }
+  return { ...target, revision:source.revision, readAt:new Date().toISOString(), sourceMode:sourceSnapshot?'verified_backup':'official_live', permissionStatus:'已读取' };
+}
 async function commitMakeupImport() {
   throw Object.assign(new Error('化妆师源表尚无独立核验的新基线，不能提交或记为无变化。'), {status:423,code:'planning_source_unbaselined'});
 }
@@ -1379,6 +1391,17 @@ async function readRestBoard(month, store) {
     const readSources = [];
     if (!sourceMeta.rowCount || !sourceMeta.columnCount) sourceMeta = { ...sourceMeta, ...(await resolveSpreadsheetSheetMetadata(sourceMeta.spreadsheetToken, sourceMeta.sheetId, '主播休息排班源')) };
     const currentValue = await readSpreadsheetRange(sourceMeta.spreadsheetToken, fullScheduleRange(sourceMeta));
+    if (RECOVERY_READ_ONLY && !sourceSnapshot &&
+        (!currentValue.rows.length || !Number.isSafeInteger(currentValue.revision) || currentValue.revision < 1)) {
+      throw Object.assign(new Error('正式总表未返回可核验的原始排班或版本。'), {status:503,code:'planning_source_unverified'});
+    }
+    if (RECOVERY_READ_ONLY && !sourceSnapshot && safeMonth === '2026-09') {
+      const baseline = await readPlanningBaselineManifest();
+      if (!baseline || sourceMeta.spreadsheetToken !== baseline.spreadsheetToken || sourceMeta.sheetId !== baseline.sheetId ||
+          !Number.isSafeInteger(currentValue.revision) || currentValue.revision < baseline.revision) {
+        throw Object.assign(new Error('九月正式总表来源或当前版本未通过新基线核验。'), {status:503,code:'planning_source_unverified'});
+      }
+    }
     readSources.push({ month: safeMonth, rows: currentValue.rows, revision: currentValue.revision, ...sourceMeta });
     const priorMonth = previousMonth(safeMonth); const priorSource = REST_SCHEDULE_SOURCES[priorMonth];
     if (priorSource) {
@@ -1397,15 +1420,16 @@ async function readRestBoard(month, store) {
     try { verifiedAnchorRooms = await verifiedAnchorRoomsForMonth(safeMonth); liveRosterStatus = '已读取四间直播间原始班表'; }
     catch { /* 原始直播间班表暂不可用时，保留已核验的主播名单并显式标注覆盖范围。 */ }
     const people = parseRestSources(readSources, safeMonth, profiles, verifiedAnchorRooms);
+    if (!people.length) throw Object.assign(new Error('正式总表未匹配到本月可核验的主播排班行。'), {status:503,code:'planning_source_unverified'});
     const matched = new Set(people.map((person) => person.name));
     const missing = Object.entries(verifiedAnchorRooms).filter(([name]) => !matched.has(name)).map(([name, roomName]) => ({ name, roomName, reason: '正式排班总表未找到唯一主播行，休息数据待核验' }));
     const ambiguous = people.filter((person) => person.sourceStatus !== 'matched').map((person) => ({ name: person.name, roomName: person.roomName, reason: person.sourceReason }));
     const unmatched = [...missing, ...ambiguous];
     if (sourceSnapshot && !store) for (const person of people) person.roomName='直播间待核验';
     const currentRevision = readSources.find((source) => source.month === safeMonth)?.revision || 0;
-    return { available: true, month: safeMonth, entitlement, people, unmatched, source: { ...sourceMeta, revision: currentRevision, permissionStatus: '已读取', crossMonth: readSources.length > 1, liveRosterStatus, ...(currentValue.source||{}), ...(sourceSnapshot ? {scopeNote:'只读备份与直播间原始班表存在时效边界；未匹配主播单列待核验。'} : {}) }, checkedAt: new Date().toISOString(), historyStatus: sourceSnapshot && !store ? 'pending_recovery' : undefined, reason: people.length ? (sourceSnapshot && !store ? '原表只读备份；手工月应休、补班说明尚待恢复，剩余休假不作推断。' : '') : '当前月份没有匹配到已排班主播；空白单元格不会被计算为休息或上班。' };
+    return { available: true, month: safeMonth, entitlement, people, unmatched, source: { ...sourceMeta, revision: currentRevision, permissionStatus: '已读取', mode:sourceSnapshot?'verified_backup':'official_live', crossMonth: readSources.length > 1, liveRosterStatus, ...(currentValue.source||{}), ...(!store ? {scopeNote:sourceSnapshot?'只读备份与直播间原始班表存在时效边界；未匹配主播单列待核验。':'当前原表只读；旧手工月应休与补班说明待恢复，剩余休假待核验。'} : {}) }, checkedAt: new Date().toISOString(), historyStatus: RECOVERY_READ_ONLY && !store ? 'pending_recovery' : undefined, reason: !store ? '已读取原始排班；旧手工月应休、补班说明尚待恢复，剩余休假不作推断。' : '' };
   } catch (error) {
-    return { available: false, month: safeMonth, entitlement: store?.restSettings?.[safeMonth]?.entitlement ?? null, people: [], source: { ...sourceMeta, permissionStatus: error?.status === 403 ? '待授权' : '待回传' }, checkedAt: new Date().toISOString(), reason: `主播休息板块暂不可读取：${error.message}` };
+    return { available: false, month: safeMonth, entitlement: store?.restSettings?.[safeMonth]?.entitlement ?? null, people: [], source: { ...sourceMeta, permissionStatus: error?.status === 403 ? '待授权' : '待回传' }, checkedAt: new Date().toISOString(), historyStatus: RECOVERY_READ_ONLY && !store ? 'pending_recovery' : undefined, reason: `主播休息板块暂不可读取：${error.message}` };
   }
 }
 
@@ -1419,11 +1443,17 @@ async function planningApi(request, response, requestUrl, auth) {
   try {
     const route = requestUrl.pathname;
     if (request.method === 'GET' && route === '/api/planning') {
-      const store = await readPlanningStore();
+      let store;
+      try { store = await readPlanningStore(); } catch(error) {
+        if (!RECOVERY_READ_ONLY || error.code !== 'history_recovery_pending') throw error;
+        store = null; // The new epoch is not evidence that old drafts were empty.
+      }
       const baseline = await readPlanningBaselineManifest();
       let target;
       try {
-        target = { ...(await resolveTotalScheduleTarget()), permissionStatus: '已连接' };
+        target = RECOVERY_READ_ONLY && !sourceSnapshot
+          ? await readVerifiedTotalScheduleSource(baseline)
+          : { ...(await resolveTotalScheduleTarget()), permissionStatus: '已连接' };
       } catch (error) {
         target = {
           label: '品牌营销部-直播中心排班表_20260901_20260930 （coco）',
@@ -1432,7 +1462,7 @@ async function planningApi(request, response, requestUrl, auth) {
           reason: userFacingErrorMessage(error, '排班表暂不可读取。'),
         };
       }
-      return json(response, { ok: true, rooms: ROOM_PLANNING, shiftTimes: SHIFT_TIMES, drafts: store.drafts || {}, makeupDrafts: store.makeupDrafts || {}, updatedAt: store.updatedAt || null, totalSchedule: { ...target, url: TOTAL_SCHEDULE_WIKI_URL }, draftCapability:await draftCapability(auth),totalImportCapability:await totalImportCapability(auth), ...(baseline ? {planningBaseline:baseline,historyStatus:baseline.historyStatus,epochId:store.epochId||null} : {}) });
+      return json(response, { ok: true, rooms: ROOM_PLANNING, shiftTimes: SHIFT_TIMES, drafts: store ? store.drafts || {} : null, makeupDrafts: store ? store.makeupDrafts || {} : null, updatedAt: store?.updatedAt || null, historyAvailable:Boolean(store), totalSchedule: { ...target, url: TOTAL_SCHEDULE_WIKI_URL }, draftCapability:await draftCapability(auth),totalImportCapability:await totalImportCapability(auth), ...(baseline ? {planningBaseline:baseline,historyStatus:baseline.historyStatus,epochId:store?.epochId||null} : {}) });
     }
     if (request.method === 'POST' && route === '/api/planning/generate') { validateWriteOrigin(request, auth); return json(response, { ok: true, draft: generateDraft(await readJsonBody(request)) }); }
     if (request.method === 'POST' && route === '/api/planning/draft') {
@@ -1444,7 +1474,7 @@ async function planningApi(request, response, requestUrl, auth) {
     if (request.method === 'GET' && route === '/api/planning/rest') {
       let store;
       try { store = await readPlanningStore(); } catch(error) {
-        if (!sourceSnapshot || error.code !== 'history_recovery_pending') throw error;
+        if (!RECOVERY_READ_ONLY || error.code !== 'history_recovery_pending') throw error;
         store = null; // Missing manual history is exposed, never replaced by an empty persisted store.
       }
       return json(response, { ok: true, data: await readRestBoard(requestUrl.searchParams.get('month'), store) });

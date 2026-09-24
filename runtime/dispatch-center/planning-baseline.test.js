@@ -27,6 +27,7 @@ async function candidate(t,dir,readOnly,options={}){
       FEISHU_APP_ID:readOnly?'fixture':'',FEISHU_APP_SECRET:readOnly?'fixture':'',
       TOTAL_SCHEDULE_SPREADSHEET_TOKEN:token,TOTAL_SCHEDULE_SHEET_ID:'0jFdXf',
       PLANNING_DRAFT_WRITES_ENABLED:options.draftWrites?'1':'0',PLANNING_TOTAL_IMPORT_ENABLED:options.totalImport?'1':'0',
+      ...(options.mockFeishu?{NODE_OPTIONS:`--require=${path.join(__dirname,'planning-live-source-test-fixture.js')}`,TEST_FEISHU_REVISION:String(options.mockRevision ?? 499)}:{}),
       ...(options.authorityBase?{CENTRAL_AUTHORITY_BASE:options.authorityBase}:{})},
   });
   let output='';child.stderr.on('data',chunk=>{output+=chunk.toString().slice(0,1000);});
@@ -51,7 +52,7 @@ test('official baseline manifest accepts only the approved source and pending hi
   await assert.rejects(readPlanningBaselineManifest(file),error=>error.code==='planning_baseline_invalid');
 });
 
-test('recovery serves baseline metadata but missing old drafts and audit stay 503, all writes stay 423',async t=>{
+test('recovery serves source metadata without calling missing old drafts empty; audit stays 503 and writes 423',async t=>{
   const dir=folder(t);fs.writeFileSync(path.join(dir,'planning-baseline-manifest.json'),JSON.stringify(source()));
   const base=await candidate(t,dir,true);
   const health=await (await fetch(base+'/api/health')).json();
@@ -59,12 +60,18 @@ test('recovery serves baseline metadata but missing old drafts and audit stay 50
   assert.equal(JSON.stringify(health).includes(token),false,'unauthenticated health must not expose workbook token');
   const status=await (await fetch(base+'/api/recovery/status')).json();
   assert.deepEqual(status.planningBaseline,source());
-  const planning=await fetch(base+'/api/planning');assert.equal(planning.status,503);
-  assert.equal((await planning.json()).code,'history_recovery_pending');
+  const planning=await fetch(base+'/api/planning');assert.equal(planning.status,200);
+  const planningData=await planning.json();
+  assert.equal(planningData.historyStatus,'pending_recovery');assert.equal(planningData.historyAvailable,false);
+  assert.equal(planningData.drafts,null);assert.equal(planningData.makeupDrafts,null);
+  assert.equal(planningData.totalSchedule.permissionStatus,'待回传');
+  assert.equal(planningData.draftCapability.enabled,false);assert.equal(planningData.totalImportCapability.enabled,false);
   const audit=await fetch(base+'/api/schedule/writeback/audit');assert.equal(audit.status,503);
   assert.equal((await audit.json()).code,'history_recovery_pending');
-  const write=await fetch(base+'/api/planning/draft',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
-  assert.equal(write.status,423);assert.equal((await write.json()).code,'recovery_read_only');
+  for(const route of ['/api/planning/draft','/api/planning/rest-setting','/api/planning/rest-profile','/api/planning/import/preview','/api/planning/import']){
+    const write=await fetch(base+route,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+    assert.equal(write.status,423,route);assert.equal((await write.json()).code,'recovery_read_only',route);
+  }
   assert.equal(fs.existsSync(path.join(dir,'planning-workbench.json')),false);
 });
 
@@ -99,10 +106,65 @@ test('a separate initialized epoch preserves the old-history boundary and stays 
     assert.equal((await response.json()).code,'planning_source_unbaselined',route);
   }
   const readOnlyBase=await candidate(t,dir,true);
-  for(const route of ['/api/planning','/api/schedule/writeback/audit']){
-    const response=await fetch(readOnlyBase+route);
-    assert.equal(response.status,503,`${route} must not expose new empty epoch as recovered old history`);
-    assert.equal((await response.json()).code,'history_recovery_pending');
+  const recoveryPlanning=await fetch(readOnlyBase+'/api/planning');
+  assert.equal(recoveryPlanning.status,200);
+  const recoveryView=await recoveryPlanning.json();
+  assert.equal(recoveryView.historyAvailable,false);assert.equal(recoveryView.drafts,null);
+  const oldAudit=await fetch(readOnlyBase+'/api/schedule/writeback/audit');
+  assert.equal(oldAudit.status,503);assert.equal((await oldAudit.json()).code,'history_recovery_pending');
+});
+
+test('read-only new baseline reads current total schedule revision, rest days and all four room schedules',async t=>{
+  const dir=folder(t);fs.writeFileSync(path.join(dir,'planning-baseline-manifest.json'),JSON.stringify(source()));
+  const base=await candidate(t,dir,true,{mockFeishu:true});
+  const planning=await (await fetch(base+'/api/planning')).json();
+  assert.equal(planning.historyAvailable,false);assert.equal(planning.drafts,null);
+  assert.equal(planning.planningBaseline.revision,498,'manifest is a historical anchor');
+  assert.equal(planning.totalSchedule.revision,499,'current source is read separately');
+  assert.equal(planning.totalSchedule.permissionStatus,'已读取');
+  assert.equal(planning.totalSchedule.sourceMode,'official_live');
+  const restResponse=await fetch(base+'/api/planning/rest?month=2026-09');
+  assert.equal(restResponse.status,200);
+  const rest=(await restResponse.json()).data;
+  assert.equal(rest.available,true);assert.equal(rest.historyStatus,'pending_recovery');
+  assert.equal(rest.source.mode,'official_live');assert.equal(rest.source.revision,499);
+  assert.equal(rest.entitlement,null);
+  for(const name of ['潘小慧','丁阳虹','王思佳','李安妮']){
+    const person=rest.people.find(item=>item.name===name);
+    assert.ok(person,`missing ${name}`);assert.equal(person.sourceStatus,'matched');
+    assert.equal(person.usedRest,1);assert.equal(person.remainingRest,null);
+    assert.ok(person.calendar.some(day=>day.date==='2026-09-25'));
+  }
+  const schedule=await (await fetch(base+'/api/schedule?date=2026-09-25')).json();
+  assert.equal(schedule.rooms.length,4);
+  assert.deepEqual(schedule.rooms.map(room=>room.code).sort(),['brand_selection','guanqi','wangou','youxuan']);
+  assert.equal(fs.existsSync(path.join(dir,'planning-workbench.json')),false,'read-only GET must not create empty history');
+});
+
+test('read-only source behind baseline revision is marked unverified, without zero-valued rest',async t=>{
+  const dir=folder(t);fs.writeFileSync(path.join(dir,'planning-baseline-manifest.json'),JSON.stringify(source()));
+  const base=await candidate(t,dir,true,{mockFeishu:true,mockRevision:497});
+  const planning=await (await fetch(base+'/api/planning')).json();
+  assert.equal(planning.totalSchedule.permissionStatus,'待回传');
+  assert.equal(planning.totalSchedule.revision,undefined);
+  const rest=(await (await fetch(base+'/api/planning/rest?month=2026-09')).json()).data;
+  assert.equal(rest.available,false);assert.equal(rest.historyStatus,'pending_recovery');
+  assert.deepEqual(rest.people,[]);assert.equal(rest.entitlement,null);
+  assert.match(rest.reason,/未通过新基线核验/);
+});
+
+test('read-only source views still require central authentication in an embedded hub',async t=>{
+  const authority=http.createServer((request,response)=>{
+    response.writeHead(401,{'content-type':'application/json'});
+    response.end(JSON.stringify({detail:'fixture: OA login required'}));
+  });
+  await new Promise(resolve=>authority.listen(0,'127.0.0.1',resolve));
+  t.after(()=>authority.close());
+  const dir=folder(t);fs.writeFileSync(path.join(dir,'planning-baseline-manifest.json'),JSON.stringify(source()));
+  const base=await candidate(t,dir,true,{mockFeishu:true,authorityBase:`http://127.0.0.1:${authority.address().port}`});
+  for(const route of ['/api/planning','/api/planning/rest?month=2026-09','/api/schedule?date=2026-09-25']){
+    const response=await fetch(base+route);
+    assert.equal(response.status,401,route);
   }
 });
 

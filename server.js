@@ -6,10 +6,10 @@ import { Readable } from 'node:stream';
 import {
   chinaDateFor,
   isLifecycleRefreshDue,
-  mergeRecruitmentCandidates,
+  mergeRecruitmentCandidates, linkVerifiedRecruitmentCalendar,
   normalizeAnchorReport,
   parseLatestCoachSummary,
-  parseEmploymentMessages, parseRecruitmentMessages, buildInterviewReminderPreview, interviewReminderSourceFingerprint, reviewWeekFor, readVersionedCoachRankingRows, readVerifiedCoachInstances, coachCalendarFingerprint, assertCoachRankingRevision, parseWeeklyCoachRotation, countCoachReviews, coachReviewReminder, structuredAssessmentSummary, structuredAssessmentForCandidate, centralFeishuOpenId, isVerifiedLiveCenterContact, assessmentSubmissionFor, recruitmentCycleMonthForDate, recruitmentCycleRange, lifecycleReminderWindow, extractAnchorEvaluation, verifiedAnchorEvidence, feishuDocumentLink
+  parseEmploymentMessages, parseRecruitmentMessages, activeChatMessages, readCompleteMessageReactions, buildInterviewReminderPreview, interviewReminderSourceFingerprint, reviewWeekFor, readVersionedCoachRankingRows, readVerifiedCoachInstances, coachCalendarFingerprint, assertCoachRankingRevision, parseWeeklyCoachRotation, countCoachReviews, coachReviewReminder, structuredAssessmentSummary, structuredAssessmentForCandidate, centralFeishuOpenId, isVerifiedLiveCenterContact, assessmentSubmissionFor, recruitmentCycleMonthForDate, recruitmentCycleRange, lifecycleReminderWindow, extractAnchorEvaluation, verifiedAnchorEvidence, feishuDocumentLink
 } from './lifecycle-engine.mjs';
 import { frameHeadersForHub } from './frame-policy.mjs';
 import { createCalendarUserReader } from './calendar-user-reader.mjs';
@@ -275,18 +275,8 @@ async function feishuPost(path, body, {token: suppliedToken} = {}) {
   return payload.data || {};
 }
 async function getMessageReactions(messageIds) {
-  const byMessage = new Map();
-  for (let index = 0; index < messageIds.length; index += 20) {
-    const ids = messageIds.slice(index, index + 20).filter(Boolean);
-    if (!ids.length) continue;
-    const data = await feishuPost('/im/v1/messages/reactions/batch_query?user_id_type=open_id', {
-      queries:ids.map(message_id => ({message_id})), page_size_per_message:10
-    });
-    const counts = new Map((data.success_msg_reaction_counts || []).map(item => [item.message_id, (item.reaction_count || []).map(row => ({reactionType:row.reaction_type,count:Number(row.count || 0)}))]));
-    const details = new Map((data.success_msg_reaction_details || []).map(item => [item.message_id, (item.message_reaction_items || []).map(row => ({emojiType:row.emoji_type,actionTime:row.action_time,operatorId:row.operator?.operator_id || row.operator?.open_id || row.operator?.id || ''}))]));
-    ids.forEach(id => byMessage.set(id, {counts:counts.get(id) || [],details:details.get(id) || []}));
-  }
-  return byMessage;
+  return readCompleteMessageReactions(messageIds,body=>
+    feishuPost('/im/v1/messages/reactions/batch_query?user_id_type=open_id',body));
 }
 async function cached(key, ttl, loader) {
   const hit = feishuCache.get(key);
@@ -324,7 +314,7 @@ function messageResources(value) {
 async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
   const source = feishuChats[sourceKey];
   if (!source) throw new FeishuError('未知的群聊数据源。', 404, 'unknown_chat_source');
-  const requested = Math.min(500, Math.max(1, Number(limit) || 20));
+  const requested = Math.min(1000, Math.max(1, Number(limit) || 20));
   const startTime = Math.max(0, Number(timeRange.startTime || timeRange.start_time) || 0);
   const endTime = Math.max(0, Number(timeRange.endTime || timeRange.end_time) || 0);
   const cacheKey=`chat:${sourceKey}:${requested}:${startTime}:${endTime}`;
@@ -343,12 +333,13 @@ async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
       truncated = Boolean(data.has_more);
       if (!data.has_more || !pageToken || items.length >= requested) break;
     }
+    const activeItems = activeChatMessages(items.slice(0, requested));
     let reactions = new Map(); let reactionStatus = sourceKey === 'recruitment' ? '待读取' : '不适用'; let reactionFailure = '';
     if (sourceKey === 'recruitment') {
-      try { reactions = await getMessageReactions(items.slice(0, requested).map(item => item.message_id)); reactionStatus = '已核验'; }
-      catch (error) { reactionStatus = '待授权'; reactionFailure = String(error?.message || '表情读取失败'); }
+      try { reactions = await getMessageReactions(activeItems.map(item => item.message_id)); reactionStatus = '已核验'; }
+      catch (error) { reactionStatus = error?.status===403 ? '待授权' : '待核验'; reactionFailure = String(error?.message || '表情读取失败'); }
     }
-    const messages = items.slice(0, requested).map(item => {
+    const messages = activeItems.map(item => {
       const content = parseMessageContent(item.body?.content);
       return {
         messageId: item.message_id,
@@ -364,7 +355,9 @@ async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
         appLink: item.message_position ? `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(item.chat_id || source.chatId)}&position=${encodeURIComponent(item.message_position)}` : ''
       };
     });
-    return { key: sourceKey, name: source.name, chatId: source.chatId, messages, truncated, fetchedAt: new Date().toISOString(), reactionStatus, reactionFailure };
+    return { key: sourceKey, name: source.name, chatId: source.chatId, messages,
+      sourceMessageCount:items.length, deletedMessageCount:items.length - activeItems.length,
+      truncated, fetchedAt: new Date().toISOString(), reactionStatus, reactionFailure };
   };
   // The send path bypasses the UI cache, then refreshes it after a complete
   // read. Otherwise a new submission inside the last 60 seconds can be missed.
@@ -1649,21 +1642,26 @@ async function addStructuredAssessments(candidates, cycleMonth, chatComplete) {
   return {candidates:updated,summary:chatComplete&&cycleEntries.length?summary:null,status};
 }
 async function refreshRecruitmentLifecycle(targetDate) {
-  const endTime = Math.ceil(Date.now() / 1000);
-  const startTime = endTime - 60 * 24 * 60 * 60;
   const cycleMonth=recruitmentCycleMonthForDate(targetDate);
+  const cycle=recruitmentCycleRange(cycleMonth);
   const [chatResult, coachResult, employmentResult, calendarResult] = await Promise.allSettled([
-    getChatMessages('recruitment', 500, {startTime,endTime}),
+    getChatMessages('recruitment', 1000, cycle),
     getDocument('coach'),
-    getChatMessages('coaching', 500, {startTime,endTime}),
-    readRecruitmentCalendar(recruitmentCycleRange(cycleMonth))
+    getChatMessages('coaching', 1000, cycle),
+    readRecruitmentCalendar(cycle)
   ]);
   if (chatResult.status === 'rejected') throw chatResult.reason;
   const parsed = parseRecruitmentMessages(chatResult.value.messages || [], {reviewerOpenId:recruitmentReviewerOpenId});
   const employment = employmentResult.status === 'fulfilled' ? parseEmploymentMessages(employmentResult.value.messages || [], {reviewerOpenId:recruitmentReviewerOpenId}) : {candidates:[],sourceDate:''};
   const merged = mergeRecruitmentCandidates(parsed.candidates, supplementalEmploymentCandidates(employment.candidates));
   const assessment=await addStructuredAssessments(merged,cycleMonth,!chatResult.value.truncated);
-  const candidates=assessment.candidates;
+  const calendar=calendarResult.status==='fulfilled' ? calendarResult.value : {events:{},status:'待核验：正式面试日历无法读取，当前群聊记录不冒充正式日历。'};
+  const linked=linkVerifiedRecruitmentCalendar(assessment.candidates,calendar.events,parsed.submissionMessageCounts,{
+    sourceReady:calendar.status.startsWith('已连接：') && !chatResult.value.truncated && Boolean(chatResult.value.messages?.length),
+    advanceStage:Boolean(recruitmentReviewerOpenId) && chatResult.value.reactionStatus==='已核验'
+      && employmentResult.status==='fulfilled' && !employmentResult.value.truncated,
+  });
+  const candidates=linked.candidates;
   const summary = coachResult.status === 'fulfilled' ? parseLatestCoachSummary(coachResult.value.content) : null;
   const sourceDate = [parsed.sourceDate, summary?.date, employment.sourceDate].filter(Boolean).sort().at(-1) || '';
   const funnel = {...parsed.funnel,
@@ -1673,25 +1671,20 @@ async function refreshRecruitmentLifecycle(targetDate) {
     assessmentConflictCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount+assessment.summary.conflictCount>0 ? assessment.summary.conflictCount : null,
     supplementalAssessmentReportedCount:candidates.filter(item => item.inSubmissionCohort && item.assessmentReported).length,
   };
-  const calendar=calendarResult.status==='fulfilled' ? calendarResult.value : {events:{},status:'待核验：正式面试日历无法读取，当前群聊记录不冒充正式日历。'};
   const interviewEvents=structuredClone(parsed.interviewEvents || {});
   Object.entries(calendar.events || {}).forEach(([date,items]) => {interviewEvents[date]=[...(interviewEvents[date]||[]),...items]});
-  if (calendar.status.startsWith('已连接：') && !chatResult.value.truncated) {
-    const cohort=new Set(parsed.cohortNames);
-    const matched=new Set();
-    Object.values(calendar.events).flat().forEach(event=>{
-      const names=[...cohort].filter(name=>String(event.name||'').includes(name));
-      if (names.length===1) matched.add(names[0]);
-    });
-    funnel.interviewScheduledCount=matched.size;
-  } else funnel.interviewScheduledCount=null;
+  funnel.interviewScheduledCount=linked.matchedCount;
+  funnel.interviewScheduledPendingCount=linked.pendingCount;
   const snapshot = {
     schemaVersion: 1,
     module: 'recruitment',
     targetDate,
     generatedAt: new Date().toISOString(),
     sourceDate,
-    status: recruitmentReviewerOpenId && !chatResult.value.truncated ? lifecycleSourceStatus(sourceDate, targetDate) : 'partial',
+    status: recruitmentReviewerOpenId && chatResult.value.reactionStatus === '已核验' && !chatResult.value.truncated
+      && employmentResult.status === 'fulfilled' && !employmentResult.value.truncated
+      && calendar.status.startsWith('已连接：') && linked.pendingCount === 0
+      ? lifecycleSourceStatus(sourceDate, targetDate) : 'partial',
     candidates,
     cohortNames: parsed.cohortNames,
     submissionMessageCounts:parsed.submissionMessageCounts,
@@ -1704,13 +1697,15 @@ async function refreshRecruitmentLifecycle(targetDate) {
     assessmentStatus:assessment.status,
     interviewEvents,
     coverage: {
-      chatMessages: chatResult.value.messages?.length || 0,
+      chatMessages: chatResult.value.sourceMessageCount ?? chatResult.value.messages?.length ?? 0,
+      deletedMessages: chatResult.value.deletedMessageCount ?? 0,
       capped: Boolean(chatResult.value.truncated),
       reactionStatus:recruitmentReviewerOpenId ? (chatResult.value.reactionStatus || '待核验') : '待配置审查人身份',
       reactionFailure:chatResult.value.reactionFailure || '',
       coachDocument: coachResult.status === 'fulfilled',
       employmentStatus:employmentResult.status === 'fulfilled' ? '已读取' : '待授权',
-      employmentMessages:employmentResult.status === 'fulfilled' ? employmentResult.value.messages?.length || 0 : null,
+      employmentMessages:employmentResult.status === 'fulfilled' ? employmentResult.value.sourceMessageCount ?? employmentResult.value.messages?.length ?? 0 : null,
+      employmentCapped:employmentResult.status === 'fulfilled' ? Boolean(employmentResult.value.truncated) : null,
       failures: [
         ...(coachResult.status === 'rejected' ? [String(coachResult.reason?.message || '教练日报读取失败')] : []),
         ...(employmentResult.status === 'rejected' ? [String(employmentResult.reason?.message || 'WIS直播战队日报读取失败')] : []),
@@ -1749,8 +1744,8 @@ async function readRecruitmentCalendar(cycle) {
 async function recruitmentCycleSnapshot(month,{fresh=false}={}) {
   const cycle = recruitmentCycleRange(month);
   const [chatResult, employmentResult, calendarResult] = await Promise.allSettled([
-    getChatMessages('recruitment', 500, {...cycle,fresh}),
-    getChatMessages('coaching', 500, cycle),
+    getChatMessages('recruitment', 1000, {...cycle,fresh}),
+    getChatMessages('coaching', 1000, cycle),
     readRecruitmentCalendar(cycle),
   ]);
   if (chatResult.status === 'rejected') throw chatResult.reason;
@@ -1759,7 +1754,13 @@ async function recruitmentCycleSnapshot(month,{fresh=false}={}) {
   const employment = employmentResult.status === 'fulfilled' ? parseEmploymentMessages(employmentResult.value.messages || [], {reviewerOpenId:recruitmentReviewerOpenId}) : {candidates:[],sourceDate:''};
   const merged = mergeRecruitmentCandidates(parsed.candidates, supplementalEmploymentCandidates(employment.candidates));
   const assessment=await addStructuredAssessments(merged,cycle.month,!chat.truncated);
-  const candidates=assessment.candidates;
+  const calendar = calendarResult.status === 'fulfilled' ? calendarResult.value : {events:{},status:`待核验：正式面试日历读取失败（${truncateForModel(calendarResult.reason?.message || '权限不足', 120)}）；当前群聊记录不冒充正式日历。`};
+  const linked=linkVerifiedRecruitmentCalendar(assessment.candidates,calendar.events,parsed.submissionMessageCounts,{
+    sourceReady:calendar.status.startsWith('已连接：') && !chat.truncated && Boolean(chat.messages?.length),
+    advanceStage:Boolean(recruitmentReviewerOpenId) && chat.reactionStatus==='已核验'
+      && employmentResult.status==='fulfilled' && !employmentResult.value.truncated,
+  });
+  const candidates=linked.candidates;
   const funnel = {...parsed.funnel,
     hiredCount:candidates.filter(item => item.inSubmissionCohort && item.stage === 'hired').length,
     assessmentPassedCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount>0 ? assessment.summary.passedCount : null,
@@ -1767,23 +1768,18 @@ async function recruitmentCycleSnapshot(month,{fresh=false}={}) {
     assessmentConflictCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount+assessment.summary.conflictCount>0 ? assessment.summary.conflictCount : null,
     supplementalAssessmentReportedCount:candidates.filter(item => item.inSubmissionCohort && item.assessmentReported).length,
   };
-  const calendar = calendarResult.status === 'fulfilled' ? calendarResult.value : {events:{},status:`待核验：正式面试日历读取失败（${truncateForModel(calendarResult.reason?.message || '权限不足', 120)}）；当前群聊记录不冒充正式日历。`};
   const interviewEvents = structuredClone(parsed.interviewEvents || {});
   Object.entries(calendar.events || {}).forEach(([date, items]) => { interviewEvents[date] = [...(interviewEvents[date] || []), ...items]; });
-  if (calendar.status.startsWith('已连接：') && !chat.truncated) {
-    const cohort=new Set(parsed.cohortNames),matched=new Set();
-    Object.values(calendar.events).flat().forEach(event=>{
-      const names=[...cohort].filter(name=>String(event.name||'').includes(name));
-      if(names.length===1)matched.add(names[0]);
-    });
-    funnel.interviewScheduledCount=matched.size;
-  } else funnel.interviewScheduledCount=null;
+  funnel.interviewScheduledCount=linked.matchedCount;
+  funnel.interviewScheduledPendingCount=linked.pendingCount;
   return {
     schemaVersion:3,
     module:'recruitment',
     generatedAt:new Date().toISOString(),
     sourceDate:[parsed.sourceDate, employment.sourceDate].filter(Boolean).sort().at(-1) || '',
-    status:recruitmentReviewerOpenId && !chat.truncated && chat.reactionStatus === '已核验' && employmentResult.status === 'fulfilled' ? 'current' : 'partial',
+    status:recruitmentReviewerOpenId && !chat.truncated && chat.reactionStatus === '已核验'
+      && employmentResult.status === 'fulfilled' && !employmentResult.value.truncated
+      && calendar.status.startsWith('已连接：') && linked.pendingCount === 0 ? 'current' : 'partial',
     calendarStatus:calendar.status,
     assessmentStatus:assessment.status,
     cycle,
@@ -1796,7 +1792,7 @@ async function recruitmentCycleSnapshot(month,{fresh=false}={}) {
     interviewEvents,
     submittedCount:parsed.submittedCount,
     unmappedCount:candidates.filter(item => item.stage === 'unmapped').length,
-    coverage:{chatMessages:chat.messages?.length || 0,capped:Boolean(chat.truncated),reactionStatus:recruitmentReviewerOpenId ? (chat.reactionStatus || '待核验') : '待配置审查人身份',reactionFailure:chat.reactionFailure || '',employmentStatus:employmentResult.status === 'fulfilled' ? '已读取' : '待授权',employmentMessages:employmentResult.status === 'fulfilled' ? employmentResult.value.messages?.length || 0 : null,employmentFailure:employmentResult.status === 'rejected' ? String(employmentResult.reason?.message || 'WIS直播战队日报读取失败') : ''}
+    coverage:{chatMessages:chat.sourceMessageCount ?? chat.messages?.length ?? 0,deletedMessages:chat.deletedMessageCount ?? 0,capped:Boolean(chat.truncated),reactionStatus:recruitmentReviewerOpenId ? (chat.reactionStatus || '待核验') : '待配置审查人身份',reactionFailure:chat.reactionFailure || '',employmentStatus:employmentResult.status === 'fulfilled' ? '已读取' : '待授权',employmentMessages:employmentResult.status === 'fulfilled' ? employmentResult.value.sourceMessageCount ?? employmentResult.value.messages?.length ?? 0 : null,employmentCapped:employmentResult.status === 'fulfilled' ? Boolean(employmentResult.value.truncated) : null,employmentFailure:employmentResult.status === 'rejected' ? String(employmentResult.reason?.message || 'WIS直播战队日报读取失败') : ''}
   };
 }
 

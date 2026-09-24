@@ -49,14 +49,14 @@
         <div class="panel-head"><h2>当前提醒</h2><small id="reminderSource">按历史基线计算</small></div>
         <div class="alerts">
           <div class="alert ok"><strong id="alertReview">待核验</strong><span>待审核</span></div>
-          <div class="alert warn"><strong id="alertFeedback">3</strong><span>待面评</span></div>
-          <div class="alert"><strong id="alertResume">7</strong><span id="alertResumeLabel">8 月 13 日新增简历</span></div>
+          <div class="alert warn"><strong id="alertFeedback">待核验</strong><span>待面评</span></div>
+          <div class="alert"><strong id="alertResume">待核验</strong><span id="alertResumeLabel">最近送审记录待读取</span></div>
         </div>
       </article>
       <article class="panel">
         <div class="panel-head"><h2>恢复口径</h2><small>已固化</small></div>
         <div class="rules">
-          <div class="rule"><i></i><span>正式面试日历待授权；当前仅展示授权群聊中明确记录的面试信息。</span></div>
+          <div class="rule"><i></i><span id="calendarCoverageRule">正式面试日历来源待核验；群面评与正式日历分别展示。</span></div>
           <div class="rule"><i></i><span>未匹配本周期送审姓名的面评和 Offer 单独保留，待身份核验，不计入送审漏斗。</span></div>
           <div class="rule"><i></i><span>初审仅按指定审核人在送审消息上的 OK / No 计数，不从面评或 Offer 反推。</span></div>
         </div>
@@ -156,24 +156,36 @@
     const tagClass=s=>s.includes('不通过')?'red':s.includes('已入职')||s.includes('通过')?'green':s.includes('待')?'amber':'blue';
     function applyAutomaticHire(candidate){ return candidate; }
     candidates=candidates.map(applyAutomaticHire);
+    function verifiedRecruitmentCoverage(snapshot){
+      const coverage=snapshot?.coverage||{};
+      const chatReady=coverage.capped===false&&Number.isSafeInteger(coverage.chatMessages)&&coverage.chatMessages>=0;
+      return {chatReady,reviewReady:chatReady&&coverage.reactionStatus==='已核验',
+        employmentReady:chatReady&&coverage.employmentStatus==='已读取'&&coverage.employmentCapped===false,
+        calendarReady:chatReady&&String(snapshot?.calendarStatus||'').startsWith('已连接：')};
+    }
     function renderKeyData(){
       if(!cohortReady){
-        for(const id of ['hiredCount','metricHired','metricAssessment','funnelHired','funnelAssessment','pendingHireCount','alertReview','alertFeedback','alertResume'])document.getElementById(id).textContent='待核验';
+        for(const id of ['metricCandidates','metricScreened','metricInterview','metricInterviewPassed','metricHired','metricAssessment',
+          'funnelCandidates','funnelScreened','funnelInterview','funnelInterviewPassed','funnelInterviewScheduled','funnelHired','funnelAssessment',
+          'conversionScreened','conversionInterview','conversionInterviewPassed','hiredCount','pendingHireCount','alertReview','alertFeedback','alertResume'])
+          document.getElementById(id).textContent='待核验';
         document.querySelector('#pendingHireDetail').textContent='等待本周期授权记录';
         document.querySelector('#alertResumeLabel').textContent='最近送审记录待读取';
-        document.querySelector('#reminderSource').textContent='来源待读取';return;
+        document.querySelector('#reminderSource').textContent='来源待读取';
+        document.querySelector('#calendarCoverageRule').textContent='正式面试日历来源待核验；群面评与正式日历分别展示。';return;
       }
+      const coverage=verifiedRecruitmentCoverage(lifecycleSnapshot);
       const pending=candidates.filter(candidate=>candidate.startDate&&legacyStage(candidate.stage)!=='hired');
       const hired=candidates.filter(candidate=>legacyStage(candidate.stage)==='hired');
-      document.querySelector('#hiredCount').textContent=`${hired.length} 人`;
-      document.querySelector('#metricHired').textContent=hired.length;
+      document.querySelector('#hiredCount').textContent=coverage.employmentReady?`${hired.length} 人`:'待核验';
+      document.querySelector('#metricHired').textContent=coverage.employmentReady?hired.length:'待核验';
       document.querySelector('#metricAssessment').textContent=lifecycleSnapshot?.funnel?.assessmentPassedCount??'待核验';
-      document.querySelector('#funnelHired').textContent=hired.length;
+      document.querySelector('#funnelHired').textContent=coverage.employmentReady?hired.length:'待核验';
       document.querySelector('#funnelAssessment').textContent=lifecycleSnapshot?.funnel?.assessmentPassedCount??'待核验';
-      document.querySelector('#pendingHireCount').textContent=`${pending.length} 人`;
-      document.querySelector('#pendingHireDetail').textContent=pending.length?pending.map(candidate=>`${candidate.name} · 预计 ${candidate.startDate} · 实际到岗待核验`).join('；'):'暂无待入职主播';
-      document.querySelector('#alertReview').textContent=candidates.filter(candidate=>legacyStage(candidate.stage)==='unmapped').length;
-      document.querySelector('#alertFeedback').textContent=candidates.filter(candidate=>legacyStage(candidate.stage)==='pending_feedback').length;
+      document.querySelector('#pendingHireCount').textContent=coverage.chatReady?`${pending.length} 人`:'待核验';
+      document.querySelector('#pendingHireDetail').textContent=!coverage.chatReady?'招聘群记录尚未完整读取':pending.length?pending.map(candidate=>`${candidate.name} · 预计 ${candidate.startDate} · 实际到岗待核验`).join('；'):'暂无待入职主播';
+      document.querySelector('#alertReview').textContent=coverage.reviewReady?lifecycleSnapshot.funnel?.initialPendingCount??'待核验':'待核验';
+      document.querySelector('#alertFeedback').textContent=coverage.reviewReady?candidates.filter(candidate=>legacyStage(candidate.stage)==='pending_feedback').length:'待核验';
     }
     function renderCalendar(){
       const root=document.querySelector('#calendar');
@@ -205,8 +217,9 @@
       if(!cohortReady){document.querySelector('#board').textContent='本周期候选记录待读取。';return}
       const q=document.querySelector('#search').value.trim().toLowerCase();const src=document.querySelector('#sourceFilter').value,process=document.querySelector('#processFilter').value;
       const filtered=candidates.map((c,index)=>({...c,index,stage:legacyStage(c.stage)})).filter(c=>stages.some(stage=>stage.id===c.stage)&&(!src||c.source===src)&&(!process||(process==='fail'?String(c.status).includes('不通过'):!String(c.status).includes('不通过')))&&(!q||Object.values(c).flat(2).join(' ').toLowerCase().includes(q)));
+      const coverage=verifiedRecruitmentCoverage(lifecycleSnapshot);
       const unmapped=candidates.filter(c=>legacyStage(c.stage)==='unmapped').length;const note=document.querySelector('#unmappedNote');note.hidden=!unmapped;note.textContent=unmapped?`${unmapped} 名候选人的送审记录已计入周期人数，但当前授权消息中没有可核验的阶段结论；未将其伪造为“待审核”。`:'';
-      document.querySelector('#board').innerHTML=stages.map(s=>{const list=filtered.filter(c=>c.stage===s.id);return `<section class="lane ${s.progress?'progress':''}"><div class="lane-head"><span>${s.label}</span><span class="count">${list.length}</span></div><div class="cards">${list.length?list.map(c=>card(c,c.index)).join(''):'<div class="empty-lane">暂无候选人</div>'}</div></section>`}).join('');
+      document.querySelector('#board').innerHTML=stages.map(s=>{const list=filtered.filter(c=>c.stage===s.id);const laneReady=s.id==='hired'?coverage.employmentReady:coverage.reviewReady;return `<section class="lane ${s.progress?'progress':''}"><div class="lane-head"><span>${s.label}</span><span class="count">${laneReady?list.length:'待核验'}</span></div><div class="cards">${list.length?list.map(c=>card(c,c.index)).join(''):`<div class="empty-lane">${laneReady?'暂无候选人':'阶段来源待核验'}</div>`}</div></section>`}).join('');
       document.querySelectorAll('#board .card').forEach(el=>el.addEventListener('click',()=>openDetail(candidates[Number(el.dataset.index)])));
     }
     function openDetail(c){
@@ -355,23 +368,22 @@
     }
     function updateDynamicFunnel(snapshot){
       const facts=snapshot.funnel;
-      const verified=Boolean(facts)&&snapshot.coverage?.reactionStatus==='已核验'&&!snapshot.coverage?.capped;
-      const value=key=>facts?.[key]??'待核验';
-      metricCandidates.textContent=funnelCandidates.textContent=facts?.candidateCount??'待核验';
-      metricScreened.textContent=funnelScreened.textContent=value('initialPassedCount');
-      metricInterview.textContent=funnelInterview.textContent=facts?.groupEvaluatedCount??'待核验';
-      metricInterviewPassed.textContent=funnelInterviewPassed.textContent=facts?.groupPassedCount??'待核验';
-      metricAssessment.textContent=value('initialFailedCount');
-      alertReview.textContent=facts?.initialPendingCount??'待核验';
+      const coverage=verifiedRecruitmentCoverage(snapshot);
+      const reviewed=key=>coverage.reviewReady?(facts?.[key]??'待核验'):'待核验';
+      metricCandidates.textContent=funnelCandidates.textContent=coverage.chatReady?(facts?.candidateCount??'待核验'):'待核验';
+      metricScreened.textContent=funnelScreened.textContent=reviewed('initialPassedCount');
+      metricInterview.textContent=funnelInterview.textContent=reviewed('groupEvaluatedCount');
+      metricInterviewPassed.textContent=funnelInterviewPassed.textContent=reviewed('groupPassedCount');
+      alertReview.textContent=reviewed('initialPendingCount');
       const ratio=(a,b)=>b>0?`${(a/b*100).toFixed(1)}%`:'待核验';
-      conversionScreened.textContent=facts&&facts.initialPendingCount===0?ratio(facts.initialPassedCount,facts.candidateCount):'待核验';
-      conversionScreened.title=verified?'初审表情已核验':'已显示源表解析计数；表情核验仍待完成';
-      funnelInterviewScheduled.textContent=facts?.interviewScheduledCount??'待日历授权';
-      conversionInterview.textContent=facts?.interviewScheduledCount!=null?ratio(facts.interviewScheduledCount,facts.groupPassedCount):'待日历授权';
-      conversionInterviewPassed.textContent=facts?ratio(facts.groupPassedCount,facts.groupEvaluatedCount):'待核验';
+      conversionScreened.textContent=coverage.reviewReady&&facts?.initialPendingCount===0?ratio(facts.initialPassedCount,facts.candidateCount):'待核验';
+      conversionScreened.title=coverage.reviewReady?'指定审核人表情已完整核验':'指定审核人身份或表情来源待核验';
+      funnelInterviewScheduled.textContent=coverage.calendarReady?(facts?.interviewScheduledCount??'待核验'):'待日历核验';
+      conversionInterview.textContent=coverage.calendarReady&&coverage.reviewReady&&facts?.interviewScheduledCount!=null?ratio(facts.interviewScheduledCount,facts.groupPassedCount):'待核验';
+      conversionInterviewPassed.textContent=coverage.reviewReady&&facts?ratio(facts.groupPassedCount,facts.groupEvaluatedCount):'待核验';
       metricAssessment.textContent=funnelAssessment.textContent=facts?.assessmentPassedCount??'待核验';
       const unmatched=(snapshot.candidates||[]).filter(item=>item.inSubmissionCohort===false);
-      document.querySelector('#unmatchedHistory summary').textContent=`未匹配送审的面评 / Offer · ${unmatched.length} 名（不计入漏斗）`;
+      document.querySelector('#unmatchedHistory summary').textContent=`未匹配送审的面评 / Offer · ${coverage.chatReady?`${unmatched.length} 名`:'待核验'}（不计入漏斗）`;
       document.querySelector('#unmatchedRecords').innerHTML='<p>可能涉及跨期或姓名未匹配；没有身份依据时不合并。原记录与时间线完整保留。</p>'+unmatched.map((item,i)=>`<button class="card" data-unmatched="${i}"><b>${esc(item.name)}</b> · ${esc(item.date)}</button>`).join('');
       document.querySelectorAll('[data-unmatched]').forEach(button=>button.onclick=()=>openDetail(unmatched[Number(button.dataset.unmatched)]));
     }
@@ -381,23 +393,36 @@
       if(!snapshot.cycle&&recruitmentMonth.value!==defaultRecruitmentMonth())return;
       activeCycle=snapshot.cycle||activeCycle;recruitmentMonth.value=activeCycle.month;renderCycleLabel();
       mergeLifecycleCandidates(snapshot.candidates,activeCycle);
-      liveResumeCounts=snapshot.dailyCounts||{};
-      liveResumeNames=snapshot.dailyNames||{};
+      const coverage=verifiedRecruitmentCoverage(snapshot);
+      liveResumeCounts=coverage.chatReady?(snapshot.dailyCounts||{}):null;
+      liveResumeNames=coverage.chatReady?(snapshot.dailyNames||{}):{};
       interviewEvents=snapshot.interviewEvents||{};
-      calendarSourceStatus.textContent=snapshot.calendarStatus||'正式面试日历待授权；当前群聊记录不冒充正式日历。';
+      calendarSourceStatus.textContent=snapshot.calendarStatus||'正式面试日历来源待核验；群面评不冒充正式日历。';
       calendarPanelTitle.textContent=snapshot.calendarStatus?.startsWith('已连接：')?'正式面试日历 · 已连接':'面试日历 · 待核验';
+      document.querySelector('#calendarCoverageRule').textContent=snapshot.calendarStatus?.startsWith('已连接：')
+        ?`${snapshot.calendarStatus} 仅与本周期唯一送审姓名匹配的日程计入正式日历人数；群面评另行统计。`
+        :`${snapshot.calendarStatus||'正式面试日历来源待核验。'} 群面评与正式日历分别展示。`;
 
       const summary=snapshot.summary;
-      const latestCount=summary?.yesterdaySubmitted??liveResumeCounts[snapshot.sourceDate]??0;
+      const latestCount=coverage.chatReady?(summary?.yesterdaySubmitted??liveResumeCounts?.[snapshot.sourceDate]??0):'待核验';
       alertResume.textContent=latestCount;
-      alertResumeLabel.textContent=summary?.yesterdaySubmitted!=null?'昨日新增简历':`${String(snapshot.sourceDate||'最新').slice(5).replace('-','月')} 日新增简历`;
+      alertResumeLabel.textContent=coverage.chatReady?(summary?.yesterdaySubmitted!=null?'昨日新增简历':`${String(snapshot.sourceDate||'最新').slice(5).replace('-','月')} 日新增简历`):'最近送审记录待完整读取';
       reminderSource.textContent=`来源最新 ${snapshot.sourceDate||'待核验'}`;
       snapshotBadge.textContent=`最近更新 · ${formatChinaTime(snapshot.generatedAt)}`;
       renderKeyData();renderCalendar();renderResumeTrend();renderBoard();updateDynamicFunnel(snapshot);renderAssessment();
     }
     async function loadRecruitmentCycle(){
-      const month=recruitmentMonth.value||defaultRecruitmentMonth();cohortReady=false;liveResumeCounts=null;candidates=[];lifecycleSnapshot=null;renderKeyData();renderResumeTrend();renderBoard();renderAssessment();activeCycle=cycleForMonth(month);renderCycleLabel();stateDot.className='state-dot stale';refreshTitle.textContent='正在读取所选招聘周期…';
-      try{const response=await fetch(`${lifecycleBase()}/api/lifecycle/recruitment-cycle?month=${encodeURIComponent(month)}`,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(25000)}),payload=await response.json();if(!response.ok||!payload?.ok)throw new Error(payload?.error||'招聘周期读取失败');applyLifecycleSnapshot(payload.data);reminderSource.textContent=`招聘周期 ${activeCycle.startDate} — ${activeCycle.endDate}（不含结束日）`;refreshTitle.textContent='所选招聘周期已读取';const reactions=payload.data.coverage?.reactionStatus||'待核验',employment=payload.data.coverage?.employmentStatus||'待授权';refreshMeta.textContent=`已读取 ${payload.data.coverage?.chatMessages||0} 条招聘群授权消息；OK/No 表情 ${reactions}；战队日报入职 ${employment}，考核结论 ${payload.data.assessmentStatus||'待核验'}；送审 ${payload.data.submittedCount||0} 人次；周期送审候选人 ${payload.data.funnel?.candidateCount??'待核验'} 名；未匹配送审 ${payload.data.funnel?.unmatchedCount??'待核验'} 名单列；${payload.data.unmappedCount?`${payload.data.unmappedCount} 名结果待核验`:'已映射可核验阶段'}。`;stateDot.className=reactions==='已核验'?'state-dot current':'state-dot stale'}catch(error){stateDot.className='state-dot error';refreshTitle.textContent='所选招聘周期读取失败';refreshMeta.textContent=`${error.message}；未把缺失数据记为 0。`}}
+      const month=recruitmentMonth.value||defaultRecruitmentMonth();cohortReady=false;liveResumeCounts=null;liveResumeNames={};interviewEvents={};candidates=[];lifecycleSnapshot=null;renderKeyData();renderResumeTrend();renderBoard();renderAssessment();activeCycle=cycleForMonth(month);renderCycleLabel();renderCalendar();calendarSourceStatus.textContent='正式面试日历来源待读取。';calendarPanelTitle.textContent='面试日历 · 待核验';stateDot.className='state-dot stale';refreshTitle.textContent='正在读取所选招聘周期…';
+      try{
+        const response=await fetch(`${lifecycleBase()}/api/lifecycle/recruitment-cycle?month=${encodeURIComponent(month)}`,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(25000)}),payload=await response.json();
+        if(!response.ok||!payload?.ok)throw new Error(payload?.error||'招聘周期读取失败');
+        applyLifecycleSnapshot(payload.data);reminderSource.textContent=`招聘周期 ${activeCycle.startDate} — ${activeCycle.endDate}（不含结束日）`;refreshTitle.textContent='所选招聘周期已读取';
+        const scope=verifiedRecruitmentCoverage(payload.data),reactions=payload.data.coverage?.reactionStatus||'待核验';
+        const employment=scope.employmentReady?'已完整读取':payload.data.coverage?.employmentStatus==='已读取'?'已读取但完整性待核验':'待授权';
+        const unmapped=scope.reviewReady?(payload.data.unmappedCount?`${payload.data.unmappedCount} 名结果待核验`:'已映射可核验阶段'):'阶段结果待核验';
+        refreshMeta.textContent=`已读取 ${payload.data.coverage?.chatMessages??'待核验'} 条招聘群授权消息；OK/No 表情 ${reactions}；战队日报入职 ${employment}，考核结论 ${payload.data.assessmentStatus||'待核验'}；送审 ${scope.chatReady?payload.data.submittedCount??'待核验':'待核验'} 人次；周期送审候选人 ${scope.chatReady?payload.data.funnel?.candidateCount??'待核验':'待核验'} 名；未匹配送审 ${scope.chatReady?payload.data.funnel?.unmatchedCount??'待核验':'待核验'} 名单列；${unmapped}。`;
+        stateDot.className=scope.reviewReady&&scope.employmentReady&&scope.calendarReady?'state-dot current':'state-dot stale';
+      }catch(error){stateDot.className='state-dot error';refreshTitle.textContent='所选招聘周期读取失败';refreshMeta.textContent=`${error.message}；未把缺失数据记为 0。`}}
     function formatChinaTime(iso){if(!iso)return'—';const date=new Date(iso);return Number.isNaN(date.getTime())?'—':new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date)}
     function renderLifecycleStatus(status){
       const module=status?.modules?.recruitment,snapshot=lifecycleSnapshot||module,isCurrent=snapshot?.sourceDate===TODAY,summary=lifecycleSnapshot?.summary;
