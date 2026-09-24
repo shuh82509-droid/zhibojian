@@ -1,5 +1,5 @@
 import {createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual} from 'node:crypto';
-import {mkdir, readFile, rename, writeFile, rmdir} from 'node:fs/promises';
+import {mkdir, readFile, rename, open, unlink, rmdir} from 'node:fs/promises';
 import {dirname} from 'node:path';
 
 const requiredScopes = ['calendar:calendar:read', 'calendar:calendar.event:read', 'offline_access'];
@@ -45,8 +45,30 @@ export function createCalendarUserReader({appId, appSecret, calendarId, addition
   async function save(value) {
     await mkdir(dirname(storePath), {recursive:true, mode:0o700});
     const temp = `${storePath}.${randomBytes(8).toString('hex')}.tmp`;
-    await writeFile(temp, encrypt(value), {mode:0o600, flag:'wx'});
-    await rename(temp, storePath);
+    let created = false, renamed = false;
+    try {
+      const file = await open(temp, 'wx', 0o600);
+      created = true;
+      try {
+        await file.writeFile(encrypt(value), 'utf8');
+        await file.sync();
+      } finally { await file.close(); }
+      await rename(temp, storePath);
+      renamed = true;
+      // Refresh tokens rotate after one use. Do not return the new access token
+      // until both the encrypted file and its rename are durable on Linux.
+      if (process.platform !== 'win32') {
+        const directory = await open(dirname(storePath), 'r');
+        try { await directory.sync(); }
+        finally { await directory.close(); }
+      }
+    } catch (cause) {
+      if (created && !renamed) {
+        try { await unlink(temp); }
+        catch { /* Keep the original error; no API read may follow. */ }
+      }
+      throw cause;
+    }
   }
   // Never steal a stale lock: a crashed refresh may already have rotated the
   // one-use refresh token. Recovery must verify the original credential first.

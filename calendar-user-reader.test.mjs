@@ -7,10 +7,10 @@ import {join} from 'node:path';
 import {createCalendarUserReader} from './calendar-user-reader.mjs';
 
 const scope = 'calendar:calendar:read calendar:calendar.event:read offline_access';
-function setup(dir, fetchImpl, now = () => 1_000_000) {
+function setup(dir, fetchImpl, now = () => 1_000_000, encryptionKey = randomBytes(32).toString('base64')) {
   return createCalendarUserReader({appId:'cli_test',appSecret:'test_secret',calendarId:'test_calendar',expectedOpenId:'ou_expected',
     redirectUri:'https://example.com/fd-027340/live-center-workbench/api/lifecycle/calendar-auth/callback',
-    storePath:join(dir,'calendar-user.enc'),encryptionKey:randomBytes(32).toString('base64'),fetchImpl,now});
+    storePath:join(dir,'calendar-user.enc'),encryptionKey,fetchImpl,now});
 }
 function response(data, status = 200) { return {ok:status >= 200 && status < 300,status,json:async () => data}; }
 test('OAuth binds state to callback, verifies reader and stores only encrypted credentials', async () => {
@@ -108,6 +108,43 @@ test('只有忙闲权限或详情权限被拒绝时，不保存生产授权',asy
 });
 test('并行进程锁不会被当成过期文件删除或绕过',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'calendar-reader-test-'));try{const reader=setup(dir,async()=>{throw Error('不应换取令牌');}),attempt=reader.begin();await mkdir(join(dir,'calendar-user.enc.lock'));await assert.rejects(reader.complete({code:'test_code',state:attempt.state,cookieState:attempt.state}),{code:'calendar_authorization_busy'});}finally{await rm(dir,{recursive:true,force:true});}
+});
+test('rotated one-use token survives reader restart before another protected calendar read', async () => {
+  const dir = await mkdtemp(join(tmpdir(),'calendar-reader-restart-'));
+  const encryptionKey = randomBytes(32).toString('base64');
+  const usedRefreshTokens = [];
+  let clock = 1_000_000;
+  try {
+    const provider = async (url, options) => {
+      if (url.endsWith('/oauth/v3/token')) {
+        const body = new URLSearchParams(options.body);
+        if (body.get('grant_type') === 'refresh_token') {
+          const refreshToken = body.get('refresh_token');
+          usedRefreshTokens.push(refreshToken);
+          assert.equal(refreshToken,`refresh_${usedRefreshTokens.length}`);
+          const next = usedRefreshTokens.length + 1;
+          return response({code:0,access_token:`access_${next}`,refresh_token:`refresh_${next}`,expires_in:7200,refresh_token_expires_in:604800,scope});
+        }
+        return response({code:0,access_token:'access_1',refresh_token:'refresh_1',expires_in:7200,refresh_token_expires_in:604800,scope});
+      }
+      if (url.endsWith('/user_info')) return response({code:0,data:{open_id:'ou_expected'}});
+      if (url.endsWith('/test_calendar')) return response({code:0,data:{calendar:{role:'reader'}}});
+      assert.equal(options.headers.Authorization,`Bearer access_${usedRefreshTokens.length + 1}`);
+      return response({code:0,data:{items:[]}});
+    };
+    let reader = setup(dir,provider,()=>clock,encryptionKey);
+    const attempt = reader.begin();
+    await reader.complete({code:'test_code',state:attempt.state,cookieState:attempt.state});
+    clock += 7_000_000;
+    await reader.get('/calendar/v4/calendars/test_calendar/events');
+    const encrypted = await readFile(join(dir,'calendar-user.enc'),'utf8');
+    assert.doesNotMatch(encrypted,/refresh_1|refresh_2|access_2/u);
+    reader = setup(dir,provider,()=>clock,encryptionKey);
+    assert.equal((await reader.status()).authorized,true);
+    clock += 7_000_000;
+    await reader.get('/calendar/v4/calendars/test_calendar/events');
+    assert.deepEqual(usedRefreshTokens,['refresh_1','refresh_2']);
+  } finally { await rm(dir,{recursive:true,force:true}); }
 });
 
 test('only coach readers explicitly allow bounded instance_view on their own calendar',async()=>{
