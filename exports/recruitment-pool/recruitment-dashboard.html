@@ -88,6 +88,22 @@
     </section>
 
     <details class="panel" id="unmatchedHistory" style="margin-bottom:18px;padding:18px"><summary>未匹配送审记录 · 待读取</summary><div id="unmatchedRecords"></div></details>
+    <section class="panel assessment-panel" aria-labelledby="interviewBindingHeading">
+      <div class="panel-head"><div><h2 id="interviewBindingHeading">面试结论 · 倪梦萍本人绑定</h2><small>一条送审消息、一条正式日历事件、一条本人面评帖</small></div><span class="tag amber" id="interviewBindingGate">待接入</span></div>
+      <p class="assessment-intro">仅倪梦萍本人 OA 登录并通过飞书实时身份核验后可办理。系统核对三项来源 ID 与明确帖末结论；日历标题或自由描述中的其他人名不保证机器识别，须本人核对是否只对应此候选人。本入口不等于两人入职考核确认。</p>
+      <div class="assessment-layout">
+        <form class="assessment-form" id="interviewBindingForm">
+          <label for="interviewBindingOption">已核验的三项来源<select id="interviewBindingOption" disabled><option value="">先读取本人身份与可信来源</option></select></label>
+          <div class="assessment-evidence" id="interviewBindingEvidence">送审、日历和面评帖尚未一一核验。</div>
+          <div class="assessment-evidence" id="interviewBindingLinks">原群消息链接待读取。</div>
+          <fieldset id="interviewBindingOutcomes" disabled><legend>本人面试结论</legend><label><input type="radio" name="interviewBindingOutcome" value="pass">通过</label><label><input type="radio" name="interviewBindingOutcome" value="fail">未通过</label></fieldset>
+          <label class="assessment-attest"><input id="interviewBindingAttest" type="checkbox" disabled>我确认面试实际发生，逐一核对三项原始来源均对应此唯一候选人、并非群面混用；所选结论与本人帖末结论一致。</label>
+          <button class="assessment-submit" id="interviewBindingSubmit" type="submit" disabled>绑定本人面评结论</button>
+          <div class="assessment-feedback" id="interviewBindingFeedback" role="status" aria-live="polite">尚未开放办理。</div>
+        </form>
+        <div class="assessment-audit" id="interviewBindingAudit" aria-label="本人面评绑定记录">待读取本周期绑定状态。</div>
+      </div>
+    </section>
     <section class="panel assessment-panel" aria-labelledby="assessmentHeading">
       <div class="panel-head"><div><h2 id="assessmentHeading">入职考核 · 本人结构化确认</h2><small>指定私聊未授权时的独立替代来源，不冒充私聊结论</small></div><span class="tag amber" id="assessmentGate">待接入</span></div>
       <p class="assessment-intro" id="assessmentScope">仅倪梦萍、刘慧迅本人在中枢登录且完成飞书账号核验后，可对本周期唯一送审候选人提交各自结论；两人结论一致才计入考核通过或未通过。当前入口默认关闭，不会代办、自动补录或读取指定私聊。</p>
@@ -176,11 +192,12 @@
       }
       const coverage=verifiedRecruitmentCoverage(lifecycleSnapshot);
       const pending=candidates.filter(candidate=>candidate.startDate&&legacyStage(candidate.stage)!=='hired');
-      const hired=candidates.filter(candidate=>legacyStage(candidate.stage)==='hired');
-      document.querySelector('#hiredCount').textContent=coverage.employmentReady?`${hired.length} 人`:'待核验';
-      document.querySelector('#metricHired').textContent=coverage.employmentReady?hired.length:'待核验';
+      const hiredCount=lifecycleSnapshot?.funnel?.hiredCount;
+      const hiredReady=coverage.employmentReady&&Number.isSafeInteger(hiredCount);
+      document.querySelector('#hiredCount').textContent=hiredReady?`${hiredCount} 人`:'归属待核验';
+      document.querySelector('#metricHired').textContent=hiredReady?hiredCount:'待核验';
       document.querySelector('#metricAssessment').textContent=lifecycleSnapshot?.funnel?.assessmentPassedCount??'待核验';
-      document.querySelector('#funnelHired').textContent=coverage.employmentReady?hired.length:'待核验';
+      document.querySelector('#funnelHired').textContent=hiredReady?hiredCount:'待核验';
       document.querySelector('#funnelAssessment').textContent=lifecycleSnapshot?.funnel?.assessmentPassedCount??'待核验';
       document.querySelector('#pendingHireCount').textContent=coverage.chatReady?`${pending.length} 人`:'待核验';
       document.querySelector('#pendingHireDetail').textContent=!coverage.chatReady?'招聘群记录尚未完整读取':pending.length?pending.map(candidate=>`${candidate.name} · 预计 ${candidate.startDate} · 实际到岗待核验`).join('；'):'暂无待入职主播';
@@ -351,6 +368,101 @@
         assessmentFeedback.textContent=hasMine?'已读回本人结论；等待另一位负责人确认或处理冲突。':writeConfirmed?'写入已返回成功，但周期读回尚未核验；请稍后刷新，不要重复提交。':'结果仍未证实；请查看记录与负责人，不要盲目重试。';
       }
     });
+    let interviewBindingAccess={enabled:false,identityVerified:false,lock:{state:'blocked_unknown'},options:[],bindings:[]};
+    let interviewBindingSubmitting=false;
+    let interviewBindingRequest=0;
+    const interviewBindingForm=document.querySelector('#interviewBindingForm');
+    const interviewBindingOption=document.querySelector('#interviewBindingOption');
+    const interviewBindingFeedback=document.querySelector('#interviewBindingFeedback');
+    function selectedInterviewBinding(){return interviewBindingOption.value
+      ?interviewBindingAccess.options?.find(item=>item.sourceFingerprint===interviewBindingOption.value)||null:null}
+    function renderInterviewBinding(){
+      const access=interviewBindingAccess,options=Array.isArray(access.options)?access.options:[];
+      const canAct=access.enabled&&access.identityVerified&&access.lock?.state==='free'
+        &&access.cycleMonth===(recruitmentMonth.value||defaultRecruitmentMonth())&&!interviewBindingSubmitting;
+      const old=interviewBindingOption.value;
+      interviewBindingOption.innerHTML='<option value="">请选择已核验的候选人和面评帖</option>'+options.map(item=>
+        `<option value="${esc(item.sourceFingerprint)}">${esc(item.candidateName)} · ${esc(item.calendarDate)} · 本人帖 ${esc(item.postDate)}</option>`).join('');
+      if(old&&options.some(item=>item.sourceFingerprint===old))interviewBindingOption.value=old;
+      const selected=selectedInterviewBinding();
+      const chosen=interviewBindingForm.querySelector('input[name="interviewBindingOutcome"]:checked')?.value;
+      const matching=Boolean(selected&&chosen===selected.postOutcome);
+      const attest=document.querySelector('#interviewBindingAttest');
+      interviewBindingOption.disabled=!canAct||!options.length;
+      document.querySelector('#interviewBindingOutcomes').disabled=!canAct||!selected;
+      attest.disabled=!canAct||!selected;
+      document.querySelector('#interviewBindingSubmit').disabled=!canAct||!selected||!matching||!attest.checked;
+      document.querySelector('#interviewBindingGate').textContent=!access.enabled?'待接入':!access.identityVerified?'仅倪梦萍本人':access.lock?.state!=='free'?'记录锁待核验':!options.length?'来源待核验':'本人可办理';
+      document.querySelector('#interviewBindingEvidence').textContent=selected
+        ?`候选人 ${selected.candidateName}；送审 ${selected.submissionDate}（${selected.submissionMessageId}）；正式日历 ${selected.calendarDate} ${selected.calendarTitle}（${selected.calendarEventId}）；本人帖 ${selected.postDate}（${selected.postMessageId}）。帖末明确结论：${selected.postOutcome==='pass'?'通过':'未通过'}。帖文摘录：${selected.postExcerpt}`
+        :'仅展示当前招聘周期内唯一送审、初审 OK、正式日历唯一匹配、倪梦萍本人发布且未撤回的面评帖；正文及日历其他人名须本人核对。';
+      const safeLink=value=>/^https:\/\/applink\.feishu\.cn\/client\/chat\/open\?/u.test(String(value||''))?value:'';
+      document.querySelector('#interviewBindingLinks').innerHTML=selected
+        ?[['查看送审原消息',safeLink(selected.submissionLink)],['查看本人面评原帖',safeLink(selected.postLink)]]
+          .filter(([,url])=>url).map(([label,url])=>`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>`).join(' · ')||'原群消息未提供直达链接，请按上方消息 ID 在飞书核对。'
+        :'请选择候选人后核对原群消息。';
+      const bindings=Array.isArray(access.bindings)?access.bindings:[];
+      document.querySelector('#interviewBindingAudit').innerHTML=bindings.length?bindings.map(item=>
+        `<div class="assessment-row"><b>送审消息 ${esc(item.submissionMessageId||'待核验')}</b><small class="assessment-status ${item.status==='verified'?'done':'conflict'}">${esc(item.status==='verified'?`已绑定 · ${item.outcome==='pass'?'通过':'未通过'}`:item.reason||'来源待核验')}</small><small>${esc(item.recordId||'')} ${esc(item.at||'')}</small></div>`).join('')
+        :'<div class="assessment-row">本周期尚无本人结构化面评绑定记录。</div>';
+      if(!interviewBindingSubmitting)interviewBindingFeedback.textContent=!access.enabled?'本人面评绑定尚未启用。'
+        :!access.identityVerified?'当前登录人不是倪梦萍本人，或飞书账号实时核验未通过。'
+        :access.lock?.state!=='free'?'绑定记录锁状态待核验，暂不办理。'
+        :!options.length?'当前没有三项来源均唯一且完整的面评可办理；未把缺失结果记为不通过。'
+        :selected&&chosen&&!matching?'所选结论与本人面评帖末结论不一致，不能提交。'
+        :'请核对三项来源，选择本人结论并确认。';
+    }
+    async function loadInterviewBindingAccess(){
+      const month=recruitmentMonth.value||defaultRecruitmentMonth();
+      const request=++interviewBindingRequest;
+      try{
+        const response=await fetch(`${lifecycleBase()}/api/lifecycle/interview-binding?month=${encodeURIComponent(month)}`,
+          {credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(25000)});
+        const payload=await response.json();
+        if(request!==interviewBindingRequest||month!==(recruitmentMonth.value||defaultRecruitmentMonth()))return;
+        if(!response.ok||!payload?.ok)throw new Error(payload?.error||'本人面评绑定状态无法核验');
+        if(payload.identityVerified&&payload.cycleMonth!==month)throw new Error('本人面评绑定周期与当前页面不一致');
+        interviewBindingAccess=payload;
+      }catch(error){if(request!==interviewBindingRequest||month!==(recruitmentMonth.value||defaultRecruitmentMonth()))return;
+        interviewBindingAccess={enabled:false,identityVerified:false,lock:{state:'blocked_unknown'},options:[],bindings:[]};
+        interviewBindingFeedback.textContent=`${error.message||'来源读取失败'}；不自动重试写入。`}
+      renderInterviewBinding();
+    }
+    interviewBindingOption.addEventListener('change',()=>{
+      document.querySelector('#interviewBindingAttest').checked=false;
+      interviewBindingForm.querySelectorAll('input[name="interviewBindingOutcome"]').forEach(input=>input.checked=false);
+      renderInterviewBinding();
+    });
+    interviewBindingForm.addEventListener('change',renderInterviewBinding);
+    interviewBindingForm.addEventListener('submit',async event=>{
+      event.preventDefault();
+      const selected=selectedInterviewBinding(),outcome=interviewBindingForm.querySelector('input[name="interviewBindingOutcome"]:checked')?.value;
+      if(!selected||!interviewBindingAccess.enabled||!interviewBindingAccess.identityVerified
+        ||interviewBindingAccess.cycleMonth!==(recruitmentMonth.value||defaultRecruitmentMonth())
+        ||interviewBindingAccess.lock?.state!=='free'||outcome!==selected.postOutcome
+        ||!document.querySelector('#interviewBindingAttest').checked)return;
+      interviewBindingSubmitting=true;renderInterviewBinding();
+      interviewBindingFeedback.textContent='正在保存本人面评绑定；请勿重复提交。';
+      let recordId='';
+      try{
+        const response=await fetch(`${lifecycleBase()}/api/lifecycle/interview-binding`,{method:'POST',credentials:'same-origin',cache:'no-store',
+          headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest','Accept':'application/json'},
+          body:JSON.stringify({cycleMonth:interviewBindingAccess.cycleMonth,candidateName:selected.candidateName,
+            submissionMessageId:selected.submissionMessageId,calendarEventId:selected.calendarEventId,
+            postMessageId:selected.postMessageId,outcome,expectedSourceFingerprint:selected.sourceFingerprint}),
+          signal:AbortSignal.timeout(25000)});
+        const payload=await response.json();
+        if(!response.ok||!payload?.ok)throw new Error(payload?.error||'面评绑定结果不明');
+        recordId=payload.result?.recordId||'';
+      }catch(error){interviewBindingFeedback.textContent=`${error.message||'提交结果不明'}；先读回记录，不自动重试。`}
+      finally{
+        interviewBindingSubmitting=false;
+        await loadRecruitmentCycle();await loadInterviewBindingAccess();
+        const readBack=(interviewBindingAccess.bindings||[]).find(item=>item.recordId===recordId&&item.status==='verified');
+        interviewBindingFeedback.textContent=readBack?'已读回本人面评绑定，面试阶段按三项来源核验。'
+          :recordId?'写入成功但三项来源读回尚未核验；请勿重复提交。':'结果仍未证实；请查看记录，不要盲目重试。';
+      }
+    });
     function mergeLifecycleCandidates(updates,cycle=activeCycle){
       const merged=new Map();
       (updates||[]).forEach(update=>{
@@ -382,9 +494,11 @@
       conversionInterview.textContent=coverage.calendarReady&&coverage.reviewReady&&facts?.interviewScheduledCount!=null?ratio(facts.interviewScheduledCount,facts.groupPassedCount):'待核验';
       conversionInterviewPassed.textContent=coverage.reviewReady&&facts?ratio(facts.groupPassedCount,facts.groupEvaluatedCount):'待核验';
       metricAssessment.textContent=funnelAssessment.textContent=facts?.assessmentPassedCount??'待核验';
-      const unmatched=(snapshot.candidates||[]).filter(item=>item.inSubmissionCohort===false);
-      document.querySelector('#unmatchedHistory summary').textContent=`未匹配送审的面评 / Offer · ${coverage.chatReady?`${unmatched.length} 名`:'待核验'}（不计入漏斗）`;
-      document.querySelector('#unmatchedRecords').innerHTML='<p>可能涉及跨期或姓名未匹配；没有身份依据时不合并。原记录与时间线完整保留。</p>'+unmatched.map((item,i)=>`<button class="card" data-unmatched="${i}"><b>${esc(item.name)}</b> · ${esc(item.date)}</button>`).join('');
+      const employmentFacts=(snapshot.employmentFacts||[]).map(item=>({...item,
+        status:item.actualStartDate?'日报称已入职 · 送审归属待核验':'日报仅称考核通过 · 实际到岗待核验'}));
+      const unmatched=[...(snapshot.candidates||[]).filter(item=>item.inSubmissionCohort===false),...employmentFacts];
+      document.querySelector('#unmatchedHistory summary').textContent=`未归属送审的群记录及日报事实 · ${coverage.chatReady?`${unmatched.length} 条`:'待核验'}（不计入漏斗）`;
+      document.querySelector('#unmatchedRecords').innerHTML='<p>战队日报没有精确送审消息 ID，独立展示，不按显示姓名并入当前周期；考核通过不等于已到岗。</p>'+unmatched.map((item,i)=>`<button class="card" data-unmatched="${i}"><b>${esc(item.name)}</b> · ${esc(item.date)} · ${esc(item.status||'归属待核验')}</button>`).join('');
       document.querySelectorAll('[data-unmatched]').forEach(button=>button.onclick=()=>openDetail(unmatched[Number(button.dataset.unmatched)]));
     }
     function applyLifecycleSnapshot(snapshot){
@@ -420,8 +534,9 @@
         const scope=verifiedRecruitmentCoverage(payload.data),reactions=payload.data.coverage?.reactionStatus||'待核验';
         const employment=scope.employmentReady?'已完整读取':payload.data.coverage?.employmentStatus==='已读取'?'已读取但完整性待核验':'待授权';
         const unmapped=scope.reviewReady?(payload.data.unmappedCount?`${payload.data.unmappedCount} 名结果待核验`:'已映射可核验阶段'):'阶段结果待核验';
-        refreshMeta.textContent=`已读取 ${payload.data.coverage?.chatMessages??'待核验'} 条招聘群授权消息；OK/No 表情 ${reactions}；战队日报入职 ${employment}，考核结论 ${payload.data.assessmentStatus||'待核验'}；送审 ${scope.chatReady?payload.data.submittedCount??'待核验':'待核验'} 人次；周期送审候选人 ${scope.chatReady?payload.data.funnel?.candidateCount??'待核验':'待核验'} 名；未匹配送审 ${scope.chatReady?payload.data.funnel?.unmatchedCount??'待核验':'待核验'} 名单列；${unmapped}。`;
-        stateDot.className=scope.reviewReady&&scope.employmentReady&&scope.calendarReady?'state-dot current':'state-dot stale';
+        refreshMeta.textContent=`已读取 ${payload.data.coverage?.chatMessages??'待核验'} 条招聘群授权消息；OK/No 表情 ${reactions}；战队日报 ${employment}，独立事实 ${(payload.data.employmentFacts||[]).length} 条、送审归属待核验；考核结论 ${payload.data.assessmentStatus||'待核验'}；送审 ${scope.chatReady?payload.data.submittedCount??'待核验':'待核验'} 人次；周期送审候选人 ${scope.chatReady?payload.data.funnel?.candidateCount??'待核验':'待核验'} 名；未匹配送审 ${scope.chatReady?payload.data.funnel?.unmatchedCount??'待核验':'待核验'} 名单列；${unmapped}。`;
+        stateDot.className=scope.reviewReady&&scope.employmentReady&&scope.calendarReady
+          &&(payload.data.employmentFacts||[]).length===0?'state-dot current':'state-dot stale';
       }catch(error){stateDot.className='state-dot error';refreshTitle.textContent='所选招聘周期读取失败';refreshMeta.textContent=`${error.message}；未把缺失数据记为 0。`}}
     function formatChinaTime(iso){if(!iso)return'—';const date=new Date(iso);return Number.isNaN(date.getTime())?'—':new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date)}
     function renderLifecycleStatus(status){
@@ -458,7 +573,7 @@
       }catch(error){stateDot.className='state-dot error';refreshTitle.textContent='本次更新失败，已保留旧招聘档案';refreshMeta.textContent=error.message||'请稍后重试'}
       finally{refreshButton.disabled=false;refreshButton.textContent='立即更新'}
     }
-    recruitmentMonth.addEventListener('change',loadRecruitmentCycle);refreshButton.onclick=manualRefresh;renderCycleLabel();loadLifecycle();loadRecruitmentCycle();loadAssessmentAccess();setInterval(()=>{loadLifecycle();loadRecruitmentCycle();loadAssessmentAccess()},5*60*1000);
+    recruitmentMonth.addEventListener('change',()=>{loadRecruitmentCycle();loadInterviewBindingAccess()});refreshButton.onclick=manualRefresh;renderCycleLabel();loadLifecycle();loadRecruitmentCycle();loadAssessmentAccess();loadInterviewBindingAccess();setInterval(()=>{loadLifecycle();loadRecruitmentCycle();loadAssessmentAccess();loadInterviewBindingAccess()},5*60*1000);
   </script>
   <script src="../../module-data.js" defer></script>
 </body>

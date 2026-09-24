@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+echo 'DEPRECATED_RECRUITMENT_OVERLAY: This overlay omits current Calendar modules. Build and verify a new full pinned candidate instead.' >&2
+exit 64
 
 archive="${1:?deployment archive is required}"
 target_date="${2:?target date is required}"

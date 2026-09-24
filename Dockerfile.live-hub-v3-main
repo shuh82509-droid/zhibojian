@@ -8,7 +8,10 @@ COPY calendar-auth-http.mjs /app/calendar-auth-http.mjs
 COPY coach-calendar-auth.mjs /app/coach-calendar-auth.mjs
 COPY frame-policy.mjs /app/frame-policy.mjs
 COPY lifecycle-engine.mjs /app/lifecycle-engine.mjs
+COPY interview-binding.mjs /app/interview-binding.mjs
 COPY lifecycle-reminder-lock.mjs /app/lifecycle-reminder-lock.mjs
+COPY durable-journal.mjs /app/durable-journal.mjs
+COPY reminder-gates.mjs /app/reminder-gates.mjs
 COPY container-entrypoint.sh /app/container-entrypoint.sh
 COPY exports/recruitment-pool/ /app/public/modules/recruitment/
 COPY exports/anchor-archives/ /app/public/modules/anchors/

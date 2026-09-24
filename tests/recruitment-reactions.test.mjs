@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import vm from 'node:vm';
-import {activeChatMessages,readCompleteMessageReactions,linkVerifiedRecruitmentCalendar,recruitmentCycleMonthForDate,recruitmentCycleRange} from '../lifecycle-engine.mjs';
+import {activeChatMessages,readCompleteMessageReactions,linkVerifiedRecruitmentCalendar,
+  linkRecruitmentCalendarAcrossBoundary,recruitmentCycleMonthForDate,recruitmentCycleRange,
+  recruitmentBoundaryCycleRange,parseRecruitmentMessages} from '../lifecycle-engine.mjs';
 
 const reaction=(operator_id,emoji_type,index)=>({operator:{operator_id},emoji_type,action_time:String(1700000000000+index)});
 const page=(messageId,items,{more=false,token='',count=items.length}={})=>({
@@ -49,6 +52,7 @@ const isolatedServerFunction=(name,nextName,context)=>{
   const start=serverSource.indexOf(`async function ${name}(`);
   const end=serverSource.indexOf(`\nasync function ${nextName}(`,start);
   assert.ok(start>=0&&end>start,`${name} source boundary must remain findable`);
+  context.createHash=createHash;
   return vm.runInNewContext(`${serverSource.slice(start,end)}\n${name}`,context);
 };
 
@@ -190,26 +194,82 @@ test('repeated cursors, missing cursors and overlapping message ids fail closed'
 test('background recruitment snapshot reads the full current cycle for both source chats and calendar',async()=>{
   const calls=[];
   const context={
-    recruitmentCycleMonthForDate,recruitmentCycleRange,
-    getChatMessages:async(key,limit,window)=>{calls.push({key,limit,window});return {messages:[],sourceMessageCount:0,deletedMessageCount:0,truncated:false,reactionStatus:'已核验'};},
+    recruitmentCycleMonthForDate,recruitmentCycleRange,recruitmentBoundaryCycleRange,
+    linkRecruitmentCalendarAcrossBoundary,feishuChats:{recruitment:{chatId:'oc_test'}},
+    getChatMessages:async(key,limit,window)=>{calls.push({key,limit,window});return {key,chatId:'oc_test',messages:[],sourceMessageCount:0,deletedMessageCount:0,truncated:false,reactionStatus:'已核验'};},
     getDocument:async()=>({content:''}),readRecruitmentCalendar:async window=>{calls.push({key:'calendar',window});return {events:{},status:'已连接：正式面试日历已读取 0 条详情事件。'};},
     parseRecruitmentMessages:()=>({candidates:[],funnel:{},interviewEvents:{},submissionMessageCounts:{},sourceDate:''}),
     parseEmploymentMessages:()=>({candidates:[],sourceDate:''}),mergeRecruitmentCandidates:()=>[],
     supplementalEmploymentCandidates:()=>[],addStructuredAssessments:async candidates=>({candidates,summary:null,status:'待核验'}),
-    linkVerifiedRecruitmentCalendar:candidates=>({candidates,matchedCount:0,pendingCount:0}),
+    linkVerifiedRecruitmentCalendar,
     parseLatestCoachSummary:()=>null,recruitmentReviewerOpenId:'ou_reviewer',lifecycleSourceStatus:()=> 'current',
     lifecycleSnapshotPath:()=>'/unused',writeJsonAtomic:async()=>{},structuredClone,Date,
+    readRecruitmentInterviewJournal:async()=>({schemaVersion:1,entries:[]}),
+    projectInterviewBindings:snapshot=>snapshot,chinaDateFor:()=> '2026-09-25',recruitmentCalendarId:'calendar_test',
+    interviewBindingEnabled:false,
   };
   const refresh=isolatedServerFunction('refreshRecruitmentLifecycle','readRecruitmentCalendar',context);
   await refresh('2026-09-24');
   const september=recruitmentCycleRange('2026-09');
   assert.deepEqual(calls.map(call=>call.key),['recruitment','coaching','calendar']);
-  assert.ok(calls.every(call=>JSON.stringify(call.window)===JSON.stringify(september)));
+  assert.ok(calls.every(call=>{const {fresh,...window}=call.window;return JSON.stringify(window)===JSON.stringify(september)}));
   assert.deepEqual(calls.slice(0,2).map(call=>call.limit),[1000,1000]);
   calls.length=0;
   await refresh('2026-09-25');
   const october=recruitmentCycleRange('2026-10');
-  assert.ok(calls.every(call=>JSON.stringify(call.window)===JSON.stringify(october)));
+  assert.ok(calls.every(call=>{const {fresh,...window}=call.window;return JSON.stringify(window)===JSON.stringify(october)}));
+});
+
+test('service reads the exact previous full cycle only for a first-day formal interview and rejects degraded source shapes',async()=>{
+  const start=serverSource.indexOf('function completeRecruitmentChatSource(');
+  const end=serverSource.indexOf('\nasync function readRecruitmentCalendar(',start);
+  assert.ok(start>=0&&end>start);
+  const range=recruitmentBoundaryCycleRange('2026-10');
+  const previousMessage={messageId:'om_sep23',chatId:'oc_recruitment',createdAt:'2026-09-23T01:00:00.000Z'};
+  const priorParsed={candidates:[submissionCandidate('周小雨',{sourceId:'om_sep23',date:'2026-09-23'})],
+    submissionMessageCounts:{周小雨:1}};
+  const current={key:'recruitment',chatId:'oc_recruitment',messages:[],sourceMessageCount:0,deletedMessageCount:0,truncated:false,
+    paginationIssue:'',reactionStatus:'已核验'};
+  const calendar={status:'已连接：正式面试日历已读取 1 条详情事件。',
+    events:{'2026-09-25':[calendarEvent('周小雨面试','cal_one')]}};
+  let prior={...current,messages:[previousMessage],sourceMessageCount:1},calls=[];
+  const context={feishuChats:{recruitment:{chatId:'oc_recruitment'}},recruitmentBoundaryCycleRange,
+    getChatMessages:async(key,limit,window)=>{calls.push({key,limit,window});return prior;},
+    parseRecruitmentMessages:()=>priorParsed,recruitmentReviewerOpenId:'ou_reviewer',
+    linkRecruitmentCalendarAcrossBoundary};
+  const link=vm.runInNewContext(`${serverSource.slice(start,end)}\nlinkRecruitmentCalendarWithBoundary`,context);
+  const options={fresh:true,advanceStage:true};
+  const verified=await link([], {submissionMessageCounts:{}},current,calendar,recruitmentCycleRange('2026-10'),options);
+  assert.equal(verified.boundary.status,'verified');
+  assert.equal(verified.carryCandidates.length,1);
+  assert.equal(calls.length,1);
+  assert.deepEqual(calls[0].key,'recruitment');
+  assert.equal(calls[0].limit,1000);
+  assert.equal(calls[0].window.startDate,range.previous.startDate);
+  assert.equal(calls[0].window.endDate,range.previous.endDate);
+  assert.equal(calls[0].window.fresh,true);
+  for(const degraded of [
+    {...prior,chatId:'oc_wrong'},
+    {...prior,messages:[{...previousMessage,chatId:'oc_wrong'}]},
+    {...prior,messages:[{...previousMessage,createdAt:'2026-09-24T16:00:00.000Z'}]},
+    {...prior,messages:[{...previousMessage,createdAt:'2026-09-25T01:00:00.000Z'}]},
+    {...prior,sourceMessageCount:2},
+    {...prior,truncated:true},
+    {...prior,reactionStatus:'待核验'},
+  ]){
+    prior=degraded;
+    const result=await link([], {submissionMessageCounts:{}},current,calendar,recruitmentCycleRange('2026-10'),options);
+    assert.equal(result.boundary.status,'pending');
+    assert.equal(result.carryCandidates.length,0);
+  }
+  prior={...current,messages:[previousMessage],sourceMessageCount:1};
+  const badCurrent=await link([], {submissionMessageCounts:{}},{...current,truncated:true},calendar,
+    recruitmentCycleRange('2026-10'),options);
+  assert.equal(badCurrent.boundary.status,'pending');
+  assert.equal(badCurrent.pendingCount,null,'an unreadable current source must not be converted to zero pending');
+  calls=[];
+  await link([], {submissionMessageCounts:{}},current,{status:calendar.status,events:{}},recruitmentCycleRange('2026-10'),options);
+  assert.equal(calls.length,0,'without a first-day event there is no prior-cycle chat request');
 });
 
 test('recruitment page shows pending review figures while reviewer identity is absent, but accepts a true zero',async()=>{
@@ -296,8 +356,8 @@ test('unverified reaction, prior date, negative review and higher-stage conclusi
   assert.match(negative.candidates[0].calendarScheduleStatus,/待核验/);
   const higher=linkVerifiedRecruitmentCalendar([submissionCandidate('李华',{stage:'interview_pass',sourceId:'om_target'})],events,counts,{sourceReady:true,advanceStage:true});
   assert.equal(higher.candidates[0].stage,'interview_pass');
-  assert.equal(higher.matchedCount,null);
-  assert.match(higher.candidates[0].calendarScheduleStatus,/待核验/);
+  assert.equal(higher.matchedCount,1);
+  assert.equal(higher.candidates[0].calendarEvidence.eventId,'cal_one');
   const early=linkVerifiedRecruitmentCalendar([target],{'2026-09-21':[calendarEvent('李华面试')]},counts,{sourceReady:true,advanceStage:true});
   assert.equal(early.matchedCount,null);
   assert.equal(early.candidates[0].stage,'initial_pass');
@@ -305,4 +365,89 @@ test('unverified reaction, prior date, negative review and higher-stage conclusi
   assert.equal(sourceAbsent.matchedCount,null);
   assert.equal(sourceAbsent.pendingCount,null);
   assert.equal(sourceAbsent.candidates[0].stage,'initial_pass');
+});
+
+test('first-day interview carries only a unique verified submission from the full previous cycle',()=>{
+  const range=recruitmentBoundaryCycleRange('2026-10');
+  assert.equal(range.date,'2026-09-25');
+  assert.equal(range.previous.startDate,'2026-08-25');
+  assert.equal(range.previous.endDate,'2026-09-25');
+  const prior={candidates:[
+    submissionCandidate('周小雨',{sourceId:'om_sep23',date:'2026-09-23'}),
+    submissionCandidate('林小满',{sourceId:'om_sep24',date:'2026-09-24'}),
+    submissionCandidate('陈小河',{sourceId:'om_aug25',date:'2026-08-25'}),
+  ],submissionMessageCounts:{周小雨:1,林小满:1,陈小河:1}};
+  const events={'2026-09-25':[calendarEvent('周小雨面试 · 14:00','cal_zhou')]};
+  const result=linkRecruitmentCalendarAcrossBoundary([],prior,events,{},
+    {boundaryDate:range.date,previousCycle:range.previous,currentSourceReady:true,previousSourceReady:true,advanceStage:true});
+  assert.equal(result.boundary.status,'verified');
+  assert.equal(result.matchedCount,1);
+  assert.deepEqual(result.carryCandidates.map(item=>item.name),['周小雨']);
+  assert.equal(result.carryCandidates[0].inSubmissionCohort,false);
+  assert.equal(result.carryCandidates[0].stage,'pending_feedback');
+  assert.equal(result.carryCandidates[0].submissionEvidence.sourceId,'om_sep23');
+});
+
+test('cross-cycle repeated name, current-cycle collision and duplicate event all fail closed',()=>{
+  const range=recruitmentBoundaryCycleRange('2026-10');
+  const prior={candidates:[submissionCandidate('周小雨',{sourceId:'om_prior',date:'2026-09-24'})],
+    submissionMessageCounts:{周小雨:1}};
+  const day={'2026-09-25':[calendarEvent('周小雨面试','cal_one')]};
+  const options={boundaryDate:range.date,previousCycle:range.previous,currentSourceReady:true,previousSourceReady:true,advanceStage:true};
+  const repeated=linkRecruitmentCalendarAcrossBoundary([],{...prior,submissionMessageCounts:{周小雨:2}},day,{},options);
+  assert.equal(repeated.boundary.status,'pending');
+  assert.equal(repeated.carryCandidates.length,0);
+  const collision=linkRecruitmentCalendarAcrossBoundary([submissionCandidate('周小雨',{sourceId:'om_current',date:'2026-09-25'})],
+    prior,day,{周小雨:1},options);
+  assert.equal(collision.boundary.status,'pending');
+  assert.equal(collision.candidates[0].stage,'initial_pass');
+  const duplicate=linkRecruitmentCalendarAcrossBoundary([],prior,{'2026-09-25':[...day['2026-09-25'],calendarEvent('周小雨复试','cal_two')]},{},options);
+  assert.equal(duplicate.boundary.status,'pending');
+  assert.equal(duplicate.carryCandidates.length,0);
+});
+
+test('first-day current-cycle report for a prior-cycle candidate does not duplicate or re-remind that person',()=>{
+  const range=recruitmentBoundaryCycleRange('2026-10');
+  const reviewer='ou_reviewer';
+  const prior=parseRecruitmentMessages([{messageId:'om_prior',createdAt:'2026-09-24T01:00:00.000Z',
+    text:'求职者【周小雨】是否符合【主播】的邀约标准',
+    reactions:{details:[{emojiType:'OK',operatorId:reviewer}]}}],{reviewerOpenId:reviewer});
+  const current=parseRecruitmentMessages([{messageId:'om_current_review',createdAt:'2026-09-25T06:00:00.000Z',
+    sender:{id:reviewer},text:'周小雨\n颜值8 表现力8\n- 通过'}],{reviewerOpenId:reviewer});
+  const result=linkRecruitmentCalendarAcrossBoundary(current.candidates,prior,
+    {'2026-09-25':[calendarEvent('周小雨面试','cal_one')]},current.submissionMessageCounts,
+    {boundaryDate:range.date,previousCycle:range.previous,currentSourceReady:true,
+      previousSourceReady:true,advanceStage:true});
+  assert.equal(result.boundary.status,'pending');
+  assert.equal(result.carryCandidates.length,0);
+  assert.equal(result.candidates.filter(item=>item.name==='周小雨').length,1);
+  assert.equal(result.candidates[0].stage,'interview_pass');
+});
+
+test('unverified previous cycle blocks first day but not independently verified later dates',()=>{
+  const range=recruitmentBoundaryCycleRange('2026-10');
+  const current=submissionCandidate('林小满',{sourceId:'om_current',date:'2026-09-25'});
+  const day={'2026-09-25':[calendarEvent('林小满面试','cal_current')],
+    '2026-09-26':[calendarEvent('林小满复试','cal_later')]};
+  const unverified=linkRecruitmentCalendarAcrossBoundary([current],null,day,{林小满:1},
+    {boundaryDate:range.date,previousCycle:range.previous,currentSourceReady:true,previousSourceReady:false,advanceStage:true});
+  assert.equal(unverified.boundary.status,'pending');
+  assert.equal(unverified.carryCandidates.length,0);
+  assert.equal(unverified.candidates[0].calendarEvidence.date,'2026-09-26');
+  const noFirstDay=linkRecruitmentCalendarAcrossBoundary([current],null,{'2026-09-26':day['2026-09-26']},{林小满:1},
+    {boundaryDate:range.date,previousCycle:range.previous,currentSourceReady:true,previousSourceReady:false,advanceStage:true});
+  assert.equal(noFirstDay.boundary.status,'not_applicable');
+  assert.equal(noFirstDay.candidates[0].stage,'pending_feedback');
+});
+
+test('current-cycle first-day candidate still matches after prior source was fully verified',()=>{
+  const range=recruitmentBoundaryCycleRange('2026-10');
+  const current=submissionCandidate('林小满',{sourceId:'om_current',date:'2026-09-25'});
+  const prior={candidates:[submissionCandidate('周小雨',{sourceId:'om_prior',date:'2026-09-23'})],submissionMessageCounts:{周小雨:1}};
+  const result=linkRecruitmentCalendarAcrossBoundary([current],prior,{'2026-09-25':[calendarEvent('林小满面试','cal_current')]},
+    {林小满:1},{boundaryDate:range.date,previousCycle:range.previous,currentSourceReady:true,previousSourceReady:true,advanceStage:true});
+  assert.equal(result.boundary.status,'verified');
+  assert.equal(result.candidates[0].stage,'pending_feedback');
+  assert.equal(result.candidates[0].calendarEvidence.eventId,'cal_current');
+  assert.equal(result.carryCandidates.length,0);
 });

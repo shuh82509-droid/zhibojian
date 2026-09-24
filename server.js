@@ -6,15 +6,16 @@ import { Readable } from 'node:stream';
 import {
   chinaDateFor,
   isLifecycleRefreshDue,
-  mergeRecruitmentCandidates, linkVerifiedRecruitmentCalendar,
+  linkRecruitmentCalendarAcrossBoundary,
   normalizeAnchorReport,
   parseLatestCoachSummary,
-  parseEmploymentMessages, parseRecruitmentMessages, activeChatMessages, readCompleteMessageReactions, buildInterviewReminderPreview, interviewReminderSourceFingerprint, reviewWeekFor, readVersionedCoachRankingRows, readVerifiedCoachInstances, coachCalendarFingerprint, assertCoachRankingRevision, parseWeeklyCoachRotation, countCoachReviews, coachReviewReminder, structuredAssessmentSummary, structuredAssessmentForCandidate, centralFeishuOpenId, isVerifiedLiveCenterContact, assessmentSubmissionFor, recruitmentCycleMonthForDate, recruitmentCycleRange, lifecycleReminderWindow, extractAnchorEvaluation, verifiedAnchorEvidence, feishuDocumentLink
+  parseEmploymentMessages, parseRecruitmentMessages, activeChatMessages, readCompleteMessageReactions, buildInterviewReminderPreview, interviewReminderSourceFingerprint, reviewWeekFor, readVersionedCoachRankingRows, readVerifiedCoachInstances, coachCalendarFingerprint, assertCoachRankingRevision, parseWeeklyCoachRotation, countCoachReviews, coachReviewReminder, structuredAssessmentSummary, structuredAssessmentForCandidate, centralFeishuOpenId, isVerifiedLiveCenterContact, assessmentSubmissionFor, recruitmentCycleMonthForDate, recruitmentCycleRange, recruitmentBoundaryCycleRange, lifecycleReminderWindow, extractAnchorEvaluation, verifiedAnchorEvidence, feishuDocumentLink
 } from './lifecycle-engine.mjs';
 import { frameHeadersForHub } from './frame-policy.mjs';
 import { createCalendarUserReader } from './calendar-user-reader.mjs';
 import { createReminderJournalLock } from './lifecycle-reminder-lock.mjs';
 import { writeDurableJsonAtomic } from './durable-journal.mjs';
+import {inspectInterviewPost, verifyInterviewBindingSources, projectInterviewBindings} from './interview-binding.mjs';
 import { reminderScheduleConfig } from './reminder-gates.mjs';
 import { createCalendarAuthHandler } from './calendar-auth-http.mjs';
 import { createCoachCalendarAuth } from './coach-calendar-auth.mjs';
@@ -55,6 +56,8 @@ const lifecycleReminderPath = join(lifecycleDir, 'notification-receipts.json');
 const lifecycleReminderLock = createReminderJournalLock({lockPath:`${lifecycleReminderPath}.lock`});
 const recruitmentAssessmentPath = join(lifecycleDir, 'recruitment-assessments.json');
 const recruitmentAssessmentLock = createReminderJournalLock({lockPath:`${recruitmentAssessmentPath}.lock`});
+const interviewBindingPath = join(lifecycleDir, 'interview-bindings.json');
+const interviewBindingLock = createReminderJournalLock({lockPath:`${interviewBindingPath}.lock`});
 const materialCardPath = join(dataDir, 'material-cards.json');
 const materialAssetPath = join(dataDir, 'material-assets.json');
 const materialAssetDir = join(dataDir, 'material-uploads');
@@ -88,6 +91,7 @@ const verifiedAssessmentEmployeeNos = Object.freeze({
   'FD-027340':'ou_2f90737d743168531c00f6a066982e15',
 });
 const recruitmentAssessmentEnabled = !recoveryReadOnly && process.env.RECRUITMENT_ASSESSMENT_CONFIRM_ENABLED === 'true';
+const interviewBindingEnabled = !recoveryReadOnly && process.env.RECRUITMENT_INTERVIEW_BINDING_ENABLED === 'true';
 const coachNames = Object.freeze({'官旗':'曾泳淇','品牌精选':'梁瑜涵','优选':'李爽','王鸥美肤':'鲍敏纳'});
 const verifiedCoachOpenIds = Object.freeze({
   '官旗':'ou_57dd3c1f41a299db90e8a0e8ec39b811',
@@ -383,6 +387,7 @@ async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
         chatId: item.chat_id,
         type: item.msg_type,
         text: messageText(content),
+        contentFingerprint: createHash('sha256').update(String(item.body?.content || '')).digest('hex'),
         sender: { id: item.sender?.id || '', name: item.sender?.sender_name || item.sender?.name || '' },
         createdAt: item.create_time ? new Date(Number(item.create_time)).toISOString() : null,
         updatedAt: item.update_time ? new Date(Number(item.update_time)).toISOString() : null,
@@ -1630,10 +1635,12 @@ async function serveAnchorPhoto(res, name) {
 }
 function supplementalEmploymentCandidates(items) {
   return items.map(item => ({...item,
+    employmentMessageId:item.sourceId || '',submissionMessageId:'',inSubmissionCohort:false,
     assessmentReported:item.assessmentPassed===true,
     assessmentPassed:null,
     assessmentEvidenceStatus:'WIS直播战队日报可见；指定私聊结论待核验',
-    status:item.assessmentPassed===true ? '已入职 · 考核结论待指定来源核验' : item.status,
+    status:item.actualStartDate?'日报称已入职 · 送审归属待核验'
+      :'日报称考核通过 · 实际到岗及送审归属待核验',
   }));
 }
 async function readRecruitmentAssessmentJournal() {
@@ -1653,6 +1660,33 @@ async function readRecruitmentAssessmentJournal() {
     && item.source==='structured_self_confirmation'
     && !Number.isNaN(Date.parse(item.createdAt)));
   if(!valid)throw new FeishuError('招聘考核确认记录结构异常，结论保持待核验。',503,'assessment_journal_invalid');
+  return journal;
+}
+async function readRecruitmentInterviewJournal() {
+  let journal;
+  try { journal=JSON.parse(await readFile(interviewBindingPath,'utf8')); }
+  catch(error) {
+    if(error?.code==='ENOENT')return {schemaVersion:1,entries:[]};
+    throw new FeishuError('本人面评绑定记录不可读，面评结论保持待核验。',503,'interview_binding_journal_unreadable');
+  }
+  const valid=journal?.schemaVersion===1 && Array.isArray(journal.entries) && journal.entries.every(item=>
+    typeof item?.id==='string' && /^[0-9a-f-]{36}$/iu.test(item.id)
+    && /^20\d{2}-(?:0[1-9]|1[0-2])$/u.test(item.cycleMonth)
+    && /^[\p{Script=Han}·]{2,12}$/u.test(item.candidateName)
+    && /^om_[A-Za-z0-9_]+$/u.test(item.submissionMessageId)
+    && typeof item.calendarId==='string' && item.calendarId.length>0 && item.calendarId.length<=300
+    && typeof item.calendarEventId==='string' && item.calendarEventId.length>0 && item.calendarEventId.length<=300
+    && /^om_[A-Za-z0-9_]+$/u.test(item.postMessageId)
+    && item.actorOpenId===verifiedRecruitmentReviewerOpenId
+    && ['pass','fail'].includes(item.outcome)
+    && /^[a-f0-9]{64}$/u.test(item.sourceFingerprint)
+    && /^20\d{2}-\d{2}-\d{2}$/u.test(item.postDate)
+    && item.source==='structured_self_interview_binding'
+    && !Number.isNaN(Date.parse(item.createdAt)));
+  const unique=field=>new Set(journal.entries.map(item=>field(item))).size===journal.entries.length;
+  if(!valid || !unique(item=>item.id) || !unique(item=>item.submissionMessageId)
+    || !unique(item=>item.postMessageId) || !unique(item=>`${item.calendarId}:${item.calendarEventId}`))
+    throw new FeishuError('本人面评绑定记录结构异常，面评结论保持待核验。',503,'interview_binding_journal_invalid');
   return journal;
 }
 async function addStructuredAssessments(candidates, cycleMonth, chatComplete) {
@@ -1678,11 +1712,12 @@ async function addStructuredAssessments(candidates, cycleMonth, chatComplete) {
     : `指定私聊未读取；结构化双人确认已核验通过 ${summary.passedCount} 人、未通过 ${summary.failedCount} 人，另有 ${summary.awaitingCount+summary.conflictCount} 人待确认。`;
   return {candidates:updated,summary:chatComplete&&cycleEntries.length?summary:null,status};
 }
-async function refreshRecruitmentLifecycle(targetDate) {
+async function refreshRecruitmentLifecycle(targetDate,{fresh=false,persist=true}={}) {
   const cycleMonth=recruitmentCycleMonthForDate(targetDate);
   const cycle=recruitmentCycleRange(cycleMonth);
+  const sourceFresh=fresh||interviewBindingEnabled;
   const [chatResult, coachResult, employmentResult, calendarResult] = await Promise.allSettled([
-    getChatMessages('recruitment', 1000, cycle),
+    getChatMessages('recruitment', 1000, {...cycle,fresh:sourceFresh}),
     getDocument('coach'),
     getChatMessages('coaching', 1000, cycle),
     readRecruitmentCalendar(cycle)
@@ -1690,11 +1725,13 @@ async function refreshRecruitmentLifecycle(targetDate) {
   if (chatResult.status === 'rejected') throw chatResult.reason;
   const parsed = parseRecruitmentMessages(chatResult.value.messages || [], {reviewerOpenId:recruitmentReviewerOpenId});
   const employment = employmentResult.status === 'fulfilled' ? parseEmploymentMessages(employmentResult.value.messages || [], {reviewerOpenId:recruitmentReviewerOpenId}) : {candidates:[],sourceDate:''};
-  const merged = mergeRecruitmentCandidates(parsed.candidates, supplementalEmploymentCandidates(employment.candidates));
-  const assessment=await addStructuredAssessments(merged,cycleMonth,!chatResult.value.truncated);
+  const employmentFacts=supplementalEmploymentCandidates(employment.candidates);
+  // Daily reports have no exact recruitment submission ID. Preserve their facts
+  // separately; a matching display name cannot attach one to this cohort.
+  const assessment=await addStructuredAssessments(parsed.candidates,cycleMonth,!chatResult.value.truncated);
   const calendar=calendarResult.status==='fulfilled' ? calendarResult.value : {events:{},status:'待核验：正式面试日历无法读取，当前群聊记录不冒充正式日历。'};
-  const linked=linkVerifiedRecruitmentCalendar(assessment.candidates,calendar.events,parsed.submissionMessageCounts,{
-    sourceReady:calendar.status.startsWith('已连接：') && !chatResult.value.truncated && Boolean(chatResult.value.messages?.length),
+  const linked=await linkRecruitmentCalendarWithBoundary(assessment.candidates,parsed,chatResult.value,calendar,cycle,{
+    fresh:sourceFresh,
     advanceStage:Boolean(recruitmentReviewerOpenId) && chatResult.value.reactionStatus==='已核验'
       && employmentResult.status==='fulfilled' && !employmentResult.value.truncated,
   });
@@ -1702,11 +1739,11 @@ async function refreshRecruitmentLifecycle(targetDate) {
   const summary = coachResult.status === 'fulfilled' ? parseLatestCoachSummary(coachResult.value.content) : null;
   const sourceDate = [parsed.sourceDate, summary?.date, employment.sourceDate].filter(Boolean).sort().at(-1) || '';
   const funnel = {...parsed.funnel,
-    hiredCount:candidates.filter(item => item.inSubmissionCohort && item.stage === 'hired').length,
+    hiredCount:null,
     assessmentPassedCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount>0 ? assessment.summary.passedCount : null,
     assessmentFailedCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount>0 ? assessment.summary.failedCount : null,
     assessmentConflictCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount+assessment.summary.conflictCount>0 ? assessment.summary.conflictCount : null,
-    supplementalAssessmentReportedCount:candidates.filter(item => item.inSubmissionCohort && item.assessmentReported).length,
+    supplementalAssessmentReportedCount:null,
   };
   const interviewEvents=structuredClone(parsed.interviewEvents || {});
   Object.entries(calendar.events || {}).forEach(([date,items]) => {interviewEvents[date]=[...(interviewEvents[date]||[]),...items]});
@@ -1714,15 +1751,21 @@ async function refreshRecruitmentLifecycle(targetDate) {
   funnel.interviewScheduledPendingCount=linked.pendingCount;
   const snapshot = {
     schemaVersion: 1,
+    recruitmentAttributionSchemaVersion:1,
     module: 'recruitment',
+    cycle,
     targetDate,
     generatedAt: new Date().toISOString(),
     sourceDate,
     status: recruitmentReviewerOpenId && chatResult.value.reactionStatus === '已核验' && !chatResult.value.truncated
       && employmentResult.status === 'fulfilled' && !employmentResult.value.truncated
       && calendar.status.startsWith('已连接：') && linked.pendingCount === 0
+      && employmentFacts.length===0
+      && linked.boundary.status !== 'pending'
       ? lifecycleSourceStatus(sourceDate, targetDate) : 'partial',
     candidates,
+    employmentFacts,
+    employmentAttributionStatus:'日报没有精确送审消息 ID，入职/到岗事实单列，当前周期归属待核验。',
     cohortNames: parsed.cohortNames,
     submissionMessageCounts:parsed.submissionMessageCounts,
     funnel,
@@ -1732,6 +1775,7 @@ async function refreshRecruitmentLifecycle(targetDate) {
     summary,
     calendarStatus:calendar.status,
     assessmentStatus:assessment.status,
+    boundaryCarryover:linked.boundary,
     interviewEvents,
     coverage: {
       chatMessages: chatResult.value.sourceMessageCount ?? chatResult.value.messages?.length ?? 0,
@@ -1750,8 +1794,55 @@ async function refreshRecruitmentLifecycle(targetDate) {
       ]
     }
   };
-  await writeJsonAtomic(lifecycleSnapshotPath('recruitment'), snapshot);
-  return snapshot;
+  const verified=interviewBindingEnabled
+    ?projectInterviewBindings(snapshot,chatResult.value,(await readRecruitmentInterviewJournal()).entries,{reviewerOpenId:recruitmentReviewerOpenId,
+      recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor()})
+    :snapshot;
+  if(persist)await writeJsonAtomic(lifecycleSnapshotPath('recruitment'), verified);
+  return verified;
+}
+let recruitmentSnapshotReadInFlight=null;
+function readFreshRecruitmentSnapshot() {
+  if(!recruitmentSnapshotReadInFlight){
+    recruitmentSnapshotReadInFlight=refreshRecruitmentLifecycle(chinaDateFor(),{fresh:true,persist:false})
+      .finally(()=>{recruitmentSnapshotReadInFlight=null;});
+  }
+  return recruitmentSnapshotReadInFlight;
+}
+function completeRecruitmentChatSource(chat, cycle) {
+  const expected = feishuChats.recruitment.chatId;
+  return chat?.key === 'recruitment' && chat?.chatId === expected && !chat?.truncated
+    && !chat?.paginationIssue && chat?.reactionStatus === '已核验'
+    && Array.isArray(chat?.messages)
+    && Number.isSafeInteger(chat?.sourceMessageCount) && Number.isSafeInteger(chat?.deletedMessageCount)
+    && chat.sourceMessageCount === chat.messages.length + chat.deletedMessageCount
+    && chat.messages.every(message => {
+      const at = new Date(message?.createdAt || '').getTime() / 1000;
+      return message?.chatId === expected && /^om_[A-Za-z0-9_]+$/u.test(String(message?.messageId || ''))
+        && Number.isFinite(at) && at >= cycle.startTime && at < cycle.endTime + 1;
+    });
+}
+async function linkRecruitmentCalendarWithBoundary(candidates, parsed, chat, calendar, cycle, {fresh=false,advanceStage=false}={}) {
+  const currentSourceReady=calendar.status.startsWith('已连接：') && completeRecruitmentChatSource(chat,cycle);
+  const boundaryRange=recruitmentBoundaryCycleRange(cycle.month);
+  const boundaryEvents=(calendar.events?.[boundaryRange.date] || []).filter(item=>item?.status==='calendar');
+  let previousParsed=null,previousSourceReady=false,previousMessages=null;
+  if(boundaryEvents.length){
+    try {
+      const prior=await getChatMessages('recruitment',1000,{...boundaryRange.previous,fresh});
+      previousSourceReady=completeRecruitmentChatSource(prior,boundaryRange.previous);
+      if(previousSourceReady){
+        previousParsed=parseRecruitmentMessages(prior.messages,{reviewerOpenId:recruitmentReviewerOpenId});
+        previousMessages=prior.sourceMessageCount ?? prior.messages.length;
+      }
+    } catch { previousSourceReady=false; }
+  }
+  const linked=linkRecruitmentCalendarAcrossBoundary(candidates,previousParsed,calendar.events,parsed.submissionMessageCounts,{
+    boundaryDate:boundaryRange.date,previousCycle:boundaryRange.previous,currentSourceReady,
+    previousSourceReady,advanceStage,
+  });
+  return {...linked,boundary:{...linked.boundary,chatMessages:previousMessages,
+    sourceCycle:boundaryRange.previous.month}};
 }
 async function readRecruitmentCalendar(cycle) {
   if (!recruitmentCalendarId) return {events:{},status:'待配置：正式面试日历来源尚未配置，当前群聊记录不冒充正式日历。'};
@@ -1767,21 +1858,32 @@ async function readRecruitmentCalendar(cycle) {
     seenPages.add(data.page_token);query.set('page_token',data.page_token);
   }
   const events = {};
+  let unverifiableTitles=0;
   items.forEach(item => {
     if(item?.status==='cancelled'||!/(面试|初试|复试|试播)/u.test(item?.summary||''))return;
+    const fullSummary=String(item?.summary||'');
+    if(fullSummary.length>500){unverifiableTitles+=1;return;}
     const timestamp = Number(item?.start_time?.timestamp || 0);
+    const endTimestamp = Number(item?.end_time?.timestamp || 0);
     const date = item?.start_time?.date || (timestamp ? new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(timestamp * 1000)) : '');
     if (!/^20\d{2}-\d{2}-\d{2}$/u.test(String(date))) return;
     const time = timestamp ? new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(timestamp * 1000)) : '';
-    const summary = truncateForModel(item?.summary || '面试安排', 80).trim();
-    (events[date] ||= []).push({name:`${summary}${time ? ` · ${time}` : ''}`,status:'calendar',eventId:String(item?.event_id || '')});
+    const summary = fullSummary.trim();
+    if(!summary){unverifiableTitles+=1;return;}
+    (events[date] ||= []).push({name:`${summary}${time ? ` · ${time}` : ''}`,status:'calendar',eventId:String(item?.event_id || ''),
+      summaryFingerprint:createHash('sha256').update(fullSummary).digest('hex'),
+      startAt:timestamp>0?new Date(timestamp*1000).toISOString():'',
+      endAt:endTimestamp>timestamp?new Date(endTimestamp*1000).toISOString():''});
   });
-  return {events,status:`已连接：正式面试日历已读取 ${Object.values(events).flat().length} 条详情事件。`};
+  return {events,status:unverifiableTitles
+    ?`待核验：${unverifiableTitles} 条正式日历标题超过 500 字或为空，未截断匹配候选人。`
+    :`已连接：正式面试日历已读取 ${Object.values(events).flat().length} 条详情事件。`};
 }
-async function recruitmentCycleSnapshot(month,{fresh=false}={}) {
+async function recruitmentCycleSnapshot(month,{fresh=false,recruitmentChat=null}={}) {
   const cycle = recruitmentCycleRange(month);
+  const sourceFresh=fresh||interviewBindingEnabled;
   const [chatResult, employmentResult, calendarResult] = await Promise.allSettled([
-    getChatMessages('recruitment', 1000, {...cycle,fresh}),
+    recruitmentChat ? Promise.resolve(recruitmentChat) : getChatMessages('recruitment', 1000, {...cycle,fresh:sourceFresh}),
     getChatMessages('coaching', 1000, cycle),
     readRecruitmentCalendar(cycle),
   ]);
@@ -1789,38 +1891,43 @@ async function recruitmentCycleSnapshot(month,{fresh=false}={}) {
   const chat = chatResult.value;
   const parsed = parseRecruitmentMessages(chat.messages || [], {reviewerOpenId:recruitmentReviewerOpenId});
   const employment = employmentResult.status === 'fulfilled' ? parseEmploymentMessages(employmentResult.value.messages || [], {reviewerOpenId:recruitmentReviewerOpenId}) : {candidates:[],sourceDate:''};
-  const merged = mergeRecruitmentCandidates(parsed.candidates, supplementalEmploymentCandidates(employment.candidates));
-  const assessment=await addStructuredAssessments(merged,cycle.month,!chat.truncated);
+  const employmentFacts=supplementalEmploymentCandidates(employment.candidates);
+  const assessment=await addStructuredAssessments(parsed.candidates,cycle.month,!chat.truncated);
   const calendar = calendarResult.status === 'fulfilled' ? calendarResult.value : {events:{},status:`待核验：正式面试日历读取失败（${truncateForModel(calendarResult.reason?.message || '权限不足', 120)}）；当前群聊记录不冒充正式日历。`};
-  const linked=linkVerifiedRecruitmentCalendar(assessment.candidates,calendar.events,parsed.submissionMessageCounts,{
-    sourceReady:calendar.status.startsWith('已连接：') && !chat.truncated && Boolean(chat.messages?.length),
-    advanceStage:Boolean(recruitmentReviewerOpenId) && chat.reactionStatus==='已核验'
+  const linked=await linkRecruitmentCalendarWithBoundary(assessment.candidates,parsed,chat,calendar,cycle,{
+    fresh:sourceFresh,advanceStage:Boolean(recruitmentReviewerOpenId) && chat.reactionStatus==='已核验'
       && employmentResult.status==='fulfilled' && !employmentResult.value.truncated,
   });
   const candidates=linked.candidates;
   const funnel = {...parsed.funnel,
-    hiredCount:candidates.filter(item => item.inSubmissionCohort && item.stage === 'hired').length,
+    hiredCount:null,
     assessmentPassedCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount>0 ? assessment.summary.passedCount : null,
     assessmentFailedCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount>0 ? assessment.summary.failedCount : null,
     assessmentConflictCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount+assessment.summary.conflictCount>0 ? assessment.summary.conflictCount : null,
-    supplementalAssessmentReportedCount:candidates.filter(item => item.inSubmissionCohort && item.assessmentReported).length,
+    supplementalAssessmentReportedCount:null,
   };
   const interviewEvents = structuredClone(parsed.interviewEvents || {});
   Object.entries(calendar.events || {}).forEach(([date, items]) => { interviewEvents[date] = [...(interviewEvents[date] || []), ...items]; });
   funnel.interviewScheduledCount=linked.matchedCount;
   funnel.interviewScheduledPendingCount=linked.pendingCount;
-  return {
+  const snapshot={
     schemaVersion:3,
+    recruitmentAttributionSchemaVersion:1,
     module:'recruitment',
     generatedAt:new Date().toISOString(),
     sourceDate:[parsed.sourceDate, employment.sourceDate].filter(Boolean).sort().at(-1) || '',
     status:recruitmentReviewerOpenId && !chat.truncated && chat.reactionStatus === '已核验'
       && employmentResult.status === 'fulfilled' && !employmentResult.value.truncated
-      && calendar.status.startsWith('已连接：') && linked.pendingCount === 0 ? 'current' : 'partial',
+      && calendar.status.startsWith('已连接：') && linked.pendingCount === 0
+      && employmentFacts.length===0
+      && linked.boundary.status !== 'pending' ? 'current' : 'partial',
     calendarStatus:calendar.status,
     assessmentStatus:assessment.status,
+    boundaryCarryover:linked.boundary,
     cycle,
     candidates,
+    employmentFacts,
+    employmentAttributionStatus:'日报没有精确送审消息 ID，入职/到岗事实单列，当前周期归属待核验。',
     cohortNames:parsed.cohortNames,
     submissionMessageCounts:parsed.submissionMessageCounts,
     funnel,
@@ -1831,6 +1938,10 @@ async function recruitmentCycleSnapshot(month,{fresh=false}={}) {
     unmappedCount:candidates.filter(item => item.stage === 'unmapped').length,
     coverage:{chatMessages:chat.sourceMessageCount ?? chat.messages?.length ?? 0,deletedMessages:chat.deletedMessageCount ?? 0,capped:Boolean(chat.truncated),reactionStatus:recruitmentReviewerOpenId ? (chat.reactionStatus || '待核验') : '待配置审查人身份',reactionFailure:chat.reactionFailure || '',employmentStatus:employmentResult.status === 'fulfilled' ? '已读取' : '待授权',employmentMessages:employmentResult.status === 'fulfilled' ? employmentResult.value.sourceMessageCount ?? employmentResult.value.messages?.length ?? 0 : null,employmentCapped:employmentResult.status === 'fulfilled' ? Boolean(employmentResult.value.truncated) : null,employmentFailure:employmentResult.status === 'rejected' ? String(employmentResult.reason?.message || 'WIS直播战队日报读取失败') : ''}
   };
+  return interviewBindingEnabled
+    ?projectInterviewBindings(snapshot,chat,(await readRecruitmentInterviewJournal()).entries,{reviewerOpenId:recruitmentReviewerOpenId,
+      recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor()})
+    :snapshot;
 }
 
 const rankingCellText = value => Array.isArray(value) ? value.map(rankingCellText).join('')
@@ -2381,6 +2492,88 @@ async function submitStructuredAssessment(req,auth) {
   });
   return result;
 }
+async function verifiedInterviewBindingActor(auth) {
+  const actorOpenId=centralFeishuOpenId(auth,{'FD-027097':verifiedRecruitmentReviewerOpenId});
+  if(actorOpenId!==verifiedRecruitmentReviewerOpenId)
+    throw new FeishuError('仅倪梦萍本人可绑定面评，不接受管理员或姓名代办。',403,'interview_binding_identity_unverified');
+  await verifiedLiveCenterPerson(actorOpenId,'倪梦萍',auth.user.number);
+  return actorOpenId;
+}
+async function interviewBindingSources(month,{fresh=true}={}) {
+  const cycle=recruitmentCycleRange(month);
+  const chat=await getChatMessages('recruitment',1000,{...cycle,fresh});
+  // The candidate projection and signed source verifier must inspect the exact
+  // same fresh group snapshot; a separate cached read could pair an old OK
+  // reaction with an edited or recalled submission.
+  const snapshot=await recruitmentCycleSnapshot(month,{fresh,recruitmentChat:chat});
+  return {chat,snapshot};
+}
+function interviewBindingOptions(snapshot,chat) {
+  const options=[];
+  const knownNames=(snapshot.candidates||[]).map(item=>item.name).filter(Boolean);
+  for(const candidate of snapshot.candidates||[]) {
+    if(!candidate.inSubmissionCohort||!candidate.submissionEvidence?.sourceId||!candidate.calendarEvidence?.eventId
+      ||(snapshot.interviewBindings||[]).some(item=>item.submissionMessageId===candidate.submissionEvidence.sourceId))continue;
+    for(const post of chat.messages||[]) {
+      if(post.type!=='post'||post.sender?.id!==verifiedRecruitmentReviewerOpenId)continue;
+      const inspected=inspectInterviewPost(post,candidate.name,knownNames);
+      if(inspected.status!=='ready')continue;
+      const binding=verifyInterviewBindingSources(snapshot,chat,{
+        cycleMonth:snapshot.cycle.month,candidateName:candidate.name,
+        submissionMessageId:candidate.submissionEvidence.sourceId,
+        calendarEventId:candidate.calendarEvidence.eventId,
+        postMessageId:post.messageId,outcome:inspected.outcome
+      },{reviewerOpenId:recruitmentReviewerOpenId,recruitmentChatId:feishuChats.recruitment.chatId,
+        calendarId:recruitmentCalendarId,today:chinaDateFor()});
+      if(binding.status!=='ready')continue;
+      options.push({candidateName:candidate.name,submissionMessageId:binding.submissionMessageId,
+        submissionDate:candidate.submissionEvidence.date,calendarEventId:binding.calendarEventId,
+        calendarDate:binding.calendarDate,calendarTitle:candidate.calendarEvidence.title,
+        postMessageId:binding.postMessageId,postDate:binding.postDate,
+        submissionLink:chat.messages.find(item=>item.messageId===binding.submissionMessageId)?.appLink||'',
+        postLink:post.appLink||'',
+        postExcerpt:String(post.text||'').slice(0,180),postOutcome:binding.outcome,
+        sourceFingerprint:binding.sourceFingerprint});
+    }
+  }
+  return options;
+}
+async function submitInterviewBinding(req,auth) {
+  if(!interviewBindingEnabled)throw new FeishuError('本人面评绑定入口尚未启用。',423,'interview_binding_disabled');
+  const actorOpenId=await verifiedInterviewBindingActor(auth);
+  let origin;
+  try {origin=new URL(String(req.headers.origin||''));}
+  catch {throw new FeishuError('请从中枢同源页面办理面评绑定。',403,'interview_binding_origin_unverified');}
+  if(origin.host!==req.headers.host||origin.protocol!=='https:'
+    ||req.headers['sec-fetch-site']==='cross-site'||req.headers['x-requested-with']!=='XMLHttpRequest'
+    ||!/^application\/json(?:;|$)/iu.test(String(req.headers['content-type']||'')))
+    throw new FeishuError('面评绑定请求来源或格式无法核验。',403,'interview_binding_origin_unverified');
+  const payload=await readRequestJson(req,4096);
+  const cycleMonth=String(payload?.cycleMonth||'');recruitmentCycleRange(cycleMonth);
+  return interviewBindingLock.run(async()=>{
+    const {chat,snapshot}=await interviewBindingSources(cycleMonth);
+    const binding=verifyInterviewBindingSources(snapshot,chat,payload,{reviewerOpenId:actorOpenId,
+      recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor()});
+    if(binding.status!=='ready')throw new FeishuError(binding.reason,409,'interview_binding_source_unverified');
+    if(payload.expectedSourceFingerprint!==binding.sourceFingerprint)
+      throw new FeishuError('送审、日历或面评帖在打开页面后发生变化，请重新读取后核对。',409,'interview_binding_source_changed');
+    const journal=await readRecruitmentInterviewJournal();
+    if(journal.entries.some(item=>item.submissionMessageId===binding.submissionMessageId
+      ||item.postMessageId===binding.postMessageId
+      ||item.calendarId===binding.calendarId&&item.calendarEventId===binding.calendarEventId))
+      throw new FeishuError('送审消息、正式日历事件或面评帖已有本人绑定；先读回记录，不自动覆盖。',409,'interview_binding_already_recorded');
+    const record={id:randomUUID(),cycleMonth:binding.cycleMonth,candidateName:binding.candidateName,
+      submissionMessageId:binding.submissionMessageId,calendarId:binding.calendarId,
+      calendarEventId:binding.calendarEventId,postMessageId:binding.postMessageId,
+      postDate:binding.postDate,outcome:binding.outcome,sourceFingerprint:binding.sourceFingerprint,
+      actorOpenId,source:'structured_self_interview_binding',createdAt:new Date().toISOString()};
+    journal.entries.push(record);
+    await writeDurableJsonAtomic(interviewBindingPath,journal);
+    return {recordId:record.id,candidateName:record.candidateName,outcome:record.outcome,
+      submissionMessageId:record.submissionMessageId,calendarEventId:record.calendarEventId,
+      postMessageId:record.postMessageId,createdAt:record.createdAt};
+  });
+}
 async function lifecycleApi(req, res, url, routePath, auth) {
   try {
     if (req.method === 'GET' && routePath === '/api/lifecycle/status') return json(res, 200, await lifecycleStatus());
@@ -2394,6 +2587,22 @@ async function lifecycleApi(req, res, url, routePath, auth) {
       const cycleMonth = recruitmentCycleMonthForDate(date);
       if (!cycleMonth) return json(res,400,{ok:false,error:'面试日期无效。'});
       return json(res, 200, {ok:true,preview:buildInterviewReminderPreview(await recruitmentCycleSnapshot(cycleMonth), date)});
+    }
+    if(routePath==='/api/lifecycle/interview-binding'){
+      if(req.method==='GET'){
+        const lock=await interviewBindingLock.inspect();
+        let identityVerified=false;
+        if(interviewBindingEnabled){try {await verifiedInterviewBindingActor(auth);identityVerified=true;}catch {/* No identity means no candidate or post data. */}}
+        if(!identityVerified)return json(res,200,{ok:true,enabled:interviewBindingEnabled,identityVerified:false,
+          lock:{state:lock.state,reason:lock.reason},options:[],bindings:[]});
+        const month=String(url.searchParams.get('month')||recruitmentCycleMonthForDate(chinaDateFor()));
+        const {chat,snapshot}=await interviewBindingSources(month);
+        return json(res,200,{ok:true,enabled:interviewBindingEnabled,identityVerified:true,actorName:'倪梦萍',
+          cycleMonth:month,lock:{state:lock.state,reason:lock.reason},
+          options:interviewBindingOptions(snapshot,chat),bindings:snapshot.interviewBindings||[]});
+      }
+      if(req.method==='POST')return json(res,200,{ok:true,result:await submitInterviewBinding(req,auth)});
+      return json(res,405,{ok:false,error:'本人面评绑定仅支持 GET 状态和 POST 本人结论。'});
     }
     if (routePath === '/api/lifecycle/recruitment-assessment') {
       const actorOpenId=centralFeishuOpenId(auth,verifiedAssessmentEmployeeNos);
@@ -2430,6 +2639,15 @@ async function lifecycleApi(req, res, url, routePath, auth) {
     if (req.method === 'GET' && routePath === '/api/lifecycle/snapshot') {
       const module = url.searchParams.get('module') || '';
       if (!lifecycleModules.includes(module)) return json(res, 400, {ok:false,error:'未知的生命周期模块。'});
+      // Once signed interview bindings are enabled, never serve a pre-release
+      // disk snapshot that may still contain an automatic interview pass.
+      // A failed fresh read returns an error instead of stale qualification.
+      if(module==='recruitment'){
+        const stored=await readLifecycleSnapshot(module);
+        if(interviewBindingEnabled||stored?.recruitmentAttributionSchemaVersion!==1)
+          return json(res,200,{ok:true,data:await readFreshRecruitmentSnapshot()});
+        return json(res,200,{ok:true,data:stored});
+      }
       const snapshot=await readLifecycleSnapshot(module);
       return json(res, 200, {ok:true,data:module==='anchors'?verifiedAnchorEvidence(snapshot):snapshot});
     }

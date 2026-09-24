@@ -1,4 +1,7 @@
+# DEPRECATED: this legacy overlay cannot package the current Calendar modules.
+# Build a new full, pinned candidate from Dockerfile instead.
 FROM fd-027340-live-center-workbench:latest
+RUN echo 'DEPRECATED_RECRUITMENT_OVERLAY: use a full pinned Calendar candidate' >&2 && exit 64
 USER root
 COPY server.js /app/server.js
 COPY calendar-user-reader.mjs /app/calendar-user-reader.mjs

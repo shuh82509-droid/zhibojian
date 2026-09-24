@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+throw 'DEPRECATED_RECRUITMENT_OVERLAY: This overlay omits current Calendar modules. Build and verify a new full pinned candidate instead.'
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $remote = 'fandow-deploy@120.27.143.111'
 $incoming = '/home/fandow-deploy/fandow-apps/incoming/fd-027340/live-hub-optimized'

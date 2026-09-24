@@ -119,8 +119,10 @@ test('interview reminder requires a verified calendar and exact candidate match'
   const date = '2026-09-23';
   const snapshot = {
     calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',
-    coverage:{capped:false,chatMessages:12},
-    candidates:[{name:'周小雨',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_zhou'}}],
+    coverage:{capped:false,chatMessages:12,reactionStatus:'已核验'},
+    candidates:[{name:'周小雨',inSubmissionCohort:true,
+      submissionEvidence:{sourceId:'om_zhou',date:'2026-09-22',initialReview:'OK'},
+      calendarEvidence:{eventId:'e1',date}}],
     submissionMessageCounts:{周小雨:1},
     interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',eventId:'e1'}]},
   };
@@ -135,12 +137,15 @@ test('interview reminder requires a verified calendar and exact candidate match'
 });
 
 test('interview title does not mistake a Chinese name prefix for another candidate', () => {
-  const date='2026-09-24',snapshot={calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',coverage:{capped:false,chatMessages:1},
-    candidates:[{name:'王丽',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_wangli'}}],submissionMessageCounts:{王丽:1},
+  const date='2026-09-24',snapshot={calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',coverage:{capped:false,chatMessages:1,reactionStatus:'已核验'},
+    candidates:[{name:'王丽',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_wangli',date:'2026-09-23',initialReview:'OK'},
+      calendarEvidence:{eventId:'e1',date}}],submissionMessageCounts:{王丽:1},
     interviewEvents:{[date]:[{name:'王丽娜面试 · 14:00',status:'calendar',eventId:'e1'}]}};
   assert.equal(buildInterviewReminderPreview(snapshot,date).status,'pending');
   assert.equal(buildInterviewReminderPreview({...snapshot,interviewEvents:{[date]:[{name:'面试王丽 · 14:00',status:'calendar',eventId:'e1'}]}},date).sourceReady,true);
-  assert.equal(buildInterviewReminderPreview({...snapshot,candidates:[...snapshot.candidates,{name:'王丽娜',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_wanglina'}}],submissionMessageCounts:{王丽:1,王丽娜:1}},date).status,'preview');
+  assert.equal(buildInterviewReminderPreview({...snapshot,candidates:[...snapshot.candidates,{name:'王丽娜',inSubmissionCohort:true,
+    submissionEvidence:{sourceId:'om_wanglina',date:'2026-09-23',initialReview:'OK'},calendarEvidence:{eventId:'e1',date}}],
+    submissionMessageCounts:{王丽:1,王丽娜:1}},date).status,'preview');
   assert.equal(buildInterviewReminderPreview({...snapshot,submissionMessageCounts:{王丽:2},interviewEvents:{[date]:[{name:'王丽面试 · 14:00',status:'calendar',eventId:'e1'}]}},date).status,'pending');
 });
 
@@ -151,8 +156,29 @@ test('17:00 interview source fingerprint is order independent but detects calend
   const first=interviewReminderSourceFingerprint(base,date);
   assert.equal(first,interviewReminderSourceFingerprint({...base,interviewEvents:{[date]:[...base.interviewEvents[date]].reverse()}},date));
   assert.notEqual(first,interviewReminderSourceFingerprint({...base,interviewEvents:{[date]:[{name:'王丽面试 · 15:00',status:'calendar',eventId:'e1'}]}},date));
+  assert.notEqual(first,interviewReminderSourceFingerprint({...base,interviewEvents:{[date]:[{...base.interviewEvents[date][0],endAt:'2026-09-24T08:30:00.000Z'}]}},date));
+  assert.notEqual(first,interviewReminderSourceFingerprint({...base,interviewEvents:{[date]:[{...base.interviewEvents[date][0],summaryFingerprint:'a'.repeat(64)}]}},date));
   assert.notEqual(first,interviewReminderSourceFingerprint({...base,candidates:[...base.candidates,{name:'陈月',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_second'}}]},date));
   assert.notEqual(first,interviewReminderSourceFingerprint({...base,submissionMessageCounts:{王丽:2}},date));
+});
+
+test('17:00 first-day preview needs verified prior-cycle carryover and binds its source fingerprint',()=>{
+  const date='2026-09-25';
+  const candidate={name:'周小雨',inSubmissionCohort:false,boundaryCarryover:true,
+    submissionEvidence:{name:'周小雨',date:'2026-09-23',sourceId:'om_sep23',initialReview:'OK'},
+    calendarEvidence:{date,eventId:'cal_one'}};
+  const snapshot={calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',
+    coverage:{capped:false,chatMessages:0,reactionStatus:'已核验'},
+    candidates:[candidate],submissionMessageCounts:{},
+    boundaryCarryover:{status:'verified',date,sourceCycle:'2026-09',chatMessages:386,
+      submissionMessageCounts:{周小雨:1}},
+    interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',eventId:'cal_one'}]}};
+  assert.equal(buildInterviewReminderPreview(snapshot,date).status,'preview');
+  assert.equal(buildInterviewReminderPreview({...snapshot,boundaryCarryover:{...snapshot.boundaryCarryover,status:'pending'}},date).status,'pending');
+  assert.equal(buildInterviewReminderPreview({...snapshot,boundaryCarryover:{...snapshot.boundaryCarryover,submissionMessageCounts:{周小雨:2}}},date).status,'pending');
+  assert.equal(buildInterviewReminderPreview({...snapshot,coverage:{...snapshot.coverage,reactionStatus:'待核验'}},date).status,'pending');
+  const first=interviewReminderSourceFingerprint(snapshot,date);
+  assert.notEqual(first,interviewReminderSourceFingerprint({...snapshot,candidates:[{...candidate,submissionEvidence:{...candidate.submissionEvidence,sourceId:'om_changed'}}]},date));
 });
 
 test('Wednesday to Tuesday review week uses last week Q:U rotation, not the old current room', () => {
@@ -307,7 +333,7 @@ test('coach review never credits a same-prefix different anchor',()=>{
   assert.deepEqual(countCoachReviews(rotation,events,asOf).rooms['官旗'].anchors,[{name:'王丽',count:1}]);
 });
 
-test('recruitment parser deduplicates submissions and applies explicit results', () => {
+test('recruitment parser deduplicates daily headcount but not different same-name submissions', () => {
   const parsed = parseRecruitmentMessages([
     {messageId:'m1',createdAt:'2026-08-21T01:00:00.000Z',text:'求职者 李彩红 是否符合【主播】的邀约标准',reactions:{details:[{emojiType:'OK',operatorId:'ou_0e5926902d4d6051d0ea14f042bb56f4'}]}},
     {messageId:'m2',createdAt:'2026-08-21T02:00:00.000Z',text:'求职者 李彩红 是否符合【主播】的邀约标准',reactions:{details:[{emojiType:'OK',operatorId:'ou_0e5926902d4d6051d0ea14f042bb56f4'}]}},
@@ -315,9 +341,74 @@ test('recruitment parser deduplicates submissions and applies explicit results',
   ]);
   assert.equal(parsed.dailyCounts['2026-08-21'], 2);
   assert.deepEqual(parsed.dailyNames['2026-08-21'], ['李彩红','杨静娜']);
-  assert.equal(parsed.candidates.find(item => item.name === '李彩红').stage, 'initial_pass');
+  const ambiguous=parsed.candidates.find(item => item.name === '李彩红');
+  assert.equal(ambiguous.stage, 'unmapped');
+  assert.equal(ambiguous.submissionIdentityStatus,'ambiguous');
+  assert.deepEqual(ambiguous.submissionEvidenceAlternatives.map(item=>item.sourceId),['m1','m2']);
+  assert.equal(parsed.submissionMessageCounts['李彩红'],2);
+  assert.equal(parsed.funnel.initialPassedCount,0);
+  assert.equal(parsed.funnel.initialPendingCount,1);
   assert.equal(parsed.candidates.find(item => item.name === '杨静娜').stage, 'initial_fail');
   assert.equal(parsed.candidates.some(item => item.stage === 'review'), false);
+});
+
+test('same-name submissions with distinct IDs never inherit one interview result or become reminder-ready', () => {
+  const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
+  const date='2026-09-24';
+  const submission=(id,hour,emoji='OK')=>({messageId:id,createdAt:`${date}T0${hour}:00:00.000Z`,
+    text:'求职者【周小雨】是否符合【主播】的邀约标准',
+    reactions:{details:[{emojiType:emoji,operatorId:reviewer}]}});
+  const review={messageId:'om_review',createdAt:`${date}T04:00:00.000Z`,sender:{id:reviewer},
+    text:'周小雨\n颜值8 表现力8\n- **通过**'};
+  const one=parseRecruitmentMessages([submission('om_first',1),review],{reviewerOpenId:reviewer});
+  assert.equal(one.candidates[0].stage,'interview_pass');
+  assert.equal(one.funnel.initialPassedCount,1);
+  assert.equal(one.funnel.groupPassedCount,1);
+  const duplicate=parseRecruitmentMessages([submission('om_first',1),review,submission('om_second',3)],{reviewerOpenId:reviewer});
+  const candidate=duplicate.candidates[0];
+  assert.equal(candidate.stage,'unmapped');
+  assert.equal(candidate.submissionEvidence.sourceId,'');
+  assert.deepEqual(candidate.submissionEvidenceAlternatives.map(item=>item.sourceId),['om_first','om_second']);
+  assert.deepEqual(candidate.unresolvedEvaluationEvidence.map(item=>item.sourceId),['om_review']);
+  assert.equal(duplicate.funnel.initialPassedCount,0);
+  assert.equal(duplicate.funnel.initialFailedCount,0);
+  assert.equal(duplicate.funnel.initialPendingCount,1);
+  assert.equal(duplicate.funnel.groupEvaluatedCount,0);
+  assert.equal(duplicate.funnel.groupPassedCount,0);
+  assert.deepEqual(duplicate.interviewEvents,{});
+  const snapshot={...duplicate,calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',
+    coverage:{capped:false,chatMessages:3,reactionStatus:'已核验'},
+    interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',eventId:'cal_one'}]}};
+  assert.equal(buildInterviewReminderPreview(snapshot,date).status,'pending');
+  assert.equal(mergeRecruitmentCandidates(duplicate.candidates,[{name:'周小雨',stage:'interview_pass',status:'面试通过'}])[0].stage,'unmapped');
+});
+
+test('same-name conflicting reactions, shared or missing IDs and exact negative outcomes fail closed',()=>{
+  const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
+  const create=(name,id,emoji='OK')=>({messageId:id,createdAt:'2026-09-24T01:00:00.000Z',
+    text:`求职者【${name}】是否符合【主播】的邀约标准`,
+    reactions:{details:[{emojiType:emoji,operatorId:reviewer}]}});
+  const report=outcome=>({messageId:'om_report',createdAt:'2026-09-24T04:00:00.000Z',
+    sender:{id:reviewer},text:`周小雨\n颜值8 表现力8\n- **${outcome}**`});
+  const mixed=parseRecruitmentMessages([create('周小雨','om_ok'),create('周小雨','om_no','No'),report('不通过')],{reviewerOpenId:reviewer});
+  assert.equal(mixed.candidates[0].stage,'unmapped');
+  assert.equal(mixed.funnel.initialPassedCount,0);
+  assert.equal(mixed.funnel.initialFailedCount,0);
+  assert.equal(mixed.funnel.groupEvaluatedCount,0);
+  const shared=parseRecruitmentMessages([{...create('周小雨','om_shared'),
+    text:'求职者【周小雨】是否符合【主播】的邀约标准\n求职者【林小满】是否符合【主播】的邀约标准'},report('通过')],{reviewerOpenId:reviewer});
+  assert.ok(shared.candidates.every(item=>item.stage==='unmapped'));
+  assert.equal(shared.funnel.groupPassedCount,0);
+  const missing=parseRecruitmentMessages([create('周小雨',''),report('通过')],{reviewerOpenId:reviewer});
+  assert.equal(missing.candidates[0].stage,'unmapped');
+  assert.equal(missing.candidates[0].submissionEvidenceAlternatives.length,1);
+  const repeated=parseRecruitmentMessages([create('周小雨','om_one'),create('周小雨','om_one'),report('不通过')],{reviewerOpenId:reviewer});
+  assert.equal(repeated.submissionMessageCounts['周小雨'],1);
+  assert.equal(repeated.candidates[0].stage,'interview_fail');
+  assert.equal(repeated.funnel.groupPassedCount,0);
+  const unsafe=parseRecruitmentMessages([create('周小雨','om_one'),report('没有通过')],{reviewerOpenId:reviewer});
+  assert.equal(unsafe.candidates[0].stage,'initial_pass');
+  assert.equal(unsafe.funnel.groupEvaluatedCount,0);
 });
 
 test('recruitment parser reads evaluation results and accepted offers without guessing', () => {
@@ -378,6 +469,115 @@ test('one group message containing multiple candidates or outcomes cannot assign
   }
 });
 
+test('one outcome named for a second candidate never advances the first candidate', () => {
+  const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
+  const submission={messageId:'om_submit_first',createdAt:'2026-09-24T01:00:00.000Z',
+    text:'求职者【周小雨】是否符合【主播】的邀约标准',
+    reactions:{details:[{emojiType:'OK',operatorId:reviewer}]}};
+  for (const text of [
+    '周小雨\n颜值8\n林小满 - 通过',
+    '**周小雨**\n颜值8\n**林小满**\n- 通过',
+    '周小雨\n颜值8\n结论：林小满通过',
+    '周小雨\n颜值8\n结论（林小满）：通过',
+    '周小雨\n颜值8\n评价如下。林小满通过',
+    '周小雨\n颜值8\n- 没有通过',
+  ]) {
+    const parsed=parseRecruitmentMessages([submission,{messageId:'om_ambiguous',createdAt:'2026-09-24T04:00:00.000Z',
+      sender:{id:reviewer},text}],{reviewerOpenId:reviewer});
+    assert.equal(parsed.funnel.groupEvaluatedCount,0);
+    assert.equal(parsed.candidates.find(item=>item.name==='周小雨').stage,'initial_pass');
+    assert.deepEqual(parsed.interviewEvents,{});
+  }
+  const secondSubmission={messageId:'om_submit_second',createdAt:'2026-09-24T02:00:00.000Z',
+    text:'求职者【林小满】是否符合【主播】的邀约标准'};
+  const mixed=parseRecruitmentMessages([submission,secondSubmission,{messageId:'om_known_second',
+    createdAt:'2026-09-24T04:00:00.000Z',sender:{id:reviewer},
+    text:'周小雨\n颜值8\n备注：林小满仍需复核\n- 通过'}],{reviewerOpenId:reviewer});
+  assert.equal(mixed.funnel.groupEvaluatedCount,0);
+  assert.equal(mixed.candidates.find(item=>item.name==='周小雨').stage,'initial_pass');
+  assert.deepEqual(mixed.interviewEvents,{});
+});
+
+test('later submissions and unknown people in commentary never let a mixed review advance its heading',()=>{
+  const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
+  const submission=(name,hour,id)=>({messageId:id,createdAt:`2026-09-24T${hour}:00:00.000Z`,
+    text:`求职者【${name}】是否符合【主播】的邀约标准`,
+    reactions:{details:[{emojiType:'OK',operatorId:reviewer}]}});
+  const first=submission('周小雨','01','om_zhou');
+  const later=submission('林小满','03','om_lin');
+  for(const commentary of [
+    '- 林小满镜头表现更好。',
+    '- 镜头状态：林小满更好。',
+    '- 对比另一位候选人表现更好。',
+  ]){
+    const report={messageId:'om_mixed',createdAt:'2026-09-24T02:00:00.000Z',
+      sender:{id:reviewer},text:`周小雨\n颜值8 表现力8\n${commentary}\n- **通过**`};
+    for(const messages of [[first,report],[first,report,later]]){
+      const parsed=parseRecruitmentMessages(messages,{reviewerOpenId:reviewer});
+      assert.equal(parsed.candidates.find(item=>item.name==='周小雨').stage,'initial_pass');
+      assert.equal(parsed.funnel.groupEvaluatedCount,0);
+      assert.deepEqual(parsed.interviewEvents,{});
+    }
+  }
+  for(const tag of ['林小满','其他候选人']){
+    const parsed=parseRecruitmentMessages([first,{messageId:'om_tag',createdAt:'2026-09-24T02:00:00.000Z',
+      sender:{id:reviewer},text:`周小雨\n颜值8 表现力8\n- **通过**@${tag}`},later],{reviewerOpenId:reviewer});
+    assert.equal(parsed.candidates.find(item=>item.name==='周小雨').stage,'initial_pass');
+    assert.equal(parsed.funnel.groupEvaluatedCount,0);
+  }
+  const single=parseRecruitmentMessages([first,{messageId:'om_single',createdAt:'2026-09-24T02:00:00.000Z',
+    sender:{id:reviewer},text:'周小雨\n颜值8 表现力8\n- **通过**'},later],{reviewerOpenId:reviewer});
+  assert.equal(single.candidates.find(item=>item.name==='周小雨').stage,'interview_pass');
+  assert.equal(single.candidates.find(item=>item.name==='林小满').stage,'initial_pass');
+});
+
+test('a longer submitted name is not mistaken for a shorter submitted name inside it', () => {
+  const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
+  const submissions=['李明','李明欣'].map((name,index)=>({messageId:`om_name_${index}`,
+    createdAt:`2026-09-24T0${index+1}:00:00.000Z`,
+    text:`求职者【${name}】是否符合【主播】的邀约标准`,
+    reactions:{details:[{emojiType:'OK',operatorId:reviewer}]}}));
+  const parsed=parseRecruitmentMessages([...submissions,{messageId:'om_long_name',
+    createdAt:'2026-09-24T04:00:00.000Z',sender:{id:reviewer},
+    text:'**李明欣**\n颜值8 表现力8\n- 通过'}],{reviewerOpenId:reviewer});
+  assert.equal(parsed.candidates.find(item=>item.name==='李明欣').stage,'interview_pass');
+  assert.equal(parsed.candidates.find(item=>item.name==='李明').stage,'initial_pass');
+  assert.deepEqual(parsed.interviewEvents['2026-09-24'].map(item=>item.name),['李明欣']);
+});
+
+test('a single candidate may be named again beside the only explicit interview outcome', () => {
+  const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
+  const parsed=parseRecruitmentMessages([{messageId:'om_single',createdAt:'2026-09-24T04:00:00.000Z',
+    sender:{id:reviewer},text:'面试结果\n**周小雨**\n颜值8 表现力8\n周小雨：通过'}],{reviewerOpenId:reviewer});
+  assert.equal(parsed.candidates.find(item=>item.name==='周小雨')?.stage,'interview_pass');
+  assert.deepEqual(parsed.interviewEvents['2026-09-24'].map(item=>item.name),['周小雨']);
+});
+
+test('one-person official post with media and descriptive bullets keeps only its final exact outcome',()=>{
+  const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
+  const submission={messageId:'om_submission',createdAt:'2026-09-24T01:00:00.000Z',
+    text:'求职者【周小雨】是否符合【主播】的邀约标准',
+    reactions:{details:[{emojiType:'OK',operatorId:reviewer}]}};
+  const common='[Media: file_v1_example]\n**周小雨**\n颜值4 表现力4\n- 镜头状态稳定，互动自然；\n- 表现力：答复清晰。\n';
+  for(const [outcome,stage] of [['- **通过**','interview_pass'],
+    ['不通过','interview_fail'],['未通过','interview_fail'],
+    ['- **不通过**','interview_fail'],['- **未通过**','interview_fail'],
+    ['周小雨：不通过','interview_fail'],['周小雨：未通过','interview_fail'],
+    ['- **不通过**@倪梦萍','interview_fail'],['- **未通过**@倪梦萍','interview_fail'],
+    ['- **通过**@倪梦萍','interview_pass']]){
+    const parsed=parseRecruitmentMessages([submission,{messageId:'om_report',createdAt:'2026-09-24T04:00:00.000Z',
+      sender:{id:reviewer},text:common+outcome}],{reviewerOpenId:reviewer});
+    assert.equal(parsed.candidates.find(item=>item.name==='周小雨').stage,stage);
+  }
+  for(const unsafe of ['- 林小满仍需复核。\n- **通过**','- 候选人林小满待定。\n- **通过**',
+    '- 描述含没有通过的结论。\n- **通过**',
+    '- 没有通过','- 未通过审核','周小雨可能未通过','- 通过但需复核']){
+    const parsed=parseRecruitmentMessages([submission,{messageId:'om_report',createdAt:'2026-09-24T04:00:00.000Z',
+      sender:{id:reviewer},text:common+unsafe}],{reviewerOpenId:reviewer});
+    assert.equal(parsed.candidates.find(item=>item.name==='周小雨').stage,'initial_pass');
+  }
+});
+
 test('an interview report header is not misidentified as the candidate name', () => {
   const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
   const parsed=parseRecruitmentMessages([{messageId:'om_report',createdAt:'2026-09-24T04:00:00.000Z',sender:{id:reviewer},
@@ -388,15 +588,20 @@ test('an interview report header is not misidentified as the candidate name', ()
 
 test('employment parser accepts only verified coaching reports and keeps expected versus actual dates separate', () => {
   const parsed = parseEmploymentMessages([
-    {messageId:'e1',createdAt:'2026-09-04T01:10:00.000Z',sender:{name:'倪梦萍'},text:'新人主播-谢红香已入职；谢红香考核通过。'},
-    {messageId:'e2',createdAt:'2026-09-04T02:10:00.000Z',sender:{name:'其他成员'},text:'新人主播-李梓恒已入职；李梓恒考核通过。'},
-  ]);
-  assert.equal(parsed.candidates.length, 1);
+    {messageId:'e1',createdAt:'2026-09-04T01:10:00.000Z',sender:{id:'ou_reviewer',name:'倪梦萍'},text:'新人主播-谢红香已入职；谢红香考核通过。'},
+    {messageId:'e2',createdAt:'2026-09-04T02:10:00.000Z',sender:{id:'ou_other',name:'倪梦萍'},text:'新人主播-李梓恒已入职；李梓恒考核通过。'},
+    {messageId:'e3',createdAt:'2026-09-04T03:10:00.000Z',sender:{id:'ou_reviewer',name:'倪梦萍'},text:'新人主播-王小花考核通过。'},
+  ],{reviewerOpenId:'ou_reviewer'});
+  assert.equal(parsed.candidates.length, 2);
   assert.equal(parsed.candidates[0].name, '谢红香');
   assert.equal(parsed.candidates[0].stage, 'hired');
   assert.equal(parsed.candidates[0].actualStartDate, '2026-09-04');
   assert.equal(parsed.candidates[0].assessmentPassed, true);
   assert.equal(parsed.candidates[0].source, 'WIS直播战队');
+  assert.equal(parsed.candidates[1].name,'王小花');
+  assert.equal(parsed.candidates[1].stage,'unmapped');
+  assert.equal(parsed.candidates[1].actualStartDate,null);
+  assert.match(parsed.candidates[1].status,/到岗待核验/u);
 });
 
 test('coach summary reads the newest dated section without treating missing fields as zero', () => {
@@ -404,11 +609,21 @@ test('coach summary reads the newest dated section without treating missing fiel
   assert.deepEqual(parsed, {date:'2026-08-24',inTraining:1,projectHeadcount:22,pendingAssessment:0,yesterdaySubmitted:4,newcomerName:'李楚晴',newcomerDay:4});
 });
 
-test('candidate merge preserves historical media and does not delete old records', () => {
-  const merged = mergeRecruitmentCandidates([{name:'甲',stage:'passed',media:['old.mp4']},{name:'乙',stage:'progress'}],[{name:'甲',stage:'failed',timeline:[['今天','明确结论']]}]);
+test('candidate merge preserves historical media but never joins a same-name report without the exact submission ID', () => {
+  const base=[{name:'甲',stage:'initial_pass',media:['old.mp4'],inSubmissionCohort:true,
+    submissionEvidence:{sourceId:'om_current'}},{name:'乙',stage:'progress'}];
+  const unbound=mergeRecruitmentCandidates(base,[{name:'甲',stage:'hired',actualStartDate:'2026-09-04'}]);
+  assert.equal(unbound.find(item=>item.name==='甲').stage,'initial_pass');
+  const crossCycle=mergeRecruitmentCandidates(base,[{name:'甲',stage:'hired',submissionMessageId:'om_prior',actualStartDate:'2026-09-04'}]);
+  assert.equal(crossCycle.find(item=>item.name==='甲').stage,'initial_pass');
+  const merged = mergeRecruitmentCandidates(base,[{name:'甲',stage:'hired',submissionMessageId:'om_current',
+    actualStartDate:'2026-09-04',timeline:[['今天','精确送审核对']]}]);
   assert.equal(merged.length, 2);
   assert.equal(merged.find(item => item.name === '甲').media[0], 'old.mp4');
-  assert.equal(merged.find(item => item.name === '甲').stage, 'failed');
+  assert.equal(merged.find(item => item.name === '甲').stage, 'hired');
+  const unresolved=[{name:'甲',submissionEvidence:{sourceId:'om_a'}},
+    {name:'甲',submissionEvidence:{sourceId:'om_b'}}];
+  assert.equal(mergeRecruitmentCandidates(unresolved,[{name:'甲',stage:'hired'}]).length,2);
 });
 
 test('anchor normalization keeps only verified nonempty rooms', () => {

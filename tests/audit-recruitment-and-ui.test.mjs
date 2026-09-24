@@ -8,8 +8,9 @@ const submit=(name,emoji,date='2026-09-01')=>({createdAt:date+'T08:00:00+08:00',
 const evaluation=name=>({createdAt:'2026-09-02T08:00:00+08:00',messageId:name+'eval',sender:{id:reviewerOpenId},text:name+'\n颜值 8\n- 通过'});
 test('submission cohort excludes unmatched evaluations and never infers OK from interview or offer',()=>{
  const result=parseRecruitmentMessages([submit('张三','OK'),submit('李四',null),evaluation('李四'),evaluation('王五'),{createdAt:'2026-09-03T08:00:00+08:00',text:'新人主播-赵六接受offer9.7待入职'},submit('张三','OK','2026-09-04')],{reviewerOpenId});
- assert.deepEqual(result.funnel,{candidateCount:2,initialPassedCount:1,initialFailedCount:0,initialPendingCount:1,groupEvaluatedCount:1,groupPassedCount:1,unmatchedCount:2});
+ assert.deepEqual(result.funnel,{candidateCount:2,initialPassedCount:0,initialFailedCount:0,initialPendingCount:2,groupEvaluatedCount:1,groupPassedCount:1,unmatchedCount:2});
  assert.equal(result.submittedCount,3);assert.equal(result.candidates.length,4);
+ assert.equal(result.candidates.find(x=>x.name==='张三').stage,'unmapped');
  assert.equal(result.candidates.find(x=>x.name==='王五').inSubmissionCohort,false);
  assert.equal(result.candidates.find(x=>x.name==='李四').submissionEvidence.initialReview,null);
 });

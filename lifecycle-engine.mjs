@@ -46,21 +46,62 @@ function reviewerReaction(message, reviewerOpenId) {
   return new Set(decisions.map(item => item.emoji)).size === 1 ? decisions[0] : {emoji:null,conflict:true};
 }
 
-function interviewEvaluation(text) {
-  const normalized = String(text || '').replace(/\r/gu, '');
-  if (!/颜值\s*\d|表现力\s*\d|-\s*(?:通过|不通过)/u.test(normalized) && !/面试(?:评价|结果)/u.test(normalized)) return null;
-  const scoredHeadings = [...normalized.matchAll(/(?:^|\n)\s*\**\s*([\p{Script=Han}·]{2,12})\s*\**\s*(?=\n\s*(?:颜值|表现力)\s*\d)/gu)];
-  if (scoredHeadings.length > 1) return null;
-  const nameMatch = normalized.match(/(?:^|\n)\s*\**\s*([\p{Script=Han}·]{2,12})\s*\**\s*(?:\n|颜值)/u);
-  const name = safeName(scoredHeadings[0]?.[1] || nameMatch?.[1]);
-  if (!name) return null;
-  // One group message can discuss several candidates. Never apply an outcome
-  // elsewhere in the message to the first name found in the heading.
-  const outcomes = [...normalized.matchAll(/不通过|(?<!不)通过/gu)].map(item => item[0]);
-  if (outcomes.length > 1) return null;
-  if (outcomes[0] === '不通过') return {name,passed:false};
-  if (outcomes[0] === '通过') return {name,passed:true};
-  return {name,passed:null};
+function interviewEvaluation(text, knownNames = []) {
+  const lines = String(text || '').replace(/\r/gu, '').split('\n').map(line => line.trim()).filter(Boolean);
+  if (!lines.some(line => /颜值|表现力/u.test(line))) return null;
+  // Only the reviewer's one-person structured report is machine-actionable.
+  // Arbitrary prose can contain a second person's name or a negation such as
+  // "没有通过"; substring searches must never advance the first heading.
+  const headings = lines.map((line, index) => ({index, name:safeName(line.replace(/^\*{1,2}|\*{1,2}$/gu, '').trim())}))
+    .filter(item => item.name && lines[item.index + 1] && /^(?:颜值|表现力)\s*\d/u.test(lines[item.index + 1]));
+  if (headings.length !== 1) return null;
+  const {name, index:headingIndex} = headings[0];
+  // Known names are checked longest first so 李明 is not inferred from 李明欣.
+  // A second known candidate anywhere in the report makes attribution unsafe.
+  const occupied = [], mentioned = new Set();
+  for (const candidate of [...new Set(knownNames)].filter(item => safeName(item) === item)
+    .sort((a,b) => b.length-a.length || a.localeCompare(b,'zh-CN'))) {
+    let from = 0, at;
+    while ((at = String(text).indexOf(candidate,from)) >= 0) {
+      const end = at + candidate.length;
+      from = end;
+      if (occupied.some(([start,finish]) => at < finish && end > start)) continue;
+      occupied.push([at,end]);
+      mentioned.add(candidate);
+    }
+  }
+  if ([...mentioned].some(candidate => candidate !== name)) return null;
+  const scored = /^(?:(?:颜值|表现力)\s*\d+(?:\.\d+)?(?:\s+|[，,、；;]\s*)?)+$/u;
+  const result = /^(?:[-—]\s*)?(?:\*{1,2})?(未通过|不通过|通过)(?:\*{1,2})?$/u;
+  const namedResult = new RegExp(`^(?:\\*{1,2})?${name}(?:\\*{1,2})?\\s*[：:—-]\\s*(?:\\*{1,2})?(未通过|不通过|通过)(?:\\*{1,2})?$`, 'u');
+  // The sender is the configured reviewer. An arbitrary @name after the
+  // outcome could refer to another candidate, so only the known reviewer tag
+  // is an acceptable suffix in the observed one-person report format.
+  const mentionedResult = /^[-—]\s*\*{2}(未通过|不通过|通过)\*{2}\s*@倪梦萍$/u;
+  // Free-form prose is not a reliable source of person attribution. Admit only
+  // narrow, person-free descriptive phrases seen in the structured reports;
+  // unfamiliar commentary stays pending instead of advancing a candidate.
+  const safeComment = /^[-—]\s+(?:镜头状态(?:稳定|自然|良好|较好|一般|待提升)(?:[，,、；;]\s*互动(?:自然|良好|较好|一般|待提升))?[。；;]?|表现力[：:]\s*(?:答复|回答|表达|口播|互动|讲解)(?:清晰|自然|流畅|良好|较好|一般|待提升)[。；;]?)$/u;
+  let passed = null, resultCount = 0, scoreCount = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (index === headingIndex || (index < headingIndex && (/^(?:面试结果|面试评价)$/u.test(line)
+      || /^\[Media:\s*[A-Za-z0-9_-]+\]$/u.test(line)))) continue;
+    if (scored.test(line)) {scoreCount += 1; continue;}
+    const outcome = line.match(result) || line.match(namedResult) || line.match(mentionedResult);
+    if (outcome) {
+      if (index !== lines.length - 1) return null;
+      resultCount += 1;
+      passed = outcome[1] === '通过';
+      continue;
+    }
+    if (index > headingIndex && scoreCount && resultCount === 0 && safeComment.test(line)) continue;
+    return null;
+  }
+  if (!scoreCount || resultCount > 1) return null;
+  // An outcome is optional: a scored report without an explicit conclusion is
+  // still represented as pending feedback, never as a pass.
+  return {name, passed};
 }
 
 function offerEvent(text, messageDateValue) {
@@ -145,14 +186,15 @@ function outcomeNames(text, outcome) {
   return [...new Set(names)];
 }
 
-export function parseEmploymentMessages(messages = [], {reviewerOpenId = RECRUITMENT_REVIEWER_OPEN_ID, reviewerName = '倪梦萍'} = {}) {
+export function parseEmploymentMessages(messages = [], {reviewerOpenId = RECRUITMENT_REVIEWER_OPEN_ID} = {}) {
   const candidates = new Map();
   const sourceDates = [];
   const ordered = [...messages].sort((a, b) => String(a?.createdAt || '').localeCompare(String(b?.createdAt || '')));
   for (const message of ordered) {
     const senderId = String(message?.sender?.id || '');
-    const senderName = String(message?.sender?.name || '');
-    if (senderId !== reviewerOpenId && senderName !== reviewerName) continue;
+    // A display name can be duplicated or edited. Only the configured open ID
+    // may contribute an independent daily-report fact.
+    if (!reviewerOpenId || senderId !== reviewerOpenId) continue;
     const date = messageDate(message);
     if (!date) continue;
     const text = String(message?.text || '');
@@ -170,9 +212,11 @@ export function parseEmploymentMessages(messages = [], {reviewerOpenId = RECRUIT
       candidates.set(name, {
         ...existing,
         name,
-        stage:'hired',
-        status:assessmentPassed ? '已入职 · 考核通过' : '已入职',
-        note:assessmentPassed ? 'WIS直播战队日报已确认入职与考核通过。' : 'WIS直播战队日报已确认入职/到岗；考核结果待核验。',
+        stage:hired?'hired':'unmapped',
+        status:hired ? assessmentPassed?'日报称已入职 · 考核通过待双人确认':'日报称已入职 · 归属待核验'
+          :'日报称考核通过 · 实际到岗待核验',
+        note:hired ? 'WIS直播战队日报有到岗/入职陈述，但缺少本周期精确送审消息 ID，暂不计入招聘漏斗。'
+          :'WIS直播战队日报仅有考核通过陈述，未见实际到岗；暂不计入已入职。',
         source:'WIS直播战队',
         date,
         actualStartDate:hired ? (existing.actualStartDate || date) : null,
@@ -189,22 +233,54 @@ export function parseEmploymentMessages(messages = [], {reviewerOpenId = RECRUIT
 export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUITMENT_REVIEWER_OPEN_ID} = {}) {
   const candidates = new Map();
   const submitted = new Set();
-  const submissionMessages = new Map();
   const dailyCounts = {};
   const dailyNames = {};
   const interviewEvents = {};
   const submissionEvidence = new Map();
   const evaluationEvidence = new Map();
+  const unresolvedEvaluationEvidence = new Map();
   const sourceDates = [];
   const ordered = [...messages].sort((a, b) => String(a?.createdAt || '').localeCompare(String(b?.createdAt || '')));
+  // Evaluate against the complete cycle, not only submissions seen earlier in
+  // message order: a second candidate or a duplicate same-name submission may
+  // arrive after a report. Neither may be attributed by name alone.
+  const submittedNames = new Set(ordered.flatMap(message => findSubmissionNames(message?.text)));
+  const submissionRecords = new Map(), unidentifiedSubmissions = new Map();
+  const messageNames = new Map(), ambiguousNames = new Set();
+  for (const message of ordered) {
+    const names = [...new Set(findSubmissionNames(message?.text))];
+    if (!names.length) continue;
+    const sourceId = String(message?.messageId || '').trim();
+    const date = messageDate(message);
+    const initialReview = reviewerReaction(message, reviewerOpenId)?.emoji || null;
+    for (const name of names) {
+      if (!submissionRecords.has(name)) submissionRecords.set(name,new Map());
+      if (!sourceId || !date) {
+        ambiguousNames.add(name);
+        const unidentified = unidentifiedSubmissions.get(name) || [];
+        unidentified.push({name,date,sourceId,initialReview});
+        unidentifiedSubmissions.set(name,unidentified);
+        continue;
+      }
+      if (!messageNames.has(sourceId)) messageNames.set(sourceId,new Set());
+      messageNames.get(sourceId).add(name);
+      const records = submissionRecords.get(name);
+      const previous = records.get(sourceId);
+      if (previous && (previous.date !== date || previous.initialReview !== initialReview
+        || previous.text !== String(message?.text || ''))) ambiguousNames.add(name);
+      else if (!previous) records.set(sourceId,{name,date,sourceId,initialReview,text:String(message?.text || '')});
+    }
+  }
+  for (const [name,records] of submissionRecords) {
+    if (records.size !== 1 || [...records.keys()].some(id => messageNames.get(id)?.size !== 1))
+      ambiguousNames.add(name);
+  }
   for (const message of ordered) {
     const date = messageDate(message);
     if (!date) continue;
     sourceDates.push(date);
     const text = String(message?.text || '');
     for (const name of findSubmissionNames(text)) {
-      if (!submissionMessages.has(name)) submissionMessages.set(name,new Set());
-      if (message?.messageId) submissionMessages.get(name).add(message.messageId);
       const key = `${date}|${name}`;
       if (!submitted.has(key)) {
         submitted.add(key);
@@ -212,6 +288,7 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
         dailyNames[date] = [...new Set([...(dailyNames[date] || []), name])];
       }
       const reaction = reviewerReaction(message, reviewerOpenId);
+      if (ambiguousNames.has(name)) continue;
       submissionEvidence.set(name, {name, date, sourceId:message?.messageId || '', initialReview:reaction?.emoji || null});
       if (reaction?.emoji === 'OK') updateCandidate(candidates, {name, date, stage:'initial_pass', status:'初审通过', note:'倪梦萍在送审消息上标记 OK。', sourceId:message?.messageId});
       else if (reaction?.emoji === 'No') updateCandidate(candidates, {name, date, stage:'initial_fail', status:'初审不通过', note:'倪梦萍在送审消息上标记 No。', sourceId:message?.messageId});
@@ -220,8 +297,12 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
     const senderId = String(message?.sender?.id || '');
     const senderName = String(message?.sender?.name || '');
     const isReviewer = Boolean(reviewerOpenId) && senderId === reviewerOpenId;
-    const evaluation = isReviewer ? interviewEvaluation(text) : null;
-    if (evaluation) {
+    const evaluation = isReviewer ? interviewEvaluation(text, new Set([...submittedNames, ...candidates.keys()])) : null;
+    if (evaluation && ambiguousNames.has(evaluation.name)) {
+      const pending = unresolvedEvaluationEvidence.get(evaluation.name) || [];
+      pending.push({date,sourceId:message?.messageId || '',passed:evaluation.passed});
+      unresolvedEvaluationEvidence.set(evaluation.name,pending);
+    } else if (evaluation) {
       evaluationEvidence.set(evaluation.name, {passed:evaluation.passed, date, sourceId:message?.messageId || ''});
       const stage = evaluation.passed === true ? 'interview_pass' : evaluation.passed === false ? 'interview_fail' : 'pending_feedback';
       const status = evaluation.passed === true ? '面试通过' : evaluation.passed === false ? '面试不通过' : '待面评';
@@ -229,10 +310,26 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
       interviewEvents[date] = [...(interviewEvents[date] || []), {name:evaluation.name,status:stage,source:'面评群消息'}];
     }
     const offer = offerEvent(text, date);
-    if (offer) {
+    if (offer && !ambiguousNames.has(offer.name)) {
       const hired = false; // A scheduled start date does not prove actual onboarding.
       updateCandidate(candidates, {name:offer.name,date,stage:hired?'hired':'interview_pass',status:hired?'已入职':'面试通过 · 待入职',note:`招聘群已确认接受 offer，预计入职日期 ${offer.startDate}，实际到岗待核验。`,startDate:offer.startDate,sourceId:message?.messageId});
     }
+  }
+  for (const name of ambiguousNames) {
+    const records = [...(submissionRecords.get(name)?.values() || [])].map(({text,...record}) => record)
+      .concat(unidentifiedSubmissions.get(name) || []);
+    submissionEvidence.set(name,{name,date:'',sourceId:'',initialReview:null,
+      ambiguityReason:'同一招聘周期的送审姓名与消息无法唯一对应'});
+    const existing = candidates.get(name);
+    candidates.set(name,{
+      ...(existing || {}),name,source:'招聘群',stage:'unmapped',status:'同名送审待核验',
+      submissionIdentityStatus:'ambiguous',
+      note:'同一招聘周期的送审姓名与消息无法唯一对应，不能自动确认初审或面评结果。',
+      date:existing?.date || records.at(-1)?.date || '',sourceId:'',
+      submissionEvidenceAlternatives:records,
+      unresolvedEvaluationEvidence:unresolvedEvaluationEvidence.get(name) || [],
+      timeline:existing?.timeline || []
+    });
   }
   const cohortNames = [...submissionEvidence.keys()];
   const cohort = new Set(cohortNames);
@@ -245,7 +342,7 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
   return {
     candidates: allCandidates.sort((a, b) => b.date.localeCompare(a.date) || a.name.localeCompare(b.name, 'zh-CN')),
     cohortNames,
-    submissionMessageCounts:Object.fromEntries([...submissionMessages].map(([name,ids])=>[name,ids.size])),
+    submissionMessageCounts:Object.fromEntries([...submissionRecords].map(([name,records])=>[name,records.size])),
     funnel: {
       candidateCount:cohortNames.length,
       initialPassedCount:[...submissionEvidence.values()].filter(item => item.initialReview === 'OK').length,
@@ -306,7 +403,8 @@ export function linkVerifiedRecruitmentCalendar(candidates = [], calendarEvents 
   for (const [date, events] of Object.entries(calendarEvents || {})) {
     for (const event of Array.isArray(events) ? events : []) {
       if (event?.status !== 'calendar') continue;
-      const named = cohort.filter(item => calendarTitleNamesPerson(event.name, item.name));
+      const named = cohort.filter(item => (!item.boundaryCarryoverDate || item.boundaryCarryoverDate === date)
+        && calendarTitleNamesPerson(event.name, item.name));
       if (!named.length) continue; // An unrelated event is not a missing cohort interview.
       const names = [...new Set(named.map(item => item.name))];
       const validEvent = /^20\d{2}-\d{2}-\d{2}$/u.test(date) && Boolean(String(event.eventId || '').trim());
@@ -328,13 +426,15 @@ export function linkVerifiedRecruitmentCalendar(candidates = [], calendarEvents 
   for (const [name, matches] of hits) {
     const candidate = cohort.find(item => item.name === name);
     const submission = candidate?.submissionEvidence;
-    const validSubmission = candidateCounts.get(name) === 1 && submissionMessageCounts?.[name] === 1
+    const validSubmission = candidateCounts.get(name) === 1 && candidate?.submissionIdentityStatus !== 'ambiguous'
+      && submissionMessageCounts?.[name] === 1
       && /^om_[A-Za-z0-9_]+$/u.test(String(submission?.sourceId || ''))
       && sourceIdCounts.get(submission?.sourceId) === 1
       && submission?.name === name && /^20\d{2}-\d{2}-\d{2}$/u.test(String(submission?.date || ''));
     if (conflicted.has(name) || matches.length !== 1 || !validSubmission || matches[0].date < submission.date
       || eventIdCounts.get(matches[0]?.eventId) !== 1
-      || candidate.stage !== 'initial_pass' || submission.initialReview !== 'OK') {
+      || !['initial_pass','pending_feedback','interview_pass','interview_fail'].includes(candidate.stage)
+      || submission.initialReview !== 'OK') {
       conflicted.add(name);
       pendingCount += matches.length;
       continue;
@@ -355,6 +455,66 @@ export function linkVerifiedRecruitmentCalendar(candidates = [], calendarEvents 
     return {...base, stage:'pending_feedback', status:'已安排正式面试 · 待面评', date:event.date, timeline};
   });
   return {candidates:linked, matchedCount:pendingCount ? null : verified.size, pendingCount};
+}
+
+/** Carry a prior-cycle submission only when the official calendar names that
+ * person on the first day of the next cycle. No prior-cycle person is imported
+ * just because their name occurred in the old chat. An incomplete previous
+ * source blocks first-day attribution but leaves unrelated later dates alone.
+ */
+export function linkRecruitmentCalendarAcrossBoundary(currentCandidates = [], previousParsed = null,
+  calendarEvents = {}, currentSubmissionCounts = {}, {
+    boundaryDate = '', previousCycle = null, currentSourceReady = false,
+    previousSourceReady = false, advanceStage = false
+  } = {}) {
+  const original = Array.isArray(currentCandidates) ? currentCandidates : [];
+  const firstDayEvents = (calendarEvents?.[boundaryDate] || []).filter(item => item?.status === 'calendar');
+  const regular = (events) => linkVerifiedRecruitmentCalendar(original, events, currentSubmissionCounts,
+    {sourceReady:currentSourceReady,advanceStage});
+  if (!firstDayEvents.length) {
+    const linked = regular(calendarEvents);
+    return {...linked, boundary:{status:'not_applicable',date:boundaryDate,matchedCount:0},carryCandidates:[]};
+  }
+  const withoutBoundary = {...calendarEvents};
+  delete withoutBoundary[boundaryDate];
+  const pending = reason => {
+    const linked = regular(withoutBoundary);
+    return {...linked, matchedCount:null,
+      pendingCount:linked.pendingCount === null ? null : linked.pendingCount + firstDayEvents.length,
+      boundary:{status:'pending',date:boundaryDate,reason,matchedCount:null},carryCandidates:[]};
+  };
+  if (!currentSourceReady || !previousSourceReady || !previousParsed || !previousCycle)
+    return pending('跨周期招聘群或正式日历来源尚未完整核验');
+  const prior = (previousParsed.candidates || []).filter(item => item?.inSubmissionCohort
+    && item.submissionEvidence?.date >= previousCycle.startDate
+    && item.submissionEvidence?.date < previousCycle.endDate)
+    .map(item => ({...item,boundaryCarryoverDate:boundaryDate,boundarySourceCycle:previousCycle.month}));
+  // A new-cycle report for the same person is a separate, unlinked assertion.
+  // Do not render it beside an older submission as two contradictory people or
+  // send a reminder from the older row until the evidence is reconciled.
+  const currentNames = new Set(original.map(item => item?.name).filter(Boolean));
+  if (prior.some(item => currentNames.has(item.name)
+    && firstDayEvents.some(event => calendarTitleNamesPerson(event.name,item.name))))
+    return pending('跨周期同名面评或送审与上周期证据尚未关联');
+  const counts = {...currentSubmissionCounts};
+  for (const [name,count] of Object.entries(previousParsed.submissionMessageCounts || {}))
+    counts[name] = (counts[name] || 0) + count;
+  const linked = linkVerifiedRecruitmentCalendar([...original,...prior],calendarEvents,counts,
+    {sourceReady:true,advanceStage});
+  const firstDayLinked = linked.candidates.filter(item => item.calendarEvidence?.date === boundaryDate);
+  const eventIds = firstDayEvents.map(item => String(item.eventId || ''));
+  const linkedIds = firstDayLinked.map(item => String(item.calendarEvidence.eventId || ''));
+  if (linked.pendingCount !== 0 || firstDayLinked.length !== firstDayEvents.length
+    || eventIds.some(id => !id || linkedIds.filter(value => value === id).length !== 1))
+    return pending('跨周期送审与首日正式面试日程无法唯一匹配');
+  const current = linked.candidates.slice(0, original.length);
+  const carryCandidates = linked.candidates.slice(original.length)
+    .filter(item => item.calendarEvidence?.date === boundaryDate)
+    .map(item => ({...item,inSubmissionCohort:false,boundaryCarryover:true}));
+  return {candidates:[...current,...carryCandidates],matchedCount:linked.matchedCount,pendingCount:0,
+    boundary:{status:'verified',date:boundaryDate,sourceCycle:previousCycle.month,
+      matchedCount:firstDayLinked.length,submissionMessageCounts:previousParsed.submissionMessageCounts || {}},
+    carryCandidates};
 }
 
 /** Recalled messages remain in Feishu list pages, but their reaction records
@@ -431,31 +591,48 @@ export function interviewReminderSourceFingerprint(snapshot, date) {
   // cohort. Sorting makes harmless API order changes irrelevant.
   const calendar = (snapshot?.interviewEvents?.[date] || [])
     .filter(item => item?.status === 'calendar')
-    .map(item => [String(item.eventId || ''), String(item.name || '')])
+    .map(item => [String(item.eventId || ''), String(item.name || ''),
+      String(item.startAt || ''),String(item.endAt || ''),String(item.summaryFingerprint || '')])
     .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   const cohort = (snapshot?.candidates || [])
-    .filter(item => item?.inSubmissionCohort)
-    .map(item => [String(item.name || ''), String(item.submissionEvidence?.sourceId || '')])
+    .filter(item => item?.inSubmissionCohort || item?.boundaryCarryover)
+    .map(item => [String(item.name || ''), String(item.submissionEvidence?.sourceId || ''),
+      String(item.submissionEvidence?.initialReview || ''),String(item.calendarEvidence?.eventId || '')])
     .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   const submissionCounts = Object.entries(snapshot?.submissionMessageCounts || {})
     .sort(([a], [b]) => a.localeCompare(b));
-  return JSON.stringify({calendar, cohort, submissionCounts, capped:Boolean(snapshot?.coverage?.capped)});
+  return JSON.stringify({calendar, cohort, submissionCounts, capped:Boolean(snapshot?.coverage?.capped),
+    reactionStatus:String(snapshot?.coverage?.reactionStatus || ''),
+    boundary:snapshot?.boundaryCarryover || null});
 }
 
 export function buildInterviewReminderPreview(snapshot, date) {
   const pending = (reason) => ({status:'pending',reason,date,matches:[],text:'',readyForSend:false});
   if (!/^20\d{2}-\d{2}-\d{2}$/u.test(String(date || ''))) return pending('面试日期无效');
   if (!String(snapshot?.calendarStatus || '').startsWith('已连接：')) return pending('正式面试日历尚未接入');
-  if (snapshot?.coverage?.capped || !snapshot?.coverage?.chatMessages) return pending('招聘群证据不完整');
+  if (snapshot?.coverage?.capped || snapshot?.coverage?.reactionStatus !== '已核验') return pending('招聘群证据不完整');
   const events = (snapshot?.interviewEvents?.[date] || []).filter(item => item?.status === 'calendar');
   if (!events.length) return pending('当天没有可核验的正式面试日程');
-  const candidates = (snapshot?.candidates || []).filter(item => item?.inSubmissionCohort && item?.name);
+  const boundaryDate = recruitmentCycleRange(recruitmentCycleMonthForDate(date)).startDate;
+  if (date === boundaryDate && snapshot?.boundaryCarryover?.status !== 'verified')
+    return pending('跨周期招聘群来源与首日面试人尚未完整核验');
+  if (date !== boundaryDate && !snapshot?.coverage?.chatMessages) return pending('招聘群证据不完整');
+  const candidates = (snapshot?.candidates || []).filter(item => (item?.inSubmissionCohort ||
+    (date === boundaryDate && item?.boundaryCarryover)) && item?.name);
   const matches = [];
   for (const event of events) {
     const named = candidates.filter(item => calendarTitleNamesPerson(event.name, item.name));
-    if (named.length !== 1 || snapshot?.submissionMessageCounts?.[named[0].name] !== 1 || !named[0].submissionEvidence?.sourceId)
+    const candidate = named[0];
+    const count = candidate?.boundaryCarryover
+      ? snapshot?.boundaryCarryover?.submissionMessageCounts?.[candidate.name]
+      : snapshot?.submissionMessageCounts?.[candidate?.name];
+    if (named.length !== 1 || count !== 1 || candidate?.submissionIdentityStatus === 'ambiguous'
+      || candidate?.submissionEvidence?.initialReview !== 'OK'
+      || !/^om_[A-Za-z0-9_]+$/u.test(String(candidate?.submissionEvidence?.sourceId || ''))
+      || !/^20\d{2}-\d{2}-\d{2}$/u.test(String(candidate?.submissionEvidence?.date || ''))
+      || candidate.submissionEvidence.date > date || candidate.calendarEvidence?.eventId !== event.eventId)
       return pending('面试日程与唯一送审候选人无法一一核对');
-    matches.push({name:named[0].name,eventId:event.eventId || ''});
+    matches.push({name:candidate.name,eventId:event.eventId || ''});
   }
   const unique = [...new Set(matches.map(item => item.name))];
   if (unique.length !== matches.length || matches.some(item => !item.eventId) ||
@@ -494,6 +671,13 @@ export function recruitmentCycleRange(month) {
     // Bound the requested range to the last second before the next cycle.
     endTime:Math.floor(new Date(`${endDate}T00:00:00+08:00`).getTime() / 1000) - 1
   };
+}
+
+export function recruitmentBoundaryCycleRange(month) {
+  const current = recruitmentCycleRange(month);
+  const previousDate = chinaDateFor(new Date((current.startTime - 1) * 1000));
+  const previous = recruitmentCycleRange(recruitmentCycleMonthForDate(previousDate));
+  return {date:current.startDate,previous};
 }
 
 /** Late restarts must not turn a timed work reminder into an after-hours send. */
@@ -763,14 +947,23 @@ export function parseLatestCoachSummary(content = '') {
 }
 
 export function mergeRecruitmentCandidates(base = [], updates = []) {
-  const merged = new Map(base.map(item => [item.name, {...item}]));
+  const merged=base.map(item=>({...item}));
   for (const update of updates) {
-    const existing = merged.get(update.name);
+    const submissionId=String(update?.submissionMessageId || update?.submissionEvidence?.sourceId || '');
+    if (!/^om_[A-Za-z0-9_]+$/u.test(submissionId)) continue;
+    const matching=merged.map((item,index)=>({item,index})).filter(({item})=>item?.name===update?.name
+      && item?.inSubmissionCohort===true && item?.submissionIdentityStatus!=='ambiguous'
+      && item?.submissionEvidence?.sourceId===submissionId);
+    if(matching.length!==1)continue;
+    const {item:existing,index}=matching[0];
+    // A separately sourced record with the same display name cannot resolve
+    // two competing submission message IDs in the recruitment cycle.
+    if (existing?.submissionIdentityStatus === 'ambiguous') continue;
     const timeline = [...(existing?.timeline || [])];
     for (const item of update.timeline || []) if (!timeline.some(row => row[0] === item[0] && row[1] === item[1])) timeline.push(item);
-    merged.set(update.name, {...(existing || {}), ...update, media:existing?.media || update.media, timeline});
+    merged[index]={...existing,...update,media:existing.media || update.media,timeline};
   }
-  return [...merged.values()];
+  return merged;
 }
 
 export function assessmentSubmissionKey(cycleMonth, submissionMessageId) {
