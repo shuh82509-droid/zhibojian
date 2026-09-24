@@ -8,7 +8,7 @@ import {pathToFileURL} from 'node:url';
 export const scopes = ['calendar:calendar:read','calendar:calendar.event:read','offline_access'];
 const inherentScopes = new Set([...scopes,'user_profile','auth:user.id:read']);
 const fail = code => Object.assign(new Error(code), {code});
-export function createDeviceRecovery({appId,appSecret,calendarId,expectedOpenId,storePath,encryptionKey,fetchImpl=fetch,now=Date.now}) {
+export function createDeviceRecovery({appId,appSecret,calendarId,expectedOpenId,storePath,encryptionKey,requireOwnPrimaryCalendar=false,fetchImpl=fetch,now=Date.now}) {
   const key=Buffer.from(encryptionKey||'', 'base64');
   if (!appId||!appSecret||!calendarId||!expectedOpenId||!storePath||key.length!==32) throw fail('configuration_incomplete');
   const pendingPath=storePath+'.device-recovery.enc';
@@ -74,6 +74,13 @@ export function createDeviceRecovery({appId,appSecret,calendarId,expectedOpenId,
     const headers={Authorization:'Bearer '+record.accessToken};
     const identity=await request('https://open.feishu.cn/open-apis/authen/v1/user_info',{headers});
     if(!identity.ok||identity.data.code!==0||identity.data.data?.open_id!==expectedOpenId)throw fail('device_wrong_user_or_unverified');
+    if(requireOwnPrimaryCalendar){
+      const primary=await request('https://open.feishu.cn/open-apis/calendar/v4/calendars/primary?user_id_type=open_id',
+        {method:'POST',headers:{...headers,'Content-Type':'application/json; charset=utf-8'},body:'{}'});
+      const matches=Array.isArray(primary.data?.data?.calendars)?primary.data.data.calendars.filter(item=>
+        item?.user_id===expectedOpenId&&item.calendar?.calendar_id===calendarId&&item.calendar?.type==='primary'&&item.calendar?.is_deleted!==true):[];
+      if(!primary.ok||primary.data?.code!==0||matches.length!==1)throw fail('device_primary_calendar_unverified');
+    }
     const calendar=await request('https://open.feishu.cn/open-apis/calendar/v4/calendars/'+encodeURIComponent(calendarId),{headers});
     const c=calendar.data.data?.calendar||calendar.data.data;
     if(!calendar.ok||calendar.data.code!==0||c?.calendar_id!==calendarId||!['reader','writer','owner'].includes(c?.role))throw fail('device_calendar_details_denied');

@@ -107,5 +107,6 @@ async function loadLifecycle(){try{const base=lifecycleBase(),[snapshotResponse,
 closeDialog.onclick=()=>dialog.close();dialog.addEventListener('click',event=>{if(event.target===dialog)dialog.close()});document.querySelector('#applyRankRange').onclick=loadAnchorTrends;refreshButton.onclick=manualRefresh;renderAll();loadBundledProfiles();loadAnchorTrends();loadLifecycle();setInterval(loadLifecycle,5*60*1000);
 </script>
 <script src="assets/anchor-development.js"></script>
+<script src="assets/coach-review-ui.js"></script>
 <script>document.addEventListener('livehub:module-data',({detail})=>{const updates=(detail?.placements||[]).filter(item=>item.module==='anchors').slice(0,3);if(updates.length)banner.innerHTML=updates.map(item=>esc(item.title||item.evidence||'')).filter(Boolean).join('　·　')});</script><script src="../../module-data.js" defer></script>
 </body></html>

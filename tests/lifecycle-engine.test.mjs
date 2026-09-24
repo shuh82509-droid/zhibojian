@@ -7,24 +7,304 @@ import {
   parseLatestCoachSummary,
   parseEmploymentMessages,
   parseRecruitmentMessages,
-  buildInterviewReminderPreview
+  buildInterviewReminderPreview, interviewReminderSourceFingerprint, reviewWeekFor, readVersionedCoachRankingRows, readVerifiedCoachInstances, coachCalendarFingerprint, assertCoachRankingRevision, parseWeeklyCoachRotation, countCoachReviews, coachReviewReminder, structuredAssessmentSummary, structuredAssessmentForCandidate, assessmentSubmissionKey, centralFeishuOpenId, isVerifiedLiveCenterContact, assessmentSubmissionFor, recruitmentCycleMonthForDate, recruitmentCycleRange, lifecycleReminderWindow
 } from '../lifecycle-engine.mjs';
+
+test('timed reminders send only inside their one-hour China-time windows',()=>{
+  for(const [kind,start] of [['interview',17*60],['coach',17*60+30]]){
+    assert.equal(lifecycleReminderWindow(kind,start-1),'before');
+    assert.equal(lifecycleReminderWindow(kind,start),'open');
+    assert.equal(lifecycleReminderWindow(kind,start+59),'open');
+    assert.equal(lifecycleReminderWindow(kind,start+60),'missed');
+    assert.equal(lifecycleReminderWindow(kind,23*60),'missed');
+  }
+  assert.equal(lifecycleReminderWindow('unknown',17*60),'invalid');
+});
+
+test('recruitment cycle switches at 25th and excludes the next cycle first day',()=>{
+  assert.equal(recruitmentCycleMonthForDate('2026-09-24'),'2026-09');
+  assert.equal(recruitmentCycleMonthForDate('2026-09-25'),'2026-10');
+  assert.equal(recruitmentCycleMonthForDate('2026-09-26'),'2026-10');
+  assert.equal(recruitmentCycleMonthForDate('2026-12-25'),'2027-01');
+  assert.equal(recruitmentCycleMonthForDate('2026-02-30'),'');
+  const september=recruitmentCycleRange('2026-09');
+  const october=recruitmentCycleRange('2026-10');
+  assert.equal(september.startDate,'2026-08-25');
+  assert.equal(september.endDate,'2026-09-25');
+  assert.equal(new Date(september.endTime*1000).toISOString(),'2026-09-24T15:59:59.000Z');
+  assert.equal(october.startTime,september.endTime+1);
+  assert.equal(new Date(october.startTime*1000).toISOString(),'2026-09-24T16:00:00.000Z');
+  assert.throws(()=>recruitmentCycleRange('2026-13'),{status:400});
+});
+
+test('structured assessment writer requires non-degraded exact Feishu identity and one source-bound cohort person',()=>{
+  const bindings={'FD-027097':'ou_assessor'};
+  const signed={ok:true,mode:'central',user:{number:'FD-027097'}};
+  assert.equal(centralFeishuOpenId(signed,bindings),'ou_assessor');
+  assert.equal(centralFeishuOpenId({...signed,user:{number:'FD-027097',open_id:'ou_assessor'}},bindings),'ou_assessor');
+  assert.equal(centralFeishuOpenId({...signed,user:{number:'FD-027097',open_id:'ou_wrong'}},bindings),'');
+  assert.equal(centralFeishuOpenId({...signed,user:{number:'FD-027097',open_id:'ou_assessor',openId:'ou_wrong'}},bindings),'');
+  assert.equal(centralFeishuOpenId({...signed,user:{realName:'倪梦萍',open_id:'ou_assessor'}},bindings),'');
+  assert.equal(centralFeishuOpenId({...signed,user:{number:' FD-027097 ',open_id:'ou_assessor'}},bindings),'');
+  assert.equal(centralFeishuOpenId({...signed,user:{number:'FD-1'}},bindings),'');
+  assert.equal(centralFeishuOpenId({...signed,degraded:true},bindings),'');
+  assert.equal(centralFeishuOpenId({...signed,mode:'internal'},bindings),'');
+  assert.equal(centralFeishuOpenId(signed,{}),'');
+  const snapshot={coverage:{capped:false,chatMessages:2},candidates:[{name:'周小雨',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_original'}}],dailyNames:{'2026-09-23':['周小雨']},submissionMessageCounts:{'周小雨':1}};
+  assert.equal(assessmentSubmissionFor(snapshot,{candidateName:'周小雨',submissionMessageId:'om_original',outcome:'pass'}).status,'ready');
+  assert.equal(assessmentSubmissionFor(snapshot,{candidateName:'周小雨',submissionMessageId:'om_wrong',outcome:'pass'}).status,'pending');
+  assert.equal(assessmentSubmissionFor({...snapshot,coverage:{capped:true,chatMessages:500}},{candidateName:'周小雨',submissionMessageId:'om_original',outcome:'pass'}).status,'pending');
+  assert.equal(assessmentSubmissionFor({...snapshot,dailyNames:{'2026-09-23':['周小雨'],'2026-09-24':['周小雨']}},{candidateName:'周小雨',submissionMessageId:'om_original',outcome:'pass'}).status,'pending');
+  assert.equal(assessmentSubmissionFor({...snapshot,submissionMessageCounts:{'周小雨':2}},{candidateName:'周小雨',submissionMessageId:'om_original',outcome:'pass'}).status,'pending');
+});
+
+test('assessor contact must match current app open ID, exact employee number, department and active status',()=>{
+  const contact={open_id:'ou_assessor',name:'倪梦萍',employee_no:'FD-027097',department_ids:['od_live'],status:{is_activated:true,is_exited:false,is_frozen:false,is_resigned:false,is_unjoin:false}};
+  const expected={openId:'ou_assessor',name:'倪梦萍',departmentId:'od_live',employeeNo:'FD-027097'};
+  assert.equal(isVerifiedLiveCenterContact(contact,expected),true);
+  for(const mismatch of [{open_id:'ou_other'},{name:'同名其他人'},{employee_no:'FD-000000'},{department_ids:['od_other']},{status:{...contact.status,is_exited:true}},{status:{...contact.status,is_unjoin:true}}])
+    assert.equal(isVerifiedLiveCenterContact({...contact,...mismatch},expected),false);
+  assert.equal(isVerifiedLiveCenterContact({...contact,employee_no:undefined},expected),false);
+});
+
+test('structured assessments require both named identities and the same candidate submission', () => {
+  const assessors={'ou_ni':'倪梦萍','ou_liu':'刘慧迅'};
+  const candidates=[{name:'周小雨',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_submission'}},{name:'陈小河',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_other'}}];
+  const one=[{id:'r1',cycleMonth:'2026-09',candidateName:'周小雨',submissionMessageId:'om_submission',actorOpenId:'ou_ni',outcome:'pass',createdAt:'2026-09-24T01:00:00Z'}];
+  const pending=structuredAssessmentSummary(candidates,one,'2026-09',assessors);
+  assert.equal(pending.bySubmission[assessmentSubmissionKey('2026-09','om_submission')].passed,null);
+  assert.equal(pending.awaitingCount,2);
+  const records=[...one,{id:'r2',cycleMonth:'2026-09',candidateName:'周小雨',submissionMessageId:'om_submission',actorOpenId:'ou_liu',outcome:'pass',createdAt:'2026-09-24T02:00:00Z'},
+    {id:'wrong-source',cycleMonth:'2026-09',candidateName:'陈小河',submissionMessageId:'om_wrong',actorOpenId:'ou_ni',outcome:'pass'}];
+  const confirmed=structuredAssessmentSummary(candidates,records,'2026-09',assessors);
+  assert.equal(confirmed.bySubmission[assessmentSubmissionKey('2026-09','om_submission')].passed,true);
+  assert.equal(confirmed.bySubmission[assessmentSubmissionKey('2026-09','om_other')].passed,null);
+  assert.equal(confirmed.passedCount,1);
+  assert.equal(structuredAssessmentSummary(candidates,records,'2026-09',{}).passedCount,0);
+  const conflict=structuredAssessmentSummary(candidates,[...one,{...records[1],outcome:'fail'}],'2026-09',assessors);
+  assert.equal(conflict.bySubmission[assessmentSubmissionKey('2026-09','om_submission')].passed,null);
+  assert.equal(conflict.conflictCount,1);
+});
+
+test('先确认后新增同名送审仍按周期和消息 ID 归属，不串用结论',()=>{
+  const assessors={'ou_ni':'倪梦萍','ou_liu':'刘慧迅'};
+  const original={name:'周小雨',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_first'}};
+  const second={name:'周小雨',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_second'}};
+  const entries=['ou_ni','ou_liu'].map(actorOpenId=>({cycleMonth:'2026-09',candidateName:'周小雨',submissionMessageId:'om_first',actorOpenId,outcome:'pass'}));
+  const summary=structuredAssessmentSummary([original,second],entries,'2026-09',assessors);
+  assert.equal(structuredAssessmentForCandidate(summary,original,'2026-09')?.passed,true);
+  assert.equal(structuredAssessmentForCandidate(summary,second,'2026-09')?.passed,null);
+  assert.equal(summary.passedCount,1);
+  assert.equal(summary.awaitingCount,1);
+  assert.equal(structuredAssessmentForCandidate(summary,original,'2026-10'),null);
+  assert.equal(assessmentSubmissionFor({coverage:{capped:false,chatMessages:2},candidates:[original,second],submissionMessageCounts:{'周小雨':2},dailyNames:{'2026-09-23':['周小雨']}},
+    {candidateName:'周小雨',submissionMessageId:'om_second',outcome:'pass'}).status,'pending');
+});
+
+test('一条送审消息若意外映射两位候选人，结论不得写入任何一人',()=>{
+  const first={name:'周小雨',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_shared'}};
+  const second={name:'陈小河',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_shared'}};
+  const summary=structuredAssessmentSummary([first,second],[
+    {cycleMonth:'2026-09',candidateName:'周小雨',submissionMessageId:'om_shared',actorOpenId:'ou_ni',outcome:'pass'},
+    {cycleMonth:'2026-09',candidateName:'周小雨',submissionMessageId:'om_shared',actorOpenId:'ou_liu',outcome:'pass'},
+  ],'2026-09',{'ou_ni':'倪梦萍','ou_liu':'刘慧迅'});
+  assert.equal(structuredAssessmentForCandidate(summary,first,'2026-09'),null);
+  assert.equal(structuredAssessmentForCandidate(summary,second,'2026-09'),null);
+  assert.equal(summary.passedCount,0);
+  assert.equal(assessmentSubmissionFor({coverage:{capped:false,chatMessages:2},candidates:[first,second],submissionMessageCounts:{'周小雨':1},dailyNames:{'2026-09-23':['周小雨']}},
+    {candidateName:'周小雨',submissionMessageId:'om_shared',outcome:'pass'}).status,'pending');
+});
 
 test('interview reminder requires a verified calendar and exact candidate match', () => {
   const date = '2026-09-23';
   const snapshot = {
     calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',
     coverage:{capped:false,chatMessages:12},
-    candidates:[{name:'周小雨',inSubmissionCohort:true}],
+    candidates:[{name:'周小雨',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_zhou'}}],
+    submissionMessageCounts:{周小雨:1},
     interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',eventId:'e1'}]},
   };
   const preview = buildInterviewReminderPreview(snapshot, date);
   assert.equal(preview.status, 'preview');
+  assert.equal(preview.sourceReady, true);
   assert.equal(preview.readyForSend, false);
   assert.deepEqual(preview.matches, [{name:'周小雨',eventId:'e1'}]);
   assert.match(preview.text, /周小雨/);
   assert.equal(buildInterviewReminderPreview({...snapshot,calendarStatus:'待授权'}, date).status, 'pending');
   assert.equal(buildInterviewReminderPreview({...snapshot,interviewEvents:{[date]:[{name:'未知姓名面试',status:'calendar'}]}}, date).status, 'pending');
+});
+
+test('interview title does not mistake a Chinese name prefix for another candidate', () => {
+  const date='2026-09-24',snapshot={calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',coverage:{capped:false,chatMessages:1},
+    candidates:[{name:'王丽',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_wangli'}}],submissionMessageCounts:{王丽:1},
+    interviewEvents:{[date]:[{name:'王丽娜面试 · 14:00',status:'calendar',eventId:'e1'}]}};
+  assert.equal(buildInterviewReminderPreview(snapshot,date).status,'pending');
+  assert.equal(buildInterviewReminderPreview({...snapshot,interviewEvents:{[date]:[{name:'面试王丽 · 14:00',status:'calendar',eventId:'e1'}]}},date).sourceReady,true);
+  assert.equal(buildInterviewReminderPreview({...snapshot,candidates:[...snapshot.candidates,{name:'王丽娜',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_wanglina'}}],submissionMessageCounts:{王丽:1,王丽娜:1}},date).status,'preview');
+  assert.equal(buildInterviewReminderPreview({...snapshot,submissionMessageCounts:{王丽:2},interviewEvents:{[date]:[{name:'王丽面试 · 14:00',status:'calendar',eventId:'e1'}]}},date).status,'pending');
+});
+
+test('17:00 interview source fingerprint is order independent but detects calendar and chat changes',()=>{
+  const date='2026-09-24',base={coverage:{capped:false},submissionMessageCounts:{王丽:1},
+    candidates:[{name:'王丽',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_first'}}],
+    interviewEvents:{[date]:[{name:'王丽面试 · 14:00',status:'calendar',eventId:'e1'}]}};
+  const first=interviewReminderSourceFingerprint(base,date);
+  assert.equal(first,interviewReminderSourceFingerprint({...base,interviewEvents:{[date]:[...base.interviewEvents[date]].reverse()}},date));
+  assert.notEqual(first,interviewReminderSourceFingerprint({...base,interviewEvents:{[date]:[{name:'王丽面试 · 15:00',status:'calendar',eventId:'e1'}]}},date));
+  assert.notEqual(first,interviewReminderSourceFingerprint({...base,candidates:[...base.candidates,{name:'陈月',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_second'}}]},date));
+  assert.notEqual(first,interviewReminderSourceFingerprint({...base,submissionMessageCounts:{王丽:2}},date));
+});
+
+test('Wednesday to Tuesday review week uses last week Q:U rotation, not the old current room', () => {
+  assert.deepEqual(reviewWeekFor('2026-09-23'), {start:'2026-09-23',end:'2026-09-29',previousStart:'2026-09-16',previousEnd:'2026-09-22'});
+  assert.deepEqual(reviewWeekFor('2026-09-29'), reviewWeekFor('2026-09-23'));
+  assert.deepEqual(reviewWeekFor('2027-01-01'), {start:'2026-12-30',end:'2027-01-05',previousStart:'2026-12-23',previousEnd:'2026-12-29'});
+  const rows=[
+    [], ['9.16-9.22日主播排名'], ['本周所在直播间','主播','周均分','排名','下周直播间'],
+    ['官旗','潘小慧','96','1','官旗'], ['官旗','杨晓彤','68','5','优选'],
+    ['优选','王思佳','54','6','品牌精选'], ['品牌精选','刘睿','65','5','王鸥'],
+    ['王鸥美肤','蒋珂','90','1','离职'], [],
+    ['9.9-9.14日主播排名'], ['本周所在直播间','主播','周均分','排名','下周直播间'],
+    ['官旗','潘小慧','90','1','优选']
+  ];
+  const rotation=parseWeeklyCoachRotation(rows,'2026-09-24');
+  assert.equal(rotation.status,'ready');
+  assert.deepEqual(rotation.rooms, {'官旗':['潘小慧'],'品牌精选':['王思佳'],'优选':['杨晓彤'],'王鸥美肤':['刘睿']});
+  assert.equal(parseWeeklyCoachRotation(rows,'2026-09-30').status,'pending');
+});
+
+test('weekly Q:U ranking pages and final sentinel must share one positive revision', async () => {
+  const calls=[];
+  const read=async(start,end)=>{calls.push([start,end]);return {revision:12535,values:[[start,end]]};};
+  const result=await readVersionedCoachRankingRows(501,read);
+  assert.equal(result.revision,12535);
+  assert.deepEqual(calls,[[1,250],[251,500],[501,501],[2,3]]);
+  assert.equal(result.values.length,501);
+  assert.deepEqual(result.values[0],[1,250]);
+  assert.deepEqual(result.values[250],[251,500]);
+  assert.deepEqual(result.values[500],[501,501]);
+});
+
+test('weekly Q:U ranking fails closed on a revision change during pagination', async () => {
+  let page=0;
+  await assert.rejects(readVersionedCoachRankingRows(501,async()=>({revision:++page===1?12535:12536,values:[]})),/版本发生变化/);
+});
+
+test('weekly Q:U ranking fails closed if revision changes after all pages', async () => {
+  let page=0;
+  await assert.rejects(readVersionedCoachRankingRows(251,async()=>({revision:++page===3?12536:12535,values:[]})),/读取结束时版本发生变化/);
+});
+
+test('weekly Q:U ranking fails closed if any page or sentinel lacks revision', async () => {
+  await assert.rejects(readVersionedCoachRankingRows(5,async()=>({values:[]})),/版本缺失/);
+  let call=0;
+  await assert.rejects(readVersionedCoachRankingRows(5,async()=>({revision:++call===1?12535:null,values:[]})),/读取结束时版本发生变化或无法核验/);
+});
+
+test('17:30 ranking pre-send check rejects changed or unreadable source revision',async()=>{
+  assert.equal(await assertCoachRankingRevision(12535,async()=>({revision:12535,values:[['本周所在直播间']]})),true);
+  await assert.rejects(assertCoachRankingRevision(12535,async()=>({revision:12536,values:[]})),/通知前已变化/);
+  await assert.rejects(assertCoachRankingRevision(12535,async()=>({revision:12535})),/通知前已变化/);
+});
+
+test('coach instance view checks full week against two smaller windows and preserves instance IDs',async()=>{
+  const week=reviewWeekFor('2026-09-24');
+  const wed={event_id:'series_1790092800',summary:'潘小慧复盘',status:'confirmed',start_time:{timestamp:String(Date.parse('2026-09-23T10:00:00+08:00')/1000)}};
+  const sat={event_id:'series_1790352000',summary:'潘小慧复盘',status:'confirmed',start_time:{timestamp:String(Date.parse('2026-09-26T10:00:00+08:00')/1000)}};
+  const allDay={event_id:'all-day_0',summary:'杨晓彤复盘',status:'confirmed',start_time:{date:'2026-09-24'}};
+  const cancelled={event_id:'cancelled_0',summary:'潘小慧复盘',status:'cancelled',start_time:{date:'2026-09-26'}};
+  const calls=[];
+  const events=await readVerifiedCoachInstances(week,async(start,end)=>{
+    calls.push([start,end]);
+    return {items:calls.length===1?[wed,allDay,sat,cancelled]:calls.length===2?[wed,allDay]:[sat,cancelled]};
+  });
+  assert.equal(calls.length,3);
+  assert.deepEqual(events.map(item=>item.eventId),['series_1790092800','all-day_0','series_1790352000','cancelled_0']);
+  assert.equal(events[1].date,'2026-09-24');
+  assert.equal(events[1].startAt,'');
+  assert.equal(events[3].status,'cancelled');
+});
+
+test('coach instance view fails closed on truncated, changed or malformed responses',async()=>{
+  const week=reviewWeekFor('2026-09-24');
+  const one={event_id:'instance_1',summary:'潘小慧复盘',status:'confirmed',start_time:{date:'2026-09-24'}};
+  await assert.rejects(readVerifiedCoachInstances(week,async()=>({items:[one],has_more:true})),/完整/);
+  await assert.rejects(readVerifiedCoachInstances(week,async()=>({items:[one],has_more:'false'})),/完整/);
+  assert.equal((await readVerifiedCoachInstances(week,async()=>({items:[one],has_more:false}))).length,1);
+  await assert.rejects(readVerifiedCoachInstances(week,async()=>({items:[{...one,status:'unknown'}]})),/状态/);
+  let call=0;
+  await assert.rejects(readVerifiedCoachInstances(week,async()=>({items:++call===1?[one]:[]})),/不一致/);
+  call=0;
+  await assert.rejects(readVerifiedCoachInstances(week,async()=>({items:++call===2?[{...one,summary:'已改标题'}]:[one]})),/内容发生变化/);
+});
+
+test('coach room fingerprint is order independent but blocks any calendar change before POST',()=>{
+  const review={eventId:'instance_1',summary:'潘小慧复盘',status:'confirmed',date:'2026-09-24',startAt:'2026-09-24T09:00:00.000Z'};
+  const other={eventId:'instance_2',summary:'例行会议',status:'confirmed',date:'2026-09-24',startAt:''};
+  const original=coachCalendarFingerprint([review,other]);
+  assert.equal(coachCalendarFingerprint([other,review]),original);
+  for(const changed of [{...review,summary:'潘小慧会谈'},{...review,status:'cancelled'},{...review,eventId:'instance_3'}]){
+    assert.notEqual(coachCalendarFingerprint([other,changed]),original);
+  }
+  assert.notEqual(coachCalendarFingerprint([review]),original);
+  assert.throws(()=>coachCalendarFingerprint([review,review]),/指纹无法核验/);
+});
+
+test('ranking rows with a room assignment but missing anchor name are partial, never ready to notify',()=>{
+  const rows=[['9.16-9.22日主播排名'],['本周所在直播间','主播','周均分','排名','下周直播间'],
+    ['官旗','潘小慧','96','1','官旗'],['官旗','','70','2','优选']];
+  const rotation=parseWeeklyCoachRotation(rows,'2026-09-24');
+  assert.equal(rotation.status,'partial');
+  assert.match(rotation.warnings.join(' '),/主播姓名待核验/);
+  assert.equal(coachReviewReminder('官旗','曾泳淇',countCoachReviews(rotation,{'官旗':[]})).status,'pending');
+});
+
+test('today all-day review counts after China midnight; a future all-day review does not',()=>{
+  const rotation=parseWeeklyCoachRotation([
+    ['9.16-9.22日主播排名'],['本周所在直播间','主播','周均分','排名','下周直播间'],
+    ['官旗','潘小慧','96','1','官旗']
+  ],'2026-09-24');
+  const summary=countCoachReviews(rotation,{'官旗':[
+    {eventId:'today_0',date:'2026-09-24',summary:'潘小慧复盘',status:'confirmed'},
+    {eventId:'tomorrow_0',date:'2026-09-25',summary:'潘小慧复盘',status:'confirmed'},
+    {eventId:'cancelled_0',date:'2026-09-24',summary:'潘小慧复盘',status:'cancelled'}
+  ],'品牌精选':[],'优选':[],'王鸥美肤':[]},new Date('2026-09-24T09:30:00.000Z'));
+  assert.equal(summary.rooms['官旗'].anchors[0].count,1);
+});
+
+test('coach review counts only one named anchor plus 复盘 in the coach own calendar', () => {
+  const rotation=parseWeeklyCoachRotation([
+    ['9.16-9.22日主播排名'],['本周所在直播间','主播','周均分','排名','下周直播间'],
+    ['官旗','潘小慧','96','1','官旗'],['官旗','杨晓彤','68','5','优选'],
+    ['优选','王思佳','54','6','品牌精选'],['品牌精选','刘睿','65','5','王鸥']
+  ],'2026-09-24');
+  const summary=countCoachReviews(rotation,{
+    '官旗':[
+      {eventId:'e1',date:'2026-09-23',summary:'潘小慧复盘'},
+      {eventId:'e1',date:'2026-09-23',summary:'潘小慧复盘'},
+      {eventId:'e2',date:'2026-09-24',summary:'潘小慧开播'},
+      {eventId:'e3',date:'2026-09-30',summary:'潘小慧复盘'},
+      {eventId:'e4',date:'2026-09-26',startAt:'2026-09-26T03:00:00.000Z',summary:'潘小慧复盘'}
+    ],'品牌精选':[],'优选':[],'王鸥美肤':[]
+  },new Date('2026-09-24T09:30:00.000Z'));
+  assert.equal(summary.status,'ready');
+  assert.equal(summary.rooms['官旗'].anchors[0].count,1);
+  assert.deepEqual(summary.rooms['官旗'].anchors[0],{name:'潘小慧',count:1});
+  assert.doesNotMatch(JSON.stringify(summary),/eventIds|"e1"/);
+  assert.deepEqual(summary.rooms['优选'].zeroReview,['杨晓彤']);
+  assert.match(coachReviewReminder('优选','李爽',summary).text,/杨晓彤：0 次/);
+  const partial=countCoachReviews(rotation,{'官旗':[]},new Date('2026-09-24T09:30:00.000Z'));
+  assert.equal(partial.status,'partial');
+  assert.equal(coachReviewReminder('品牌精选','梁瑜涵',partial).status,'pending');
+});
+
+test('coach review never credits a same-prefix different anchor',()=>{
+  const rotation={status:'ready',week:{start:'2026-09-23',end:'2026-09-29'},rooms:{官旗:['王丽'],品牌精选:[],优选:[],王鸥美肤:[]}};
+  const events={'官旗':[{eventId:'review-other',date:'2026-09-24',summary:'王丽娜复盘'}],品牌精选:[],优选:[],王鸥美肤:[]};
+  const asOf=new Date('2026-09-24T09:30:00.000Z');
+  assert.deepEqual(countCoachReviews(rotation,events,asOf).rooms['官旗'].anchors,[{name:'王丽',count:0}]);
+  events['官旗'].push({eventId:'review-exact',date:'2026-09-24',summary:'王丽复盘'});
+  assert.deepEqual(countCoachReviews(rotation,events,asOf).rooms['官旗'].anchors,[{name:'王丽',count:1}]);
 });
 
 test('recruitment parser deduplicates submissions and applies explicit results', () => {

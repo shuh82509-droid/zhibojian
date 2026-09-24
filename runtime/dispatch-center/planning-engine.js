@@ -252,35 +252,47 @@ function restAdjustmentFromNote(value) {
   return 0;
 }
 
-function parseRestSource(rows, month, profiles = {}) {
+function parseRestSource(rows, month, profiles = {}, verifiedAnchorRooms = VERIFIED_ANCHOR_ROOMS) {
   const safeMonth = /^20\d{2}-\d{2}$/u.test(String(month || '')) ? String(month) : ''; if (!safeMonth || !Array.isArray(rows)) return [];
   const yearHint = safeMonth.slice(0, 4); let headerIndex = -1; let dateColumns = [];
   rows.forEach((row, rowIndex) => { const matches = (Array.isArray(row) ? row : []).map((cell, columnIndex) => ({ date: scheduleDateKey(cell, yearHint), columnIndex })).filter((item) => item.date.startsWith(safeMonth)); if (matches.length > dateColumns.length) { headerIndex = rowIndex; dateColumns = matches; } });
   if (headerIndex < 0 || !dateColumns.length) return [];
   const header = rows[headerIndex] || []; const foundNameColumn = header.findIndex((cell) => /姓名|主播/u.test(cellText(cell))); const employeeNumberColumn = header.findIndex((cell) => /工号/u.test(cellText(cell))); const nameColumn = foundNameColumn >= 0 ? foundNameColumn : employeeNumberColumn >= 0 ? employeeNumberColumn + 1 : 0;
-  const eligible = new Set([...Object.keys(VERIFIED_ANCHOR_ROOMS), ...Object.keys(profiles || {})]); const people = [];
+  const eligible = new Set([...Object.keys(verifiedAnchorRooms), ...Object.keys(profiles || {})]); const people = [];
+  const nameCounts = new Map();
+  rows.slice(headerIndex + 1).forEach((row) => {
+    const name = cellText((row || [])[nameColumn]);
+    if (eligible.has(name)) nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+  });
+  const ambiguous = new Set();
   rows.slice(headerIndex + 1).forEach((row) => {
     const name = cellText((row || [])[nameColumn]); if (!name || !eligible.has(name)) return;
-    const profile = profiles[name] || {}; const roomName = ['官旗', '品牌精选', '优选', '王鸥美肤'].includes(profile.roomName) ? profile.roomName : VERIFIED_ANCHOR_ROOMS[name] || '直播间待核验';
+    const profile = profiles[name] || {}; const roomName = ['官旗', '品牌精选', '优选', '王鸥美肤'].includes(profile.roomName) ? profile.roomName : verifiedAnchorRooms[name] || '直播间待核验';
+    if (nameCounts.get(name) !== 1) {
+      if (!ambiguous.has(name)) people.push({ name, roomName, sourceStatus: 'ambiguous', sourceReason: '总表同名人员不唯一，休息统计待核验', usedRest: null, remainingRest: null, maximumConsecutiveWorkDays: null, suggestedRestDate: null, calendar: [], alert: '' });
+      ambiguous.add(name);
+      return;
+    }
     const calendar = dateColumns.map(({ date, columnIndex }) => { const shiftCode = cellText((row || [])[columnIndex]); const status = !shiftCode ? 'unassigned' : /休|假/u.test(shiftCode) ? 'rest' : 'work'; return { date, shiftCode, status }; });
     const usedRest = calendar.filter((day) => day.status === 'rest').length; const baseEntitlement = Number.isInteger(profile.entitlement) ? profile.entitlement : null; const compNote = String(profile.compNote || ''); const restAdjustment = restAdjustmentFromNote(compNote); const entitlement = baseEntitlement == null ? null : Math.max(0, baseEntitlement + restAdjustment); const maximumConsecutiveWorkDays = longestWorkStreak(calendar); const suggestedRestDate = calendar.find((day, index) => day.status === 'unassigned' && calendar.slice(Math.max(0, index - 6), index).filter((item) => item.status === 'work').length >= 6)?.date || null;
-    people.push({ name, roomName, baseEntitlement, restAdjustment, entitlement, usedRest, remainingRest: entitlement == null ? null : Math.max(0, entitlement - usedRest), compNote, maximumConsecutiveWorkDays, suggestedRestDate, calendar, alert: maximumConsecutiveWorkDays >= 6 ? `最长连续排播 ${maximumConsecutiveWorkDays} 天，建议优先确认休息日。` : '' });
+    people.push({ name, roomName, sourceStatus: 'matched', baseEntitlement, restAdjustment, entitlement, usedRest, remainingRest: entitlement == null ? null : Math.max(0, entitlement - usedRest), compNote, maximumConsecutiveWorkDays, suggestedRestDate, calendar, alert: maximumConsecutiveWorkDays >= 6 ? `最长连续排播 ${maximumConsecutiveWorkDays} 天，建议优先确认休息日。` : '' });
   });
   return people.sort((a, b) => Number(Boolean(b.alert)) - Number(Boolean(a.alert)) || a.roomName.localeCompare(b.roomName, 'zh-CN') || a.name.localeCompare(b.name, 'zh-CN'));
 }
 
-function parseRestSources(sources, month, profiles = {}) {
+function parseRestSources(sources, month, profiles = {}, verifiedAnchorRooms = VERIFIED_ANCHOR_ROOMS) {
   const safeSources = Array.isArray(sources) ? sources : [];
   const current = safeSources.find((source) => source?.month === month);
   if (!current) return [];
-  const currentPeople = parseRestSource(current.rows, month, profiles);
+  const currentPeople = parseRestSource(current.rows, month, profiles, verifiedAnchorRooms);
   const historyByName = new Map();
   safeSources.forEach((source) => {
     if (!source?.month || source.month === month || !Array.isArray(source.rows)) return;
     if (source.month >= month) return;
-    parseRestSource(source.rows, source.month, profiles).forEach((person) => historyByName.set(person.name, [...(historyByName.get(person.name) || []), ...(person.calendar || [])]));
+    parseRestSource(source.rows, source.month, profiles, verifiedAnchorRooms).filter((person) => person.sourceStatus === 'matched').forEach((person) => historyByName.set(person.name, [...(historyByName.get(person.name) || []), ...(person.calendar || [])]));
   });
   return currentPeople.map((person) => {
+    if (person.sourceStatus !== 'matched') return person;
     const combined = [...(historyByName.get(person.name) || []), ...(person.calendar || [])].sort((a, b) => a.date.localeCompare(b.date));
     let streak = 0; let maximum = 0; let previousDate = null;
     combined.forEach((day) => {

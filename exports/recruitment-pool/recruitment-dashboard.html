@@ -19,6 +19,9 @@
     .foot{display:flex;justify-content:space-between;gap:16px;color:var(--muted);font-size:12px;padding:14px 4px 0}.dialog{width:min(760px,calc(100vw - 30px));border:0;border-radius:20px;padding:0;box-shadow:0 30px 90px rgba(20,30,60,.25)}.dialog::backdrop{background:rgba(20,29,48,.44);backdrop-filter:blur(3px)}.dialog-head{padding:21px 22px 15px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}.dialog-head h3{margin:0;font-size:21px}.close{border:0;background:#f0f2f7;border-radius:9px;width:34px;height:34px;color:#667085}.dialog-body{padding:20px 22px 24px}.detail-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.detail{background:#f7f8fb;border-radius:11px;padding:10px}.detail label{display:block;color:var(--muted);font-size:11px}.timeline{margin-top:18px;border-left:2px solid #dfe4f3;padding-left:17px;display:grid;gap:13px}.timeline-item{position:relative}.timeline-item:before{content:"";position:absolute;left:-23px;top:5px;width:10px;height:10px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 3px #edf1ff}.timeline-item b{font-size:13px}.timeline-item p{margin:3px 0;color:#596478;font-size:12px}.timeline-media{display:grid;gap:8px;margin-top:9px}.timeline-media video{display:block;width:100%;max-height:320px;background:#111827;border-radius:11px}.timeline-media a{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:9px 10px;color:#3158c7;text-decoration:none;font-size:12px}.timeline-media .pending{border:1px dashed #cbd3e4;border-radius:10px;padding:9px 10px;color:#8a94a6;font-size:12px}.hidden{display:none!important}
     .refresh-panel{margin:-4px 0 18px;padding:13px 15px;display:flex;gap:14px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 6px 22px rgba(23,32,51,.045)}.state-dot{width:10px;height:10px;border-radius:50%;background:#aab2c0;box-shadow:0 0 0 5px #f0f2f5;flex:0 0 auto}.state-dot.current{background:#22a675;box-shadow:0 0 0 5px #e7f7f0}.state-dot.stale,.state-dot.error{background:#e39928;box-shadow:0 0 0 5px #fff3de}.refresh-copy{min-width:0;flex:1}.refresh-copy b{display:block}.refresh-copy span{display:block;color:var(--muted);font-size:12px}.refresh-action{border:0;border-radius:10px;padding:9px 13px;background:#315ee9;color:#fff;font-weight:750;white-space:nowrap}.refresh-action:disabled{opacity:.55;cursor:wait}.refresh-log summary{color:#69758a;font-size:12px;cursor:pointer;white-space:nowrap}.log-list{position:absolute;z-index:20;right:28px;width:min(520px,calc(100vw - 32px));margin-top:10px;padding:12px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 52px rgba(24,35,62,.18)}.log-row{display:grid;grid-template-columns:92px 1fr auto;gap:10px;padding:8px 5px;border-bottom:1px solid #eef0f4;font-size:11px}.log-row:last-child{border:0}.log-ok{color:var(--green)}.log-fail{color:var(--red)}
     .lane .cards{max-height:544px;overflow-y:auto;align-content:start;scrollbar-gutter:stable}.lane .card{min-height:120px}.calendar-source-status{margin:0;padding:9px 14px;border-top:1px solid var(--line);border-bottom:1px solid #f0dfb8;background:#fffaf0;color:#7b5c1d;font-size:11px;line-height:1.55}
+    .funnel-step:nth-child(7){width:40%;background:#167955}
+    .assessment-panel{margin-bottom:18px}.assessment-intro{margin:0 19px 15px;color:#596478;font-size:12px;line-height:1.65}.assessment-layout{display:grid;grid-template-columns:minmax(240px,360px) 1fr;gap:18px;padding:0 19px 19px}.assessment-form{display:grid;gap:11px;align-content:start}.assessment-form label{display:grid;gap:5px;font-weight:700;font-size:12px}.assessment-form select{width:100%;border:1px solid var(--line);border-radius:10px;padding:9px;background:#fff}.assessment-form fieldset{border:1px solid var(--line);border-radius:11px;display:flex;gap:18px;padding:10px 12px}.assessment-form legend{font-size:12px;font-weight:700}.assessment-form fieldset label,.assessment-form .assessment-attest{display:flex;align-items:flex-start;gap:7px;font-weight:500}.assessment-form input[type=checkbox],.assessment-form input[type=radio]{margin-top:3px}.assessment-evidence{border:1px solid #dfe5f5;background:#f8faff;border-radius:10px;padding:9px;color:#536078;font-size:11px;overflow-wrap:anywhere}.assessment-submit{border:0;border-radius:10px;padding:10px 13px;background:#315ee9;color:white;font-weight:750}.assessment-submit:disabled{background:#aeb7ca;cursor:not-allowed}.assessment-feedback{min-height:20px;color:#6b7486;font-size:12px}.assessment-audit{max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:12px}.assessment-row{padding:10px 12px;border-bottom:1px solid var(--line);font-size:12px}.assessment-row:last-child{border-bottom:0}.assessment-row b{display:block;font-size:13px}.assessment-row small{display:block;color:#657086;margin-top:3px;overflow-wrap:anywhere}.assessment-row .assessment-status{color:#805e1b}.assessment-row .assessment-status.done{color:#147450}.assessment-row .assessment-status.conflict{color:#b43e3e}
+    @media(max-width:760px){.assessment-layout{grid-template-columns:1fr}}
     @media(max-width:1050px){.metrics{grid-template-columns:repeat(3,1fr)}.notice-grid{grid-template-columns:1fr}.alerts{grid-template-columns:repeat(3,1fr)}.funnel-shell{grid-template-columns:1fr}.conversion-grid{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:650px){.shell{padding:18px 12px}.topbar{display:block}.snapshot{display:inline-block;margin-top:12px}.refresh-panel{align-items:flex-start;flex-wrap:wrap}.refresh-copy{flex:1 0 calc(100% - 28px);min-width:0}.refresh-action{margin-left:24px}.refresh-log{margin-left:0}.log-list{right:12px}.metrics{grid-template-columns:repeat(2,1fr)}.notice-grid{grid-template-columns:1fr}.alerts{grid-template-columns:1fr}.toolbar{align-items:stretch;flex-direction:column}.toolbar input{min-width:0}.detail-grid{grid-template-columns:1fr}.foot{display:block}.foot span{display:block;margin-top:4px}}
   </style>
@@ -38,7 +41,7 @@
       <div class="metric"><span>群面评人数</span><b id="metricInterview">待核验</b></div>
       <div class="metric"><span>群面评通过</span><b id="metricInterviewPassed">待核验</b></div>
       <div class="metric"><span>已入职</span><b id="metricHired">待核验</b></div>
-      <div class="metric"><span>初审不通过</span><b id="metricAssessment">待核验</b></div>
+      <div class="metric"><span>考核通过</span><b id="metricAssessment">待核验</b></div>
     </section>
 
     <section class="notice-grid">
@@ -68,22 +71,38 @@
           <div class="funnel-step"><span>初审通过</span><b id="funnelScreened">待读取</b></div>
           <div class="funnel-step"><span>群面评人数</span><b id="funnelInterview">待读取</b></div>
           <div class="funnel-step"><span>群面评通过</span><b id="funnelInterviewPassed">待读取</b></div>
+          <div class="funnel-step"><span>正式日历匹配</span><b id="funnelInterviewScheduled">待核验</b></div>
           <div class="funnel-step"><span>已入职</span><b id="funnelHired">待读取</b></div>
           <div class="funnel-step"><span>考核通过</span><b id="funnelAssessment">待读取</b></div>
         </div>
         <div class="conversion-grid">
           <div class="conversion-card"><span>候选人 → 初审通过</span><b id="conversionScreened">待核验</b></div>
-          <div class="conversion-card"><span>初审通过 → 群面评人数</span><b id="conversionInterview">待核验</b></div>
-          <div class="conversion-card"><span>群面评人数 → 面试通过</span><b id="conversionInterviewPassed">待核验</b></div>
+          <div class="conversion-card"><span>群面评通过 → 正式日历匹配</span><b id="conversionInterview">待核验</b></div>
+          <div class="conversion-card"><span>群面评人数 → 群面评通过</span><b id="conversionInterviewPassed">待核验</b></div>
           <div class="conversion-card"><span>当前已入职</span><b id="hiredCount">待读取</b></div>
           <div class="conversion-card pending"><span>待入职人数</span><b id="pendingHireCount">待读取</b><small id="pendingHireDetail">暂无待入职主播</small></div>
-          <div class="conversion-note">流程口径：面试通过后先办理入职，再进入三日考核；预计入职日期不代表实际到岗。已入职与考核通过仅采用 WIS直播战队中倪梦萍的可核验日报。</div>
+          <div class="conversion-note">流程口径：正式面试日历须与本周期送审候选人匹配；预计入职日期不代表实际到岗。考核通过需倪梦萍与刘慧迅本人的可核验结论，战队日报只作补充参考。</div>
         </div></div>
-        <div class="month-panel"><div class="month-head"><h3>群内面试记录 · 正式日历待授权</h3><span id="calendarMonth"></span></div><p class="calendar-source-status" id="calendarSourceStatus" role="status">待授权：请把指定招聘面试日历以“可查看详情”共享给直播中枢飞书应用，并配置日历 ID；当前群聊记录不冒充正式日历。</p><div class="month-weekdays"><b>周一</b><b>周二</b><b>周三</b><b>周四</b><b>周五</b><b>周六</b><b>周日</b></div><div class="month-grid" id="calendar"></div></div>
+        <div class="month-panel"><div class="month-head"><h3 id="calendarPanelTitle">面试日历 · 待核验</h3><span id="calendarMonth"></span></div><p class="calendar-source-status" id="calendarSourceStatus" role="status">正式面试日历来源待核验。</p><div class="month-weekdays"><b>周一</b><b>周二</b><b>周三</b><b>周四</b><b>周五</b><b>周六</b><b>周日</b></div><div class="month-grid" id="calendar"></div></div>
       </div>
     </section>
 
     <details class="panel" id="unmatchedHistory" style="margin-bottom:18px;padding:18px"><summary>未匹配送审记录 · 待读取</summary><div id="unmatchedRecords"></div></details>
+    <section class="panel assessment-panel" aria-labelledby="assessmentHeading">
+      <div class="panel-head"><div><h2 id="assessmentHeading">入职考核 · 本人结构化确认</h2><small>指定私聊未授权时的独立替代来源，不冒充私聊结论</small></div><span class="tag amber" id="assessmentGate">待接入</span></div>
+      <p class="assessment-intro" id="assessmentScope">仅倪梦萍、刘慧迅本人在中枢登录且完成飞书账号核验后，可对本周期唯一送审候选人提交各自结论；两人结论一致才计入考核通过或未通过。当前入口默认关闭，不会代办、自动补录或读取指定私聊。</p>
+      <div class="assessment-layout">
+        <form class="assessment-form" id="assessmentForm">
+          <label for="assessmentCandidate">本周期送审候选人<select id="assessmentCandidate" disabled><option value="">先读取可信来源与办理身份</option></select></label>
+          <div class="assessment-evidence" id="assessmentEvidence">候选人送审消息来源待读取。</div>
+          <fieldset id="assessmentOutcomes" disabled><legend>本人考核结论</legend><label><input type="radio" name="assessmentOutcome" value="pass">通过</label><label><input type="radio" name="assessmentOutcome" value="fail">未通过</label></fieldset>
+          <label class="assessment-attest"><input id="assessmentAttest" type="checkbox" disabled>我确认这是本人基于实际考核得出的结论，并核对了该候选人的送审消息。</label>
+          <button class="assessment-submit" id="assessmentSubmit" type="submit" disabled>提交本人结论</button>
+          <div class="assessment-feedback" id="assessmentFeedback" role="status" aria-live="polite">尚未开放办理。</div>
+        </form>
+        <div class="assessment-audit" id="assessmentAudit" aria-label="逐候选人考核确认状态">待读取本周期候选人。</div>
+      </div>
+    </section>
     <section class="panel trend-panel">
       <div class="panel-head"><h2>招聘周期每日送审简历数量趋势</h2><small id="resumeTrendRange">按招聘群“求职者是否符合主播邀约标准”送审消息统计</small></div>
       <div class="resume-trend" id="resumeTrend"></div>
@@ -146,12 +165,11 @@
       }
       const pending=candidates.filter(candidate=>candidate.startDate&&legacyStage(candidate.stage)!=='hired');
       const hired=candidates.filter(candidate=>legacyStage(candidate.stage)==='hired');
-      const initialFailed=candidates.filter(candidate=>legacyStage(candidate.stage)==='initial_fail');
       document.querySelector('#hiredCount').textContent=`${hired.length} 人`;
       document.querySelector('#metricHired').textContent=hired.length;
-      document.querySelector('#metricAssessment').textContent=initialFailed.length;
+      document.querySelector('#metricAssessment').textContent=lifecycleSnapshot?.funnel?.assessmentPassedCount??'待核验';
       document.querySelector('#funnelHired').textContent=hired.length;
-      document.querySelector('#funnelAssessment').textContent=lifecycleSnapshot?.coverage?.employmentStatus==='已读取'?candidates.filter(candidate=>candidate.assessmentPassed).length:'待授权';
+      document.querySelector('#funnelAssessment').textContent=lifecycleSnapshot?.funnel?.assessmentPassedCount??'待核验';
       document.querySelector('#pendingHireCount').textContent=`${pending.length} 人`;
       document.querySelector('#pendingHireDetail').textContent=pending.length?pending.map(candidate=>`${candidate.name} · 预计 ${candidate.startDate} · 实际到岗待核验`).join('；'):'暂无待入职主播';
       document.querySelector('#alertReview').textContent=candidates.filter(candidate=>legacyStage(candidate.stage)==='unmapped').length;
@@ -243,6 +261,83 @@
   </script>
   <script>
     function lifecycleBase(){return location.pathname.slice(0, location.pathname.lastIndexOf('/modules/'))}
+    let assessmentAccess={enabled:false,identityVerified:false,actorName:null,lock:{state:'blocked_unknown'}};
+    let assessmentSubmitting=false;
+    const assessmentForm=document.querySelector('#assessmentForm');
+    const assessmentCandidate=document.querySelector('#assessmentCandidate');
+    const assessmentFeedback=document.querySelector('#assessmentFeedback');
+    function eligibleAssessmentCandidates(snapshot){
+      if(!snapshot?.cycle||snapshot.coverage?.capped||!snapshot.coverage?.chatMessages)return [];
+      const names=(snapshot.candidates||[]).filter(item=>item?.inSubmissionCohort).map(item=>item.name);
+      return (snapshot.candidates||[]).filter(item=>item?.inSubmissionCohort&&names.filter(name=>name===item.name).length===1
+        &&snapshot.submissionMessageCounts?.[item.name]===1
+        &&Object.values(snapshot.dailyNames||{}).filter(day=>Array.isArray(day)&&day.includes(item.name)).length===1
+        &&/^om_[A-Za-z0-9_]+$/.test(item.submissionEvidence?.sourceId||''));
+    }
+    function renderAssessment(){
+      const snapshot=lifecycleSnapshot,all=(snapshot?.candidates||[]).filter(item=>item?.inSubmissionCohort),eligible=eligibleAssessmentCandidates(snapshot);
+      const mayAct=assessmentAccess.enabled&&assessmentAccess.identityVerified&&assessmentAccess.lock?.state==='free'&&!assessmentSubmitting;
+      document.querySelector('#assessmentGate').textContent=!assessmentAccess.enabled?'待接入':!assessmentAccess.identityVerified?'仅负责人本人可办理':assessmentAccess.lock?.state!=='free'?'记录锁待核验':!eligible.length?'来源待核验':'本人可办理';
+      const selectedName=assessmentCandidate.value;
+      assessmentCandidate.innerHTML='<option value="">请选择唯一送审候选人</option>'+eligible.map(item=>`<option value="${esc(item.name)}">${esc(item.name)} · ${esc(item.submissionEvidence.date||'日期待核验')}</option>`).join('');
+      if(eligible.some(item=>item.name===selectedName))assessmentCandidate.value=selectedName;
+      const chosen=eligible.find(item=>item.name===assessmentCandidate.value);
+      const signed=(chosen?.assessmentEvidence||[]).some(item=>item.actorName===assessmentAccess.actorName);
+      assessmentCandidate.disabled=!mayAct||!eligible.length;
+      document.querySelector('#assessmentOutcomes').disabled=!mayAct||!chosen||signed;
+      document.querySelector('#assessmentAttest').disabled=!mayAct||!chosen||signed;
+      document.querySelector('#assessmentSubmit').disabled=!mayAct||!chosen||signed||!document.querySelector('#assessmentAttest').checked||!assessmentForm.querySelector('input[name="assessmentOutcome"]:checked');
+      document.querySelector('#assessmentEvidence').textContent=chosen
+        ?`来源：招聘群唯一送审消息 ${chosen.submissionEvidence.sourceId}；送审日期 ${chosen.submissionEvidence.date||'待核验'}。${signed?'你已提交本人结论，本入口不会覆盖原记录。':'请核对候选人及本人实际考核结果。'}`
+        :'仅可选择本周期消息完整、姓名与送审消息均唯一的候选人；重复姓名或缺少消息 ID 时保持待核验。';
+      if(!assessmentSubmitting)assessmentFeedback.textContent=!assessmentAccess.enabled?'结构化确认尚未启用；指定私聊没有被读取。'
+        :!assessmentAccess.identityVerified?'当前登录人不是两位已核验负责人本人，或实时飞书账号核验未通过。'
+        :assessmentAccess.lock?.state!=='free'?'考核记录锁状态待核验，暂不办理。'
+        :!eligible.length?'本周期没有身份和送审消息均唯一的候选人，暂不办理。'
+        :signed?'你对该候选人的结论已记录，不会重复提交。'
+        :'请逐人核对送审来源并填写本人结论。';
+      document.querySelector('#assessmentAudit').innerHTML=all.length?all.map(item=>{
+        const evidence=Array.isArray(item.assessmentEvidence)?item.assessmentEvidence:[];
+        const status=!assessmentAccess.enabled?'结构化确认尚未启用；考核结论待核验'
+          :item.assessmentEvidenceStatus?.includes('双人确认')?item.assessmentEvidenceStatus:'待两位负责人逐人确认（指定私聊未读取）';
+        const tone=status.includes('冲突')?'conflict':status.includes('考核通过')||status.includes('考核未通过')?'done':'';
+        return `<div class="assessment-row"><b>${esc(item.name)}</b><small>送审 ${esc(item.submissionEvidence?.date||'待核验')} · 消息 ${esc(item.submissionEvidence?.sourceId||'待核验')}</small><small class="assessment-status ${tone}">${esc(status)}</small><small>${evidence.length?evidence.map(entry=>`${esc(entry.actorName)}：${entry.outcome==='pass'?'通过':'未通过'} · ${esc(formatChinaTime(entry.at))}`).join('；'):'尚无已核验的本人结构化记录'}</small></div>`;
+      }).join(''):'<div class="assessment-row">本周期送审候选人待可信来源回传。</div>';
+    }
+    async function loadAssessmentAccess(){
+      try{
+        const response=await fetch(`${lifecycleBase()}/api/lifecycle/recruitment-assessment`,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(10000)});
+        const payload=await response.json();
+        if(!response.ok||!payload?.ok)throw new Error('入口状态无法核验');
+        assessmentAccess=payload;
+      }catch{assessmentAccess={enabled:false,identityVerified:false,actorName:null,lock:{state:'blocked_unknown'}};}
+      renderAssessment();
+    }
+    assessmentCandidate.addEventListener('change',()=>{document.querySelector('#assessmentAttest').checked=false;assessmentForm.querySelectorAll('input[name="assessmentOutcome"]').forEach(input=>input.checked=false);renderAssessment()});
+    assessmentForm.addEventListener('change',renderAssessment);
+    assessmentForm.addEventListener('submit',async event=>{
+      event.preventDefault();
+      const chosen=eligibleAssessmentCandidates(lifecycleSnapshot).find(item=>item.name===assessmentCandidate.value);
+      const cycleMonth=lifecycleSnapshot?.cycle?.month;
+      const outcome=assessmentForm.querySelector('input[name="assessmentOutcome"]:checked')?.value;
+      if(!chosen||!assessmentAccess.enabled||!assessmentAccess.identityVerified||assessmentAccess.lock?.state!=='free'||!document.querySelector('#assessmentAttest').checked||!['pass','fail'].includes(outcome))return;
+      assessmentSubmitting=true;renderAssessment();assessmentFeedback.textContent='正在保存本人结论；请勿重复提交。';
+      let writeConfirmed=false;
+      try{
+        const response=await fetch(`${lifecycleBase()}/api/lifecycle/recruitment-assessment`,{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest','Accept':'application/json'},body:JSON.stringify({cycleMonth,candidateName:chosen.name,submissionMessageId:chosen.submissionEvidence.sourceId,outcome}),signal:AbortSignal.timeout(15000)});
+        const payload=await response.json();
+        if(!response.ok||!payload?.ok)throw new Error(payload?.error||'本人结论写入未获确认');
+        writeConfirmed=true;
+      }catch(error){assessmentFeedback.textContent=`${error.message||'提交结果不明'}；先读回记录，不自动重试。`}
+      finally{
+        assessmentSubmitting=false;
+        await loadRecruitmentCycle();
+        await loadAssessmentAccess();
+        const readBack=(lifecycleSnapshot?.candidates||[]).find(item=>item.name===chosen.name&&item.submissionEvidence?.sourceId===chosen.submissionEvidence.sourceId);
+        const hasMine=(readBack?.assessmentEvidence||[]).some(item=>item.actorName===assessmentAccess.actorName);
+        assessmentFeedback.textContent=hasMine?'已读回本人结论；等待另一位负责人确认或处理冲突。':writeConfirmed?'写入已返回成功，但周期读回尚未核验；请稍后刷新，不要重复提交。':'结果仍未证实；请查看记录与负责人，不要盲目重试。';
+      }
+    });
     function mergeLifecycleCandidates(updates,cycle=activeCycle){
       const merged=new Map();
       (updates||[]).forEach(update=>{
@@ -271,8 +366,10 @@
       const ratio=(a,b)=>b>0?`${(a/b*100).toFixed(1)}%`:'待核验';
       conversionScreened.textContent=facts&&facts.initialPendingCount===0?ratio(facts.initialPassedCount,facts.candidateCount):'待核验';
       conversionScreened.title=verified?'初审表情已核验':'已显示源表解析计数；表情核验仍待完成';
-      conversionInterview.textContent='待日历授权';
+      funnelInterviewScheduled.textContent=facts?.interviewScheduledCount??'待日历授权';
+      conversionInterview.textContent=facts?.interviewScheduledCount!=null?ratio(facts.interviewScheduledCount,facts.groupPassedCount):'待日历授权';
       conversionInterviewPassed.textContent=facts?ratio(facts.groupPassedCount,facts.groupEvaluatedCount):'待核验';
+      metricAssessment.textContent=funnelAssessment.textContent=facts?.assessmentPassedCount??'待核验';
       const unmatched=(snapshot.candidates||[]).filter(item=>item.inSubmissionCohort===false);
       document.querySelector('#unmatchedHistory summary').textContent=`未匹配送审的面评 / Offer · ${unmatched.length} 名（不计入漏斗）`;
       document.querySelector('#unmatchedRecords').innerHTML='<p>可能涉及跨期或姓名未匹配；没有身份依据时不合并。原记录与时间线完整保留。</p>'+unmatched.map((item,i)=>`<button class="card" data-unmatched="${i}"><b>${esc(item.name)}</b> · ${esc(item.date)}</button>`).join('');
@@ -288,6 +385,7 @@
       liveResumeNames=snapshot.dailyNames||{};
       interviewEvents=snapshot.interviewEvents||{};
       calendarSourceStatus.textContent=snapshot.calendarStatus||'正式面试日历待授权；当前群聊记录不冒充正式日历。';
+      calendarPanelTitle.textContent=snapshot.calendarStatus?.startsWith('已连接：')?'正式面试日历 · 已连接':'面试日历 · 待核验';
 
       const summary=snapshot.summary;
       const latestCount=summary?.yesterdaySubmitted??liveResumeCounts[snapshot.sourceDate]??0;
@@ -295,11 +393,11 @@
       alertResumeLabel.textContent=summary?.yesterdaySubmitted!=null?'昨日新增简历':`${String(snapshot.sourceDate||'最新').slice(5).replace('-','月')} 日新增简历`;
       reminderSource.textContent=`来源最新 ${snapshot.sourceDate||'待核验'}`;
       snapshotBadge.textContent=`最近更新 · ${formatChinaTime(snapshot.generatedAt)}`;
-      renderKeyData();renderCalendar();renderResumeTrend();renderBoard();updateDynamicFunnel(snapshot);
+      renderKeyData();renderCalendar();renderResumeTrend();renderBoard();updateDynamicFunnel(snapshot);renderAssessment();
     }
     async function loadRecruitmentCycle(){
-      const month=recruitmentMonth.value||defaultRecruitmentMonth();cohortReady=false;liveResumeCounts=null;candidates=[];renderKeyData();renderResumeTrend();renderBoard();activeCycle=cycleForMonth(month);renderCycleLabel();stateDot.className='state-dot stale';refreshTitle.textContent='正在读取所选招聘周期…';
-      try{const response=await fetch(`${lifecycleBase()}/api/lifecycle/recruitment-cycle?month=${encodeURIComponent(month)}`,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(25000)}),payload=await response.json();if(!response.ok||!payload?.ok)throw new Error(payload?.error||'招聘周期读取失败');applyLifecycleSnapshot(payload.data);reminderSource.textContent=`招聘周期 ${activeCycle.startDate} — ${activeCycle.endDate}（不含结束日）`;refreshTitle.textContent='所选招聘周期已读取';const reactions=payload.data.coverage?.reactionStatus||'待核验',employment=payload.data.coverage?.employmentStatus||'待授权';refreshMeta.textContent=`已读取 ${payload.data.coverage?.chatMessages||0} 条招聘群授权消息；OK/No 表情 ${reactions}；战队日报入职/考核 ${employment}；送审 ${payload.data.submittedCount||0} 人次；周期送审候选人 ${payload.data.funnel?.candidateCount??'待核验'} 名；未匹配送审 ${payload.data.funnel?.unmatchedCount??'待核验'} 名单列；${payload.data.unmappedCount?`${payload.data.unmappedCount} 名结果待核验`:'已映射可核验阶段'}。`;stateDot.className=reactions==='已核验'?'state-dot current':'state-dot stale'}catch(error){stateDot.className='state-dot error';refreshTitle.textContent='所选招聘周期读取失败';refreshMeta.textContent=`${error.message}；未把缺失数据记为 0。`}}
+      const month=recruitmentMonth.value||defaultRecruitmentMonth();cohortReady=false;liveResumeCounts=null;candidates=[];lifecycleSnapshot=null;renderKeyData();renderResumeTrend();renderBoard();renderAssessment();activeCycle=cycleForMonth(month);renderCycleLabel();stateDot.className='state-dot stale';refreshTitle.textContent='正在读取所选招聘周期…';
+      try{const response=await fetch(`${lifecycleBase()}/api/lifecycle/recruitment-cycle?month=${encodeURIComponent(month)}`,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(25000)}),payload=await response.json();if(!response.ok||!payload?.ok)throw new Error(payload?.error||'招聘周期读取失败');applyLifecycleSnapshot(payload.data);reminderSource.textContent=`招聘周期 ${activeCycle.startDate} — ${activeCycle.endDate}（不含结束日）`;refreshTitle.textContent='所选招聘周期已读取';const reactions=payload.data.coverage?.reactionStatus||'待核验',employment=payload.data.coverage?.employmentStatus||'待授权';refreshMeta.textContent=`已读取 ${payload.data.coverage?.chatMessages||0} 条招聘群授权消息；OK/No 表情 ${reactions}；战队日报入职 ${employment}，考核结论 ${payload.data.assessmentStatus||'待核验'}；送审 ${payload.data.submittedCount||0} 人次；周期送审候选人 ${payload.data.funnel?.candidateCount??'待核验'} 名；未匹配送审 ${payload.data.funnel?.unmatchedCount??'待核验'} 名单列；${payload.data.unmappedCount?`${payload.data.unmappedCount} 名结果待核验`:'已映射可核验阶段'}。`;stateDot.className=reactions==='已核验'?'state-dot current':'state-dot stale'}catch(error){stateDot.className='state-dot error';refreshTitle.textContent='所选招聘周期读取失败';refreshMeta.textContent=`${error.message}；未把缺失数据记为 0。`}}
     function formatChinaTime(iso){if(!iso)return'—';const date=new Date(iso);return Number.isNaN(date.getTime())?'—':new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date)}
     function renderLifecycleStatus(status){
       const module=status?.modules?.recruitment,snapshot=lifecycleSnapshot||module,isCurrent=snapshot?.sourceDate===TODAY,summary=lifecycleSnapshot?.summary;
@@ -335,7 +433,7 @@
       }catch(error){stateDot.className='state-dot error';refreshTitle.textContent='本次更新失败，已保留旧招聘档案';refreshMeta.textContent=error.message||'请稍后重试'}
       finally{refreshButton.disabled=false;refreshButton.textContent='立即更新'}
     }
-    recruitmentMonth.addEventListener('change',loadRecruitmentCycle);refreshButton.onclick=manualRefresh;renderCycleLabel();loadLifecycle();loadRecruitmentCycle();setInterval(()=>{loadLifecycle();loadRecruitmentCycle()},5*60*1000);
+    recruitmentMonth.addEventListener('change',loadRecruitmentCycle);refreshButton.onclick=manualRefresh;renderCycleLabel();loadLifecycle();loadRecruitmentCycle();loadAssessmentAccess();setInterval(()=>{loadLifecycle();loadRecruitmentCycle();loadAssessmentAccess()},5*60*1000);
   </script>
   <script src="../../module-data.js" defer></script>
 </body>

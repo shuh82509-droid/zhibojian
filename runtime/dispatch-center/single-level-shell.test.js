@@ -41,6 +41,6 @@ test('planning workbench uses the finalized September schedule source', () => {
   assert.match(server, /sheetId: '0jFdXf'/u);
   assert.match(server, /品牌营销部-直播中心排班表_20260901_20260930/u);
   assert.match(html, /wiki\/UKVDwxpz7iKAv8k5KxTcxiDVnuf/u);
-  assert.match(server, /resolveSpreadsheetSheetId/u);
+  assert.match(server, /resolveSpreadsheetSheetMetadata/u);
   assert.doesNotMatch(html, /N22ZwGT6Piz49RkdnZkchsH1nBd/u);
 });

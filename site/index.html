@@ -13,6 +13,7 @@
   <button data-page="schedule">调度中心<span>飞书排班 · 受控写回</span></button>
   <button data-page="tasks">协同中心<span>实时违规 · 运营配置</span></button>
   <button data-page="materials">素材中心<span>内容物料 · 归档上传</span></button>
+  <button data-page="coach-calendar">教练日历授权<span>四间负责人 · 本人只读授权</span></button>
  </nav><div class="spacer"></div><div class="user" aria-label="当前登录账号" aria-live="polite"><span class="user-avatar" id="platformAvatar">—</span><span class="user-copy"><b id="platformUserName">正在校验账号</b><small id="platformUserRole">中枢权限同步中</small></span></div></aside><main class="main"><header class="top"><div class="top-left"><b id="title">WIS直播中心总览</b><div class="module-tabs" id="lifeTabs"><button data-module="recruitment" class="active">招聘池</button><button data-module="anchors">主播档案</button></div></div><span class="badge">LIVE CENTER</span></header><section id="content"></section></main></div>
 <script id="platformSessionData" type="application/json">__PLATFORM_SESSION__</script>
 <script>
@@ -24,7 +25,7 @@ const platformAvatar=document.getElementById('platformAvatar');
 const platformUserName=document.getElementById('platformUserName');
 const platformUserRole=document.getElementById('platformUserRole');
 const basePath=location.pathname.endsWith('/')?location.pathname:location.pathname+'/';
-const pages={overview:['WIS直播中心总览',new URL('../data-center/?view=overview',location.href).href],business:['各直播间数据',new URL('../data-center/?view=data',location.href).href],recruitment:['主播全生命周期管理 · 招聘池',basePath+'modules/recruitment/recruitment-dashboard.html?embed=1&v=20260907a'],anchors:['主播全生命周期管理 · 主播档案',basePath+'modules/anchors/recruitment-dashboard.html?embed=1&v=20260907a'],schedule:['调度中心',new URL('../dispatch-center/?view=current',location.href).href],materials:['素材中心',basePath+'modules/materials/material-center.html?embed=1&v=20260907a'],tasks:['协同中心',basePath+'modules/tasks/']};
+const pages={overview:['WIS直播中心总览',new URL('../data-center/?view=overview',location.href).href],business:['各直播间数据',new URL('../data-center/?view=data',location.href).href],recruitment:['主播全生命周期管理 · 招聘池',basePath+'modules/recruitment/recruitment-dashboard.html?embed=1&v=20260907a'],anchors:['主播全生命周期管理 · 主播档案',basePath+'modules/anchors/recruitment-dashboard.html?embed=1&v=20260907a'],schedule:['调度中心',new URL('../dispatch-center/?view=current',location.href).href],materials:['素材中心',basePath+'modules/materials/material-center.html?embed=1&v=20260907a'],tasks:['协同中心',basePath+'modules/tasks/'], 'coach-calendar':['教练本人日历授权',basePath+'coach-calendar.html']};
 const placeholders={schedule:['调度中心','统一排班、资源位与规则预设'],materials:['素材中心','沟通稿、话术库与直播素材'],tasks:['协同中心','任务、提醒与审批协同']};
 const embeddedCss=`
   .app-shell > .sidebar,.ops-shell > .ops-sidebar,.layout > .side{display:none!important}

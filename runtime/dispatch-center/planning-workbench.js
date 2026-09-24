@@ -1,12 +1,13 @@
 (() => {
-  const planningBase = window.location.protocol === 'file:' ? 'http://127.0.0.1:3100' : window.location.pathname.startsWith('/yxb/wis-marketing-hub/modules/dispatch-center/') ? '/yxb/wis-marketing-hub/modules/dispatch-center' : window.location.pathname.startsWith('/fd-027340/dispatch-center/') ? '/fd-027340/dispatch-center' : '';
+  const hubDispatchPath = window.location.pathname.match(/^(\/yxb\/wis-marketing-hub\/(?:live-flow-candidate-[a-z0-9-]+\/)?modules\/dispatch-center)(?:\/|$)/u)?.[1];
+  const planningBase = window.location.protocol === 'file:' ? 'http://127.0.0.1:3100' : hubDispatchPath || (window.location.pathname.startsWith('/fd-027340/dispatch-center/') ? '/fd-027340/dispatch-center' : '');
   const roomRules = {
     guanqi: '高资源位优先匹配周排名，兼顾均衡；L 不接 J2/P/M，F 不接 P/M；每人每天只排一个资源位。',
     brand_selection: 'AC1、L、J2、WB 四档资源位按周排名分配，资源分和日均分可调整。',
     youxuan: '默认周四至周三；第 3 名排官旗 M 通宵，休息时顺延第 4 名；B3/M 次日不可接 R。',
     wangou: '默认周三至下周三；第 3 名排品牌精选 M，休息顺延第 4 名；常规班按资源分排序轮转，促销日需复核。',
   };
-  const state = { rooms: {}, shiftTimes: {}, drafts: {}, makeupDrafts: {}, totalSchedule: null, context: null, shiftOrder: [], currentDraft: null, importPlan: null, anchorRoster: [], assistantRoster: [], restData: null, selectedRestName: '', makeupData: null, makeupRoster: [], currentMakeupDraft: null, makeupImportPlan: null };
+  const state = { rooms: {}, shiftTimes: {}, drafts: {}, makeupDrafts: {}, totalSchedule: null, planningBaseline: null, historyStatus: null, historyUnavailable: false, draftCapability: {enabled:false}, totalImportCapability: {enabled:false}, context: null, shiftOrder: [], currentDraft: null, importPlan: null, anchorRoster: [], assistantRoster: [], restData: null, selectedRestName: '', makeupData: null, makeupRoster: [], currentMakeupDraft: null, makeupImportPlan: null };
   const $ = (selector) => document.querySelector(selector);
   const dialog = $('#planningDialog'); const title = $('#planningTitle'); const ruleHint = $('#planningRuleHint'); const startInput = $('#planningStart'); const endInput = $('#planningEnd');
   const anchorRosterBlock = $('#planningAnchorRosterBlock'); const anchorRosterRows = $('#anchorRosterRows'); const assistantRosterEditor = $('#assistantRosterEditor'); const assistantRosterRows = $('#assistantRosterRows');
@@ -17,6 +18,29 @@
   const addDays = (date, days) => new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
   const weekday = (date) => new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', weekday: 'short' }).format(new Date(`${date}T12:00:00+08:00`));
   const setStatus = (message, error = false) => { statusRoot.textContent = message || ''; statusRoot.classList.toggle('error', error); };
+  const baselineStatus = document.createElement('p'); baselineStatus.id = 'planningBaselineStatus'; baselineStatus.className = 'planning-status'; baselineStatus.setAttribute('role', 'status'); $('#planningRoomGrid').before(baselineStatus);
+  function showBaselineStatus() {
+    if (state.historyStatus !== 'pending_recovery') { baselineStatus.textContent = ''; return; }
+    const b = state.planningBaseline;
+    baselineStatus.textContent = `${b ? `当前正式排班新基线：${b.spreadsheetToken} / ${b.sheetId} · 版本 ${b.revision} · 核验 ${b.checkedAt}。` : '当前正式排班新基线待核验。'}旧草稿、休息配置与写回审计仍待恢复，不能据此认定旧历史为空。${state.historyUnavailable ? '当前仅可查看来源，保存与写回已暂停。' : `${state.draftCapability.enabled ? '新基线后的草稿可保存。' : '新基线草稿保存仍未启用。'}${state.totalImportCapability.enabled ? '正式总表导入可在核对预览后确认。' : '正式总表导入仍处于只读验收。'}化妆师表及原直播间表尚无独立新基线，不能写回。`}`;
+    baselineStatus.classList.add('error');
+  }
+  function disableRecoveryActions() {
+    if (!state.historyUnavailable) return;
+    for (const selector of ['[data-planning-room]','#loadPriorPlanning','#generatePlanningDraft','#savePlanningDraft','#previewPlanningImport','#commitPlanningImport','#saveRestEntitlement','#restEntitlement','[data-rest-room]','[data-rest-note]','[data-save-rest]','#addMakeupArtist','#generateMakeupDraft','#saveMakeupDraft','#previewMakeupImport','#commitMakeupImport']) {
+      document.querySelectorAll(selector).forEach(element => { element.disabled = true; element.title = '旧历史待恢复，当前只读'; });
+    }
+  }
+  function applyPlanningCapabilities() {
+    if (state.historyUnavailable) { disableRecoveryActions(); return; }
+    for (const selector of ['#saveRestEntitlement','#restEntitlement','[data-rest-room]','[data-rest-note]','[data-save-rest]']) {
+      document.querySelectorAll(selector).forEach(element => { element.disabled = !state.draftCapability.enabled; if (element.disabled) element.title = '新基线草稿保存尚未启用'; });
+    }
+    saveButton.disabled = !state.draftCapability.enabled || !state.currentDraft;
+    $('#saveMakeupDraft').disabled = !state.draftCapability.enabled || !state.currentMakeupDraft;
+    document.querySelectorAll('#commitPlanningImport').forEach(element => { if (!state.totalImportCapability.enabled) { element.disabled = true; element.title = state.totalImportCapability.message || '正式总表导入仍处于只读验收'; } });
+    const makeupCommit = $('#commitMakeupImport'); makeupCommit.disabled = true; makeupCommit.title = '化妆师源表尚无独立核验的新基线';
+  }
 
   async function requestPlanning(path, options = {}) {
     const response = await fetch(`${planningBase}${path}`, { credentials: 'same-origin', cache: 'no-store', ...options, headers: { Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } : {}), ...(options.headers || {}) } });
@@ -50,7 +74,7 @@
   function renderDraftMeta() {
     Object.keys(state.rooms).forEach((roomCode) => {
       const count = Object.values(state.drafts).filter((draft) => draft.roomCode === roomCode && draft.role === 'anchor').length; const root = document.querySelector(`[data-draft-count="${roomCode}"]`);
-      if (root) root.textContent = count ? `已保存 ${count} 个主播范围` : '暂无主播草稿';
+      if (root) root.textContent = state.historyStatus === 'pending_recovery' ? (count ? `新基线后已保存 ${count} 个主播范围 · 旧历史待恢复` : '旧历史草稿待恢复；新基线后尚无草稿') : count ? `已保存 ${count} 个主播范围` : '暂无主播草稿';
     });
   }
 
@@ -164,7 +188,7 @@
     try {
       const role = state.context.role; const resourceScores = Object.fromEntries([...scoresRoot.querySelectorAll('[data-score-shift]')].map((input) => [input.dataset.scoreShift, Number(input.value)])); const customShiftTimes = parseCustomShiftTimes();
       const eventDates = $('#planningEventDates').value.split(/[,，、\s]+/u).filter(Boolean); const input = { roomCode: state.context.roomCode, role, startDate: startInput.value, endDate: endInput.value, roster: role === 'assistant' ? readAssistantRoster() : readAnchorRoster(), shifts: state.shiftOrder, customShiftTimes, resourceScores, eventDates };
-      setStatus('正在生成排班草稿…'); const payload = await requestPlanning('/api/planning/generate', { method: 'POST', body: JSON.stringify(input) }); state.currentDraft = payload.draft; state.shiftOrder = [...payload.draft.shifts]; renderShiftOrder(); renderScores(); renderGrid(); saveButton.disabled = false; previewButton.disabled = false; setStatus(`已生成 ${payload.draft.dates.length} 天、${payload.draft.assignments.length} 条排班；${payload.draft.warnings.length ? `有 ${payload.draft.warnings.length} 条待人工复核。` : '未发现重复排人。'}`);
+      setStatus('正在生成排班草稿…'); const payload = await requestPlanning('/api/planning/generate', { method: 'POST', body: JSON.stringify(input) }); state.currentDraft = payload.draft; state.shiftOrder = [...payload.draft.shifts]; renderShiftOrder(); renderScores(); renderGrid(); saveButton.disabled = !state.draftCapability.enabled; previewButton.disabled = false; setStatus(`已生成 ${payload.draft.dates.length} 天、${payload.draft.assignments.length} 条排班；${payload.draft.warnings.length ? `有 ${payload.draft.warnings.length} 条待人工复核。` : '未发现重复排人。'}`);
     } catch (error) { setStatus(error.message, true); }
   }
 
@@ -176,7 +200,7 @@
     const priorByOffset = new Map(prior.dates.map((date, index) => [date, index])); const mapped = prior.assignments.map((item) => { const offset = priorByOffset.get(item.date); const date = dates[offset]; return date ? { ...item, date } : null; }).filter(Boolean);
     state.currentDraft = { ...structuredClone(prior), key: undefined, startDate: dates[0], endDate: dates.at(-1), dates, assignments: mapped, eventDates: [], updatedAt: new Date().toISOString() }; state.shiftOrder = [...prior.shifts];
     if (state.context.role === 'anchor') { state.anchorRoster = structuredClone(prior.roster); renderAnchorRoster(); } else { state.assistantRoster = structuredClone(prior.roster); renderAssistantRoster(); }
-    computeClientSummaries(); renderShiftOrder(); renderScores(); renderGrid(); saveButton.disabled = false; previewButton.disabled = false; setStatus(`已将上期 ${prior.startDate} — ${prior.endDate} 按日期顺序映射到当前范围，请复核后保存。`);
+    computeClientSummaries(); renderShiftOrder(); renderScores(); renderGrid(); saveButton.disabled = !state.draftCapability.enabled; previewButton.disabled = false; setStatus(`已将上期 ${prior.startDate} — ${prior.endDate} 按日期顺序映射到当前范围，请复核后保存。`);
   }
   async function saveDraft() {
     try { if(state.currentDraft){state.currentDraft.shifts=[...state.shiftOrder];state.currentDraft.customShiftTimes=parseCustomShiftTimes()}setStatus('正在保存草稿…'); const payload = await requestPlanning('/api/planning/draft', { method: 'POST', body: JSON.stringify(state.currentDraft) }); state.currentDraft = payload.draft; state.drafts=payload.drafts||{...state.drafts,[payload.draft.key]:payload.draft}; renderDraftMeta(); renderSummary(); setStatus(`草稿已保存：${payload.draft.startDate} — ${payload.draft.endDate}。${payload.linkedKeys?.length?'已同步配对直播间通宵，其他班次保持不变。':['youxuan','wangou'].includes(payload.draft.roomCode)&&payload.draft.role==='anchor'?'配对直播间尚无覆盖该周期的草稿，通宵联动待建立配对草稿后保存。':''}`); }
@@ -184,37 +208,37 @@
   }
   async function previewImport() {
     try { setStatus('正在核对总表姓名、日期列与现有单元格…'); const payload = await requestPlanning('/api/planning/import/preview', { method: 'POST', body: JSON.stringify({ draft: state.currentDraft }) }); const plan = payload.plan; state.importPlan = plan; const blocked = plan.unresolved.length > 0;
-      previewRoot.hidden = false; previewRoot.innerHTML = `<h3>导入预览 · ${pEsc(plan.target.label)}</h3><p>已匹配 ${plan.resolvedCount}/${plan.assignmentCount} 条，写入 ${plan.ranges.length} 个精确行范围；导入值为“班次（时间范围）”；已有值冲突 ${plan.overwrites.length} 处。</p><p><a href="${pEsc(state.totalSchedule?.url || 'https://jqx28l0j4lx.feishu.cn/wiki/UKVDwxpz7iKAv8k5KxTcxiDVnuf')}" target="_blank" rel="noopener noreferrer">打开排班总表核查 ↗</a></p>${plan.unresolved.length ? `<ul>${plan.unresolved.slice(0, 12).map((item) => `<li>${pEsc(item.date)} · ${pEsc(item.name)}：${pEsc(item.reason)}</li>`).join('')}</ul>` : '<p>姓名和日期列均已匹配，可进入确认导入。</p>'}${plan.overwrites.length ? '<label class="planning-import-confirm"><input id="planningAllowOverwrite" type="checkbox">我已核对并同意覆盖预览中的已有排班</label>' : ''}<button id="commitPlanningImport" type="button" ${blocked ? 'disabled' : ''}>确认导入并回读</button>`;
-      $('#commitPlanningImport')?.addEventListener('click', commitImport); setStatus(blocked ? '仍有未匹配人员或日期，已阻断导入。' : '预览完成；请核对后确认导入。', blocked);
+      previewRoot.hidden = false; previewRoot.innerHTML = `<h3>导入预览 · ${pEsc(plan.target.label)}</h3><p>${pEsc(plan.role === 'anchor' ? '主播' : '助理')} · 已匹配 ${plan.resolvedCount}/${plan.assignmentCount} 条，写入 ${plan.ranges.length} 个精确范围；已有值冲突 ${plan.overwrites.length} 处。</p><p><a href="${pEsc(state.totalSchedule?.url || 'https://jqx28l0j4lx.feishu.cn/wiki/UKVDwxpz7iKAv8k5KxTcxiDVnuf')}" target="_blank" rel="noopener noreferrer">打开排班总表核查 ↗</a></p>${plan.unresolved.length ? `<ul>${plan.unresolved.map((item) => `<li>${pEsc(item.date)} · ${pEsc(item.name)}：${pEsc(item.reason)}</li>`).join('')}</ul>` : '<p>姓名和日期列均已匹配，可进入确认导入。</p>'}<details><summary>查看全部 ${plan.ranges.length} 个写入范围及修改前后值</summary><table><thead><tr><th>单元格</th><th>原值</th><th>将写入</th></tr></thead><tbody>${plan.ranges.map((item) => `<tr><td>${pEsc(item.range)}</td><td>${pEsc(item.before.join(' / ') || '空白')}</td><td>${pEsc(item.after.join(' / '))}</td></tr>`).join('')}</tbody></table></details>${plan.overwrites.length ? '<label class="planning-import-confirm"><input id="planningAllowOverwrite" type="checkbox">我已核对并同意覆盖预览中的已有排班</label>' : ''}<button id="commitPlanningImport" type="button" ${blocked ? 'disabled' : ''}>确认导入并回读</button>`;
+      $('#commitPlanningImport')?.addEventListener('click', commitImport); applyPlanningCapabilities(); setStatus(blocked ? '仍有未匹配人员或日期，已阻断导入。' : state.totalImportCapability.enabled ? '预览完成；请核对后确认导入。' : (state.totalImportCapability.message || '正式总表导入仍处于只读验收。'), blocked || !state.totalImportCapability.enabled);
     } catch (error) { setStatus(error.message, true); }
   }
   async function commitImport() {
     if (!state.importPlan) return; const allowOverwrite = Boolean($('#planningAllowOverwrite')?.checked); if (state.importPlan.overwrites.length && !allowOverwrite) { setStatus('目标日期已有值，请勾选覆盖确认。', true); return; }
-    try { setStatus('正在写入精确单元格并回读…'); const payload = await requestPlanning('/api/planning/import', { method: 'POST', body: JSON.stringify({ draft: state.currentDraft, confirm: true, expectedHash: state.importPlan.expectedHash, allowOverwrite }) }); setStatus(`导入完成并通过回读；审计编号 ${payload.auditId}。`); previewRoot.innerHTML += `<p>已回读 ${payload.readbacks.length} 个范围，结果一致。<a href="${pEsc(state.totalSchedule?.url || 'https://jqx28l0j4lx.feishu.cn/wiki/UKVDwxpz7iKAv8k5KxTcxiDVnuf')}" target="_blank" rel="noopener noreferrer">立即打开排班总表复核 ↗</a></p>`; }
+    try { setStatus('正在核对精确单元格并读取结果…'); const payload = await requestPlanning('/api/planning/import', { method: 'POST', body: JSON.stringify({ draft: state.currentDraft, confirm: true, expectedHash: state.importPlan.expectedHash, allowOverwrite }) }); setStatus(payload.noChange ? `原表已为目标值，本次未写入；来源已重新读取，审计编号 ${payload.auditId}。` : `导入完成并通过回读；审计编号 ${payload.auditId}。`); previewRoot.innerHTML += `<p>${payload.noChange ? '本次未写入，正式来源已核对一致。' : `已回读 ${payload.readbacks.length} 个写入范围，结果一致。`}<a href="${pEsc(state.totalSchedule?.url || 'https://jqx28l0j4lx.feishu.cn/wiki/UKVDwxpz7iKAv8k5KxTcxiDVnuf')}" target="_blank" rel="noopener noreferrer">立即打开排班总表复核 ↗</a></p>`; }
     catch (error) { setStatus(error.message, true); }
   }
 
   function renderRestCalendar(person) {
-    const root = $('#restCalendar'); if (!person) { root.innerHTML = '<header><div><h4>主播月历</h4><span>点击主播查看工作、休息与未排班</span></div><b>待选择</b></header>'; return; }
+    const root = $('#restCalendar'); if (!person || person.sourceStatus !== 'matched' || !person.calendar?.length) { root.innerHTML = '<header><div><h4>主播月历</h4><span>点击已匹配主播查看工作、休息与未排班</span></div><b>待选择</b></header>'; return; }
     const first = new Date(`${person.calendar[0]?.date || `${$('#restMonth').value}-01`}T12:00:00+08:00`); const offset = first.getDay();
     root.innerHTML = `<header><div><h4>${pEsc(person.name)} · ${pEsc(person.roomName)}</h4><span>${pEsc($('#restMonth').value)} 排班状态</span></div><b>${person.alert ? '需关注' : '正常'}</b></header><div class="calendar-week"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div class="calendar-days">${'<i></i>'.repeat(offset)}${person.calendar.map((day) => `<button type="button" class="${day.status}" title="${pEsc(day.shiftCode || '未排班')}"><b>${Number(day.date.slice(-2))}</b><small>${day.status === 'work' ? pEsc(day.shiftCode) : day.status === 'rest' ? '休' : '未排'}</small></button>`).join('')}</div><div class="calendar-legend"><span><i class="work"></i>上班</span><span><i class="rest"></i>休息</span><span><i class="unassigned"></i>未排班</span></div>`;
   }
   function renderRestBoard(data) {
-    state.restData = data; const source = data.source || {}; const allPeople = data.people || []; const terms = $('#restAnchorFilter').value.split(/[,，、\s]+/u).map((value) => value.trim().toLowerCase()).filter(Boolean); const people = allPeople.filter((person) => !terms.length || terms.some((term) => `${person.name} ${person.roomName}`.toLowerCase().includes(term))); const warnings = allPeople.filter((person) => person.alert).length;
+    state.restData = data; const source = data.source || {}; const allPeople = data.people || []; const allMatched = allPeople.filter((person) => person.sourceStatus === 'matched'); const allPending = data.unmatched || []; const terms = $('#restAnchorFilter').value.split(/[,，、\s]+/u).map((value) => value.trim().toLowerCase()).filter(Boolean); const matchesFilter = (person) => !terms.length || terms.some((term) => `${person.name} ${person.roomName}`.toLowerCase().includes(term)); const people = allMatched.filter(matchesFilter); const pending = allPending.filter(matchesFilter); const warnings = allMatched.filter((person) => person.alert).length;
     if (document.activeElement !== $('#restEntitlement')) $('#restEntitlement').value = data.entitlement ?? '';
-    $('#restEntitlementStatus').textContent=data.historyStatus==='pending_recovery'?'手工月应休及补班说明待恢复，当前只读':data.entitlement==null?'尚未填写本月固定应休':`${$('#restMonth').value} 固定月应休 ${data.entitlement} 天`;
-    $('#restSummaryStrip').innerHTML = `<span><b>来源状态</b>${pEsc(source.permissionStatus || '待核验')} · ${pEsc(source.label || '排班总表')}${source.crossMonth ? ' · 已跨月' : ''}${source.mode==='verified_backup' ? `<br>备份读取 ${pEsc(source.readAt)}<br>源修改 ${pEsc(source.sourceModifiedAt)}<br>手工休假配置待恢复` : ''}</span><span><b>主播数</b>${data.available ? allPeople.length : '待核验'}</span><span class="${warnings ? 'warning' : ''}"><b>连播预警</b>${data.available ? `${warnings} 人` : '待核验'}</span>`;
+    $('#restEntitlementStatus').textContent=data.historyStatus==='pending_recovery'?(state.draftCapability.enabled?'旧手工月应休及补班说明待恢复；新基线记录另存':'旧手工月应休及补班说明待恢复，当前只读'):data.entitlement==null?'尚未填写本月固定应休':`${$('#restMonth').value} 固定月应休 ${data.entitlement} 天`;
+    $('#restSummaryStrip').innerHTML = `<span><b>来源状态</b>${pEsc(source.permissionStatus || '待核验')} · ${pEsc(source.label || '排班总表')}${source.crossMonth ? ' · 已跨月' : ''}${source.mode==='verified_backup' ? `<br>备份读取 ${pEsc(source.readAt)}<br>源修改 ${pEsc(source.sourceModifiedAt)}<br>手工休假配置待恢复` : ''}</span><span><b>主播数</b>${data.available ? `${allMatched.length} 已匹配 / ${allPending.length} 待核验` : '待核验'}</span><span class="${warnings ? 'warning' : ''}"><b>连播预警</b>${data.available ? `${warnings} 人` : '待核验'}</span>`;
     const body = $('#restBoardTable'); if (!data.available) { body.innerHTML = `<tr><td colspan="7">${pEsc(data.reason || '数据源暂不可读取。')}</td></tr>`; renderRestCalendar(null); return; }
-    body.innerHTML = people.length ? people.map((person) => `<tr data-rest-person="${pEsc(person.name)}" class="${person.alert ? 'warning-row' : ''}"><td><button class="rest-status" data-open-rest-calendar type="button"><i></i><span>${pEsc(person.name)}<small>${person.alert ? '需关注' : '排班已读取'}</small></span></button></td><td><select data-rest-room aria-label="${pEsc(person.name)} 直播间">${['官旗','品牌精选','优选','王鸥美肤'].map((room) => `<option ${room === person.roomName ? 'selected' : ''}>${room}</option>`).join('')}</select></td><td>${person.usedRest} / ${person.remainingRest ?? '待填'}${person.restAdjustment?`<small>补班说明已调整应休 ${person.restAdjustment>0?'+':''}${person.restAdjustment}</small>`:''}</td><td><div class="streak-meter"><span style="--streak:${Math.min(10, person.maximumConsecutiveWorkDays || 0)}"></span><b>${person.maximumConsecutiveWorkDays || 0} 天</b></div></td><td>${pEsc(person.suggestedRestDate || '待确认')}</td><td><input data-rest-note value="${pEsc(person.compNote || '')}" placeholder="如：上月多休一天"></td><td><button data-save-rest type="button">保存</button></td></tr>`).join('') : `<tr><td colspan="7">${pEsc(data.reason || '当前筛选没有匹配到主播。')}</td></tr>`;
+    body.innerHTML = people.length || pending.length ? people.map((person) => `<tr data-rest-person="${pEsc(person.name)}" class="${person.alert ? 'warning-row' : ''}"><td><button class="rest-status" data-open-rest-calendar type="button"><i></i><span>${pEsc(person.name)}<small>${person.alert ? '需关注' : '排班已读取'}</small></span></button></td><td><select data-rest-room aria-label="${pEsc(person.name)} 直播间">${['官旗','品牌精选','优选','王鸥美肤'].map((room) => `<option ${room === person.roomName ? 'selected' : ''}>${room}</option>`).join('')}</select></td><td>${person.usedRest} / ${person.remainingRest ?? '待填'}${person.restAdjustment?`<small>补班说明已调整应休 ${person.restAdjustment>0?'+':''}${person.restAdjustment}</small>`:''}</td><td><div class="streak-meter"><span style="--streak:${Math.min(10, person.maximumConsecutiveWorkDays || 0)}"></span><b>${person.maximumConsecutiveWorkDays || 0} 天</b></div></td><td>${pEsc(person.suggestedRestDate || '待确认')}</td><td><input data-rest-note value="${pEsc(person.compNote || '')}" placeholder="如：上月多休一天"></td><td><button data-save-rest type="button">保存</button></td></tr>`).join('') + pending.map((person) => `<tr class="warning-row"><td><b>${pEsc(person.name)}</b><small>待核验</small></td><td>${pEsc(person.roomName || '直播间待核验')}</td><td>待核验</td><td>待核验</td><td>待核验</td><td colspan="2">${pEsc(person.reason || '原表尚未匹配')}</td></tr>`).join('') : `<tr><td colspan="7">${pEsc(data.reason || '当前筛选没有匹配到主播。')}</td></tr>`;
     const selected = people.find((person) => person.name === state.selectedRestName) || people[0]; state.selectedRestName = selected?.name || ''; renderRestCalendar(selected);
-    if(source.mode==='verified_backup') {
+    if(source.mode==='verified_backup'||state.historyUnavailable||!state.draftCapability.enabled) {
       const scope=document.createElement('small');scope.textContent=source.scopeNote||'仅展示已映射的原表来源';$('#restSummaryStrip').append(scope);
       $('#restEntitlement').disabled=true;$('#saveRestEntitlement').disabled=true;
       body.querySelectorAll('[data-rest-room]').forEach((select,index)=>{const span=document.createElement('span');span.textContent=people[index]?.roomName||'直播间待核验';select.replaceWith(span);});
-      body.querySelectorAll('[data-rest-note],[data-save-rest]').forEach(el=>{el.disabled=true;el.title='历史手工记录待恢复，当前只读';});
+      body.querySelectorAll('[data-rest-note],[data-save-rest]').forEach(el=>{el.disabled=true;el.title='新基线草稿保存尚未启用，当前只读';});
     }
   }
-  async function loadRestBoard() { const month = $('#restMonth').value || currentScheduleDate().slice(0, 7); $('#restMonth').value = month; try { $('#restSummaryStrip').innerHTML = '<span><b>来源状态</b>正在读取</span><span><b>主播数</b>待核验</span><span><b>连播预警</b>待核验</span>'; const payload = await requestPlanning(`/api/planning/rest?month=${encodeURIComponent(month)}`); renderRestBoard(payload.data); } catch (error) { renderRestBoard({ available: false, reason: error.message, people: [], source: { permissionStatus: '待回传' } }); } }
+  async function loadRestBoard() { const month = $('#restMonth').value || currentScheduleDate().slice(0, 7); $('#restMonth').value = month; try { $('#restSummaryStrip').innerHTML = '<span><b>来源状态</b>正在读取</span><span><b>主播数</b>待核验</span><span><b>连播预警</b>待核验</span>'; const payload = await requestPlanning(`/api/planning/rest?month=${encodeURIComponent(month)}`); renderRestBoard(payload.data); } catch (error) { renderRestBoard({ available: false, reason: error.message, people: [], source: { permissionStatus: '待回传' } }); } finally { disableRecoveryActions(); } }
   $('#restBoardTable').addEventListener('click', async (event) => {
     const row = event.target.closest('[data-rest-person]'); if (!row) return; const person = state.restData?.people?.find((item) => item.name === row.dataset.restPerson);
     if (event.target.closest('[data-open-rest-calendar]')) { state.selectedRestName = person.name; renderRestCalendar(person); return; }
@@ -236,7 +260,7 @@
     const lookup = new Map((draft.assignments || []).map((item) => [`${item.name}|${item.date}`, item]));
     $('#makeupPlanningSummary').innerHTML = (draft.attendance || []).map((item) => `<article><b>${pEsc(item.name)}</b><span>上班 ${item.workDays} 天 · 已选休 ${item.usedRest} 天 · 剩余休 ${item.remainingRest}</span><span>AC1 ${item.shifts?.AC1 || 0} · F ${item.shifts?.F || 0} · Q ${item.shifts?.Q || 0}</span></article>`).join('');
     $('#makeupPlanningGrid').innerHTML = `<div class="makeup-shift-legend"><span class="shift-ac1">AC1</span><span class="shift-f">F</span><span class="shift-q">Q</span><span class="shift-rest">休息</span></div><table class="planning-grid makeup-planning-grid"><thead><tr><th>化妆师</th>${draft.dates.map((date) => `<th>${pEsc(date.slice(5))}<small>${pEsc(weekday(date))}</small></th>`).join('')}</tr></thead><tbody>${draft.roster.map((person) => `<tr><th>${pEsc(person.name)}</th>${draft.dates.map((date) => { const item = lookup.get(`${person.name}|${date}`); const shiftClass=item?.rest||item?.shiftCode==='休'?'shift-rest':`shift-${String(item?.shiftCode||'unplanned').toLowerCase()}`; return `<td class="${shiftClass}">${item ? `<b>${pEsc(item.shiftCode)}</b><small>${pEsc(item.shiftTime || '')}</small>` : '<small>未排</small>'}</td>`; }).join('')}</tr>`).join('')}</tbody></table>`;
-    $('#saveMakeupDraft').disabled = false;
+    $('#saveMakeupDraft').disabled = !state.draftCapability.enabled;
     $('#previewMakeupImport').disabled = false;
   }
   function resetMakeupImportPreview() { state.makeupImportPlan = null; $('#makeupImportPreview').hidden = true; $('#makeupImportPreview').innerHTML = ''; $('#commitMakeupImport').disabled = true; }
@@ -250,7 +274,7 @@
       const payload = await requestPlanning('/api/planning/makeup/import/preview', { method: 'POST', body: JSON.stringify({ draft: state.currentMakeupDraft }) }); const plan = payload.plan; state.makeupImportPlan = plan;
       const blocked = Boolean(plan.unresolved?.length); const preview = $('#makeupImportPreview'); preview.hidden = false;
       preview.innerHTML = `<h3>化妆师排班导入预览</h3><p>${plan.mode === 'append' ? '目标月份尚无区块，将在表尾新增并保留历史月份。' : '目标月份已存在，将只更新匹配人员的日期单元格。'} 共 ${plan.ranges.length} 个精确范围，已有值冲突 ${plan.overwrites.length} 处。</p>${blocked ? `<ul>${plan.unresolved.map((item) => `<li>${pEsc(item.name || item.date)}：${pEsc(item.reason)}</li>`).join('')}</ul>` : '<p>人员、月份和目标范围已核对，可确认导入。</p>'}${plan.overwrites.length ? '<label class="planning-import-confirm"><input id="makeupAllowOverwrite" type="checkbox">我已核对并同意覆盖预览中的已有排班</label>' : ''}`;
-      $('#commitMakeupImport').disabled = blocked; $('#makeupPlanningStatus').textContent = blocked ? '仍有未匹配项，已阻断导入。' : '预览完成；请核对后确认导入。';
+      $('#commitMakeupImport').disabled = true; $('#makeupPlanningStatus').textContent = blocked ? '仍有未匹配项，已阻断导入。' : '化妆师源表尚无独立核验的新基线；预览仅供核查，不能提交。';
     } catch (error) { resetMakeupImportPreview(); $('#makeupPlanningStatus').textContent = error.message; }
   }
   async function commitMakeupPlanningImport() {
@@ -260,16 +284,24 @@
       $('#commitMakeupImport').disabled = true; $('#makeupPlanningStatus').textContent = '正在写入化妆师排班并回读核验…';
       const payload = await requestPlanning('/api/planning/makeup/import', { method: 'POST', body: JSON.stringify({ draft: state.currentMakeupDraft, expectedHash: plan.expectedHash, confirm: true, allowOverwrite: Boolean($('#makeupAllowOverwrite')?.checked) }) });
       $('#makeupImportPreview').innerHTML = `<h3>导入完成</h3><p>已写入 ${payload.plan.ranges.length} 个精确范围，并通过飞书回读核验。审计编号：${pEsc(payload.auditId)}</p>`; $('#makeupPlanningStatus').textContent = '化妆师排班已写入并回读一致。'; state.makeupImportPlan = null; await loadMakeup();
-    } catch (error) { $('#commitMakeupImport').disabled = false; $('#makeupPlanningStatus').textContent = error.message; }
+    } catch (error) { $('#commitMakeupImport').disabled = true; $('#makeupPlanningStatus').textContent = error.message; }
   }
   async function loadMakeup() {
     try { const payload = await requestPlanning(`/api/planning/makeup?date=${encodeURIComponent(currentScheduleDate())}`); state.makeupData = payload.data; window.setDispatchMakeupDuty?.(payload.data); if (!state.makeupRoster.length) { state.makeupRoster = (payload.data.roster || []).map((name, index) => ({ name, rank: index + 1, entitlement: Number(state.restData?.entitlement)||0, restDates: [] })); renderMakeupRoster(); } const saved = state.makeupDrafts[$('#makeupMonth').value]; if (saved) selectMakeupMonth(); $('#makeupPlanningStatus').textContent = `${payload.data.source?.permissionStatus || '待回传'} · ${payload.data.reason || `在职化妆师 ${payload.data.roster?.length || 0} 名`}`; }
     catch (error) { state.makeupData = { available: false, people: [], roster: [], reason: error.message, source: { permissionStatus: '待回传' } }; window.setDispatchMakeupDuty?.(state.makeupData); $('#makeupPlanningStatus').textContent = error.message; }
+    finally { disableRecoveryActions(); }
   }
 
   async function loadPlanning() {
-    try { const payload = await requestPlanning('/api/planning'); state.rooms = payload.rooms || {}; state.shiftTimes = payload.shiftTimes || {}; state.drafts = payload.drafts || {}; state.makeupDrafts = payload.makeupDrafts || {}; state.totalSchedule = payload.totalSchedule || null; const sourceLink = $('#planningSourceLink'); if (sourceLink && state.totalSchedule?.url) { try { const sourceUrl = new URL(state.totalSchedule.url); if (sourceUrl.protocol === 'https:' && sourceUrl.hostname === 'jqx28l0j4lx.feishu.cn') sourceLink.href = sourceUrl.href; } catch {} } renderDraftMeta(); if (state.totalSchedule?.permissionStatus && state.totalSchedule.permissionStatus !== '已连接') setStatus(`${state.totalSchedule.label}：${state.totalSchedule.permissionStatus}。${state.totalSchedule.reason || ''}`, true); }
-    catch (error) { document.querySelectorAll('[data-planning-room]').forEach((button) => { button.disabled = true; }); setStatus(error.message, true); }
+    try { const payload = await requestPlanning('/api/planning'); state.rooms = payload.rooms || {}; state.shiftTimes = payload.shiftTimes || {}; state.drafts = payload.drafts || {}; state.makeupDrafts = payload.makeupDrafts || {}; state.totalSchedule = payload.totalSchedule || null; state.planningBaseline = payload.planningBaseline || null; state.historyStatus = payload.historyStatus || null; state.historyUnavailable = false; state.draftCapability = payload.draftCapability || {enabled:false}; state.totalImportCapability = payload.totalImportCapability || {enabled:false}; showBaselineStatus(); applyPlanningCapabilities(); const sourceLink = $('#planningSourceLink'); if (sourceLink && state.totalSchedule?.url) { try { const sourceUrl = new URL(state.totalSchedule.url); if (sourceUrl.protocol === 'https:' && sourceUrl.hostname === 'jqx28l0j4lx.feishu.cn') sourceLink.href = sourceUrl.href; } catch {} } renderDraftMeta(); if (state.totalSchedule?.permissionStatus && state.totalSchedule.permissionStatus !== '已连接') setStatus(`${state.totalSchedule.label}：${state.totalSchedule.permissionStatus}。${state.totalSchedule.reason || ''}`, true); }
+    catch (error) {
+      if (['history_recovery_pending','planning_epoch_uninitialized'].includes(error.payload?.code)) {
+        state.historyUnavailable = true; state.historyStatus = 'pending_recovery';
+        try { const recovery = await requestPlanning('/api/recovery/status'); state.planningBaseline = recovery.planningBaseline || null; } catch { state.planningBaseline = null; }
+        document.querySelectorAll('[data-draft-count]').forEach((element) => { element.textContent = '旧历史草稿待恢复'; });
+        showBaselineStatus(); disableRecoveryActions(); setStatus(error.message, true);
+      } else { document.querySelectorAll('[data-planning-room]').forEach((button) => { button.disabled = true; }); setStatus(error.message, true); }
+    }
   }
 
   document.querySelectorAll('[data-planning-room]').forEach((button) => button.addEventListener('click', () => openPlanning(button.dataset.planningRoom, button.dataset.planningRole)));

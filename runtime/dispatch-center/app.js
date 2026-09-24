@@ -5,17 +5,13 @@ let currentDate = new Date(today);
 let scheduleData = {};
 let availabilityData = {};
 let writebackData = {};
+let writebackCapabilities = {};
 let makeupDutyData = { available: false, people: [], source: { permissionStatus: '读取中' } };
 let lastSyncAt = null;
 let sourceBackup = null;
 const refreshInterval = 60 * 60 * 1000;
-const apiBase = window.location.protocol === 'file:'
-  ? 'http://127.0.0.1:3100'
-  : window.location.pathname.startsWith('/yxb/wis-marketing-hub/modules/dispatch-center/')
-    ? '/yxb/wis-marketing-hub/modules/dispatch-center'
-  : window.location.pathname.startsWith('/fd-027340/dispatch-center/')
-    ? '/fd-027340/dispatch-center'
-    : '';
+const hubDispatchPath = window.location.pathname.match(/^(\/yxb\/wis-marketing-hub\/(?:live-flow-candidate-[a-z0-9-]+\/)?modules\/dispatch-center)(?:\/|$)/u)?.[1];
+const apiBase = window.location.protocol === 'file:' ? 'http://127.0.0.1:3100' : hubDispatchPath || (window.location.pathname.startsWith('/fd-027340/dispatch-center/') ? '/fd-027340/dispatch-center' : '');
 
 const dispatchViewTabs = [...document.querySelectorAll('[data-view-tab]')];
 function setDispatchView(view, updateUrl = true) {
@@ -247,6 +243,8 @@ async function loadRemoteSchedule(date = currentDate) {
     scheduleData[key] = (payload.rooms || []).map(room=>({...room,sourceFound:payload.sourceStatus?.[room.code]?.found !== false}));
     availabilityData[key] = payload.availability || {};
     writebackData[key] = payload.writeback || {};
+    writebackCapabilities[key] = payload.writebackCapability || {enabled:false,message:'排班写回状态待核验。'};
+    document.querySelector('#newShiftButton').title = writebackCapabilities[key].enabled ? '预览并核对排班写回' : writebackCapabilities[key].message;
     lastSyncAt = payload.updatedAt;
     sourceBackup = ['verified_backup','official_user_snapshot'].includes(payload.source?.mode) ? payload.source : null;
     if (sourceBackup) {
@@ -258,6 +256,7 @@ async function loadRemoteSchedule(date = currentDate) {
     renderTimeline();
     renderDispatchableAnchors();
   } catch (error) {
+    writebackCapabilities[key] = {enabled:false,message:'班表来源未通过核验，不能写回。'};
     document.querySelector('#timeline').innerHTML = '<div class="timeline-empty">班表暂时无法读取；已保留最近一次成功数据，稍后会自动重试。</div>';
     console.error(error);
   }
@@ -324,6 +323,15 @@ function populateEndTimes() {
 }
 
 function populateWritebackTimes() {
+  const capability = writebackCapabilities[dateKey(currentDate)] || {enabled:false,message:'排班写回状态待核验。'};
+  if (!capability.enabled) {
+    shiftStart.innerHTML = '';
+    shiftEnd.innerHTML = '';
+    saveShift.disabled = true;
+    writebackPreview.hidden = false;
+    writebackPreview.innerHTML = `<p class="writeback-error">${escapeHtml(capability.message || '当前排班只读，不能写回。')}</p>`;
+    return;
+  }
   const slots = availableSlots();
   shiftStart.innerHTML = slots.map((slot) => `<option value="${escapeHtml(slot.start)}">${escapeHtml(slot.start)}</option>`).join('');
   saveShift.disabled = slots.length === 0;

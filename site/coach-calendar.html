@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>教练本人日历授权 · WIS 直播中心</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f6faf8;color:#173c30;font:15px/1.7 system-ui,"Microsoft YaHei",sans-serif}main{max-width:850px;margin:48px auto;padding:0 20px}.card{background:white;border:1px solid #d9e8df;border-radius:18px;padding:28px;box-shadow:0 14px 36px #0e3c2912}h1{font-size:26px;margin:0 0 8px}p{color:#526b5e}.badge{display:inline-block;border-radius:20px;background:#edf6ef;padding:4px 12px;color:#116549;font-weight:700}.status{margin:24px 0;border:1px solid #e0eae2;border-radius:12px;padding:16px;background:#f8fbf9}button{border:0;border-radius:9px;padding:11px 18px;background:#176147;color:white;font-weight:700;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}.secondary{background:#edf5f0;color:#176147;margin-left:8px}small{display:block;color:#71847a;margin-top:18px}
+</style></head><body><main><section class="card"><span class="badge">仅限教练本人</span><h1>复盘日历只读授权</h1>
+<p>官旗、品牌精选、优选、王鸥美肤的主负责人可分别授权系统读取<strong>本人日历</strong>。系统只从本绩效周日程中提取事件 ID、日期和标题，识别同时包含主播姓名与“复盘”的记录；不替你创建、编辑或删除日程，也不要求把日历共享给舒豪。</p>
+<div class="status" id="status" role="status" aria-live="polite">正在核验 OA 与飞书本人身份……</div>
+<button id="authorize" type="button" disabled>开始本人飞书只读授权</button><button id="refresh" type="button" class="secondary">刷新状态</button>
+<small>请使用你本人的飞书账号完成授权。授权失败或尚未完成时，复盘次数保持“待核验”，不会发送含推测次数的提醒。授权可在飞书授权管理中撤销。</small></section></main>
+<script>
+const root=location.pathname.replace(/coach-calendar\.html$/,'');
+const endpoint=root+'api/lifecycle/coach-calendar-auth/';
+const status=document.getElementById('status'),button=document.getElementById('authorize');
+function show(message){status.textContent=message}
+async function load(){button.disabled=true;try{const response=await fetch(endpoint+'status',{credentials:'same-origin',cache:'no-store'}),data=await response.json();if(!response.ok)throw Error(data.error||'身份核验失败');
+ const calendar=data.calendar||{};show(`${data.coachName} · ${data.room}：${calendar.authorized?'本人日历只读授权有效':calendar.reason||'待授权'}${data.enabled?'':'；授权入口尚未开放'}`);button.disabled=!data.enabled||calendar.authorized||!calendar.configured;
+}catch(error){show(error.message||'状态读取失败，请从直播中枢重新进入。')}}
+button.onclick=async()=>{button.disabled=true;show('正在核验本人身份并生成一次性授权链接……');try{const response=await fetch(endpoint+'start',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/json'},body:'{}'}),data=await response.json();if(!response.ok)throw Error(data.error||'无法发起授权');const destination=new URL(data.authorizeUrl);if(destination.protocol!=='https:'||destination.hostname!=='accounts.feishu.cn')throw Error('授权地址未通过校验');window.top.location.assign(destination.href)}catch(error){show(error.message||'发起授权失败');button.disabled=false}};
+document.getElementById('refresh').onclick=load;load();
+</script></body></html>

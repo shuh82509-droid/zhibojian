@@ -1,3 +1,5 @@
+import {createHash} from 'node:crypto';
+
 const ROOM_NAMES = Object.freeze(['官旗', '品牌精选', '优选', '王鸥美肤']);
 const RECRUITMENT_REVIEWER_OPEN_ID = 'ou_0e5926902d4d6051d0ea14f042bb56f4';
 
@@ -32,6 +34,7 @@ function findSubmissionNames(text) {
 }
 
 function reviewerReaction(message, reviewerOpenId) {
+  if (!reviewerOpenId) return null;
   const details = Array.isArray(message?.reactions?.details) ? message.reactions.details : [];
   return details.map(item => ({
     emoji:String(item?.emojiType || item?.emoji_type || ''),
@@ -176,6 +179,7 @@ export function parseEmploymentMessages(messages = [], {reviewerOpenId = RECRUIT
 export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUITMENT_REVIEWER_OPEN_ID} = {}) {
   const candidates = new Map();
   const submitted = new Set();
+  const submissionMessages = new Map();
   const dailyCounts = {};
   const dailyNames = {};
   const interviewEvents = {};
@@ -189,6 +193,8 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
     sourceDates.push(date);
     const text = String(message?.text || '');
     for (const name of findSubmissionNames(text)) {
+      if (!submissionMessages.has(name)) submissionMessages.set(name,new Set());
+      if (message?.messageId) submissionMessages.get(name).add(message.messageId);
       const key = `${date}|${name}`;
       if (!submitted.has(key)) {
         submitted.add(key);
@@ -203,7 +209,7 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
     }
     const senderId = String(message?.sender?.id || '');
     const senderName = String(message?.sender?.name || '');
-    const isReviewer = senderId === reviewerOpenId;
+    const isReviewer = Boolean(reviewerOpenId) && senderId === reviewerOpenId;
     const evaluation = isReviewer ? interviewEvaluation(text) : null;
     if (evaluation) {
       evaluationEvidence.set(evaluation.name, {passed:evaluation.passed, date, sourceId:message?.messageId || ''});
@@ -229,6 +235,7 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
   return {
     candidates: allCandidates.sort((a, b) => b.date.localeCompare(a.date) || a.name.localeCompare(b.name, 'zh-CN')),
     cohortNames,
+    submissionMessageCounts:Object.fromEntries([...submissionMessages].map(([name,ids])=>[name,ids.size])),
     funnel: {
       candidateCount:cohortNames.length,
       initialPassedCount:[...submissionEvidence.values()].filter(item => item.initialReview === 'OK').length,
@@ -246,6 +253,42 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
   };
 }
 
+function calendarTitleNamesPerson(title, name) {
+  const summary = String(title || ''), candidate = String(name || '').trim();
+  if (!candidate) return false;
+  let from = 0;
+  while (from < summary.length) {
+    const index = summary.indexOf(candidate, from);
+    if (index < 0) return false;
+    const before = summary.slice(0, index).trimEnd();
+    const after = summary.slice(index + candidate.length).trimStart();
+    // An event entitled 王丽娜面试/复盘 must never be attributed to 王丽. The
+    // limited role/interview/review labels cover normal calendar title shapes;
+    // any other ambiguous title stays pending for a human to reconcile.
+    const left = !before || !/\p{Script=Han}$/u.test(before) || /(?:面试|初试|复试|试播|复盘|候选人|主播|姓名)$/u.test(before);
+    const right = !after || !/^\p{Script=Han}/u.test(after) || /^(?:面试|初试|复试|试播|复盘|主播)/u.test(after);
+    if (left && right) return true;
+    from = index + candidate.length;
+  }
+  return false;
+}
+
+export function interviewReminderSourceFingerprint(snapshot, date) {
+  // Bind the reminder to both named calendar events and the recruitment chat
+  // cohort. Sorting makes harmless API order changes irrelevant.
+  const calendar = (snapshot?.interviewEvents?.[date] || [])
+    .filter(item => item?.status === 'calendar')
+    .map(item => [String(item.eventId || ''), String(item.name || '')])
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  const cohort = (snapshot?.candidates || [])
+    .filter(item => item?.inSubmissionCohort)
+    .map(item => [String(item.name || ''), String(item.submissionEvidence?.sourceId || '')])
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  const submissionCounts = Object.entries(snapshot?.submissionMessageCounts || {})
+    .sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify({calendar, cohort, submissionCounts, capped:Boolean(snapshot?.coverage?.capped)});
+}
+
 export function buildInterviewReminderPreview(snapshot, date) {
   const pending = (reason) => ({status:'pending',reason,date,matches:[],text:'',readyForSend:false});
   if (!/^20\d{2}-\d{2}-\d{2}$/u.test(String(date || ''))) return pending('面试日期无效');
@@ -256,16 +299,283 @@ export function buildInterviewReminderPreview(snapshot, date) {
   const candidates = (snapshot?.candidates || []).filter(item => item?.inSubmissionCohort && item?.name);
   const matches = [];
   for (const event of events) {
-    const names = candidates.filter(item => String(event.name || '').includes(item.name)).map(item => item.name);
-    if (names.length !== 1) return pending('面试日程与候选人姓名无法一一核对');
-    matches.push({name:names[0],eventId:event.eventId || ''});
+    const named = candidates.filter(item => calendarTitleNamesPerson(event.name, item.name));
+    if (named.length !== 1 || snapshot?.submissionMessageCounts?.[named[0].name] !== 1 || !named[0].submissionEvidence?.sourceId)
+      return pending('面试日程与唯一送审候选人无法一一核对');
+    matches.push({name:named[0].name,eventId:event.eventId || ''});
   }
   const unique = [...new Set(matches.map(item => item.name))];
   return {
-    status:'preview', date, matches, readyForSend:false,
+    status:'preview', date, matches, sourceReady:true, readyForSend:false,
     text:`【今日主播面试结果提醒｜${date}】\n今日面试候选人：${unique.join('、')}。\n请在面评群逐一确认“通过 / 未通过”，未取得明确结论的保留待核验。`,
-    reason:'仅生成预览；须核对品牌营销部中枢机器人身份、收件人和实际发送回执后才能启用',
+    reason:'正式日历事件与送审候选人已逐一匹配；发送前仍需核验机器人身份和收件人',
   };
+}
+
+/** Recruitment cycles run from the previous month's 25th through this month's 24th. */
+export function recruitmentCycleMonthForDate(date) {
+  const value = String(date || '');
+  if (!/^20\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/u.test(value)) return '';
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) return '';
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1 + (day >= 25 ? 1 : 0), 1)).toISOString().slice(0, 7);
+}
+
+export function recruitmentCycleRange(month) {
+  const value = String(month || '');
+  if (!/^20\d{2}-(?:0[1-9]|1[0-2])$/u.test(value)) throw Object.assign(new Error('招聘月份格式应为 YYYY-MM。'), {status:400});
+  const [year, monthNumber] = value.split('-').map(Number);
+  const startMonth = monthNumber === 1 ? 12 : monthNumber - 1;
+  const startYear = monthNumber === 1 ? year - 1 : year;
+  const startDate = `${startYear}-${String(startMonth).padStart(2, '0')}-25`;
+  const endDate = `${year}-${String(monthNumber).padStart(2, '0')}-25`;
+  return {
+    month:value,
+    startDate,
+    endDate,
+    startTime:Math.floor(new Date(`${startDate}T00:00:00+08:00`).getTime() / 1000),
+    // Bound the requested range to the last second before the next cycle.
+    endTime:Math.floor(new Date(`${endDate}T00:00:00+08:00`).getTime() / 1000) - 1
+  };
+}
+
+/** Late restarts must not turn a timed work reminder into an after-hours send. */
+export function lifecycleReminderWindow(kind, chinaMinute) {
+  const start = kind === 'interview' ? 17 * 60 : kind === 'coach' ? 17 * 60 + 30 : null;
+  if (start === null || !Number.isInteger(chinaMinute) || chinaMinute < 0 || chinaMinute >= 24 * 60) return 'invalid';
+  if (chinaMinute < start) return 'before';
+  return chinaMinute < start + 60 ? 'open' : 'missed';
+}
+
+function utcDate(value) {
+  if (!/^20\d{2}-\d{2}-\d{2}$/u.test(String(value || ''))) return null;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value ? date : null;
+}
+
+const dateText = value => value.toISOString().slice(0, 10);
+const shiftDate = (value, days) => {
+  const result = new Date(value.getTime());
+  result.setUTCDate(result.getUTCDate() + days);
+  return result;
+};
+
+/** The business week is Wednesday through the following Tuesday, inclusive. */
+export function reviewWeekFor(date = chinaDateFor()) {
+  const day = utcDate(date);
+  if (!day) return null;
+  const start = shiftDate(day, -((day.getUTCDay() + 4) % 7));
+  const end = shiftDate(start, 6);
+  return {start:dateText(start),end:dateText(end),previousStart:dateText(shiftDate(start, -7)),previousEnd:dateText(shiftDate(start, -1))};
+}
+
+/** A multi-page Sheets read is usable only when every page and the final
+ * sentinel read came from the same positive workbook revision. */
+export async function readVersionedCoachRankingRows(rowCount, fetchRange) {
+  if (!Number.isInteger(rowCount) || rowCount < 5 || rowCount > 4000 || typeof fetchRange !== 'function') {
+    throw new Error('周排名工作表行数无法核验，已停止轮转统计。');
+  }
+  const values = [];
+  let revision = null;
+  for (let start = 1; start <= rowCount; start += 250) {
+    const end = Math.min(rowCount, start + 249);
+    const page = await fetchRange(start, end);
+    const pageRevision = Number(page?.revision);
+    if (!Number.isSafeInteger(pageRevision) || pageRevision <= 0 || !Array.isArray(page?.values)) {
+      throw new Error('周排名 Q:U 内容或版本缺失，已停止轮转统计。');
+    }
+    if (revision !== null && pageRevision !== revision) {
+      throw new Error('周排名读取期间版本发生变化，已停止轮转统计。');
+    }
+    revision = pageRevision;
+    for (let offset = 0; offset <= end - start; offset += 1) {
+      values.push(Array.isArray(page.values[offset]) ? page.values[offset] : []);
+    }
+  }
+  // Row 1 of the verified sheet is blank. Re-read the non-empty heading area
+  // so the values API always returns a values array along with its revision.
+  const sentinel = await fetchRange(2, 3);
+  if (!Number.isSafeInteger(Number(sentinel?.revision)) || Number(sentinel.revision) !== revision || !Array.isArray(sentinel?.values)) {
+    throw new Error('周排名读取结束时版本发生变化或无法核验，已停止轮转统计。');
+  }
+  return {values, revision};
+}
+
+/** The official instance_view API has no pagination fields. Read the full
+ * performance week and independently verify it against two shorter windows;
+ * an inconsistent or incomplete response must never become a zero count. */
+export async function readVerifiedCoachInstances(week, readRange) {
+  const startDate = utcDate(week?.start), endDate = utcDate(week?.end);
+  if (!startDate || !endDate || endDate.getTime() - startDate.getTime() !== 6 * 86400_000 || typeof readRange !== 'function') {
+    throw new Error('教练复盘统计周范围无法核验。');
+  }
+  const start = Math.floor(Date.parse(`${week.start}T00:00:00+08:00`) / 1000);
+  const end = Math.floor(Date.parse(`${week.end}T23:59:59+08:00`) / 1000);
+  const split = start + 3 * 86400;
+  function normalize(data) {
+    if (!Array.isArray(data?.items) || (Object.hasOwn(data,'has_more') && data.has_more !== false)
+      || (data.page_token !== undefined && data.page_token !== null && data.page_token !== '')
+      || (data.sync_token !== undefined && data.sync_token !== null && data.sync_token !== '')) {
+      throw new Error('教练日历实例视图未返回完整、可核验的日程。');
+    }
+    const found = new Map();
+    for (const item of data.items) {
+      const eventId = String(item?.event_id || '');
+      const status = String(item?.status || '');
+      const time = item?.start_time;
+      const rawTimestamp = time?.timestamp;
+      const hasTimestamp = rawTimestamp !== undefined && rawTimestamp !== null && String(rawTimestamp) !== '';
+      const timestamp = hasTimestamp ? Number(rawTimestamp) : 0;
+      if (!eventId || typeof item.summary !== 'string' || !['tentative','confirmed','cancelled'].includes(status)
+        || (hasTimestamp && (!Number.isSafeInteger(timestamp) || timestamp <= 0))
+        || (!hasTimestamp && !utcDate(time?.date))) {
+        throw new Error('教练日历实例缺少可核验的 ID、标题、状态或开始时间。');
+      }
+      const instant = hasTimestamp ? new Date(timestamp * 1000) : null;
+      if (instant && Number.isNaN(instant.getTime())) throw new Error('教练日历实例开始时间无效。');
+      const event = {eventId,summary:item.summary,status,
+        date:instant ? chinaDateFor(instant) : time.date,startAt:instant ? instant.toISOString() : ''};
+      const previous = found.get(eventId);
+      if (previous && JSON.stringify(previous) !== JSON.stringify(event)) throw new Error('教练日历实例 ID 重复且内容不一致。');
+      found.set(eventId,event);
+    }
+    return found;
+  }
+  const full = normalize(await readRange(start,end));
+  const first = normalize(await readRange(start,split - 1));
+  const second = normalize(await readRange(split,end));
+  const combined = new Map(first);
+  for (const [id,event] of second) {
+    const previous = combined.get(id);
+    if (previous && JSON.stringify(previous) !== JSON.stringify(event)) throw new Error('教练日历分段实例内容发生变化。');
+    combined.set(id,event);
+  }
+  if (full.size !== combined.size || [...full].some(([id,event]) => JSON.stringify(combined.get(id)) !== JSON.stringify(event))) {
+    throw new Error('教练日历周窗与分段实例不一致，已停止计次。');
+  }
+  return [...full.values()];
+}
+
+/** Private, room-specific digest for a second read immediately before POST.
+ * Keep titles and event IDs out of public snapshots and notification journals. */
+export function coachCalendarFingerprint(events) {
+  if (!Array.isArray(events)) throw new Error('教练日历实例清单无法核验。');
+  const seen = new Set();
+  const rows = events.map(event => {
+    const {eventId,summary,status,date,startAt} = event || {};
+    if (typeof eventId !== 'string' || !eventId || seen.has(eventId) || typeof summary !== 'string'
+      || !['tentative','confirmed','cancelled'].includes(status) || !utcDate(date)
+      || (startAt !== '' && (typeof startAt !== 'string' || !Number.isFinite(Date.parse(startAt))))) {
+      throw new Error('教练日历实例指纹无法核验。');
+    }
+    seen.add(eventId);
+    return [eventId,summary,status,date,startAt];
+  }).sort((left,right) => left[0].localeCompare(right[0]));
+  return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+}
+
+export async function assertCoachRankingRevision(expectedRevision, readSentinel) {
+  const sentinel = await readSentinel();
+  const actual = Number(sentinel?.revision);
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0 || !Number.isSafeInteger(actual) || actual !== expectedRevision || !Array.isArray(sentinel?.values)) {
+    throw new Error('周排名在通知前已变化或版本无法核验，已停止发送。');
+  }
+  return true;
+}
+
+const roomForRotation = value => {
+  const text = String(value || '').trim();
+  if (text === '官旗') return '官旗';
+  if (text === '品牌精选' || text === '品牌') return '品牌精选';
+  if (text === '优选') return '优选';
+  if (text === '王鸥美肤' || text === '王鸥') return '王鸥美肤';
+  return '';
+};
+
+/** Q:U in the verified weekly-rank sheet: current room, anchor, score, rank, next room. */
+export function parseWeeklyCoachRotation(rows = [], date = chinaDateFor()) {
+  const week = reviewWeekFor(date);
+  const pending = reason => ({status:'pending',reason,week,rooms:{}});
+  if (!week || !Array.isArray(rows)) return pending('统计日期或周排名内容无效');
+  const heading = /(?:20\d{2}[.\/-])?(\d{1,2})[.\/-](\d{1,2})\s*[-—～~至]\s*(\d{1,2})[.\/-](\d{1,2})\s*日?主播排名/u;
+  const previous = `${Number(week.previousStart.slice(5, 7))}.${Number(week.previousStart.slice(8))}-${Number(week.previousEnd.slice(5, 7))}.${Number(week.previousEnd.slice(8))}`;
+  let firstRow = -1;
+  for (let index = 0; index < rows.length; index += 1) {
+    const match = String(rows[index]?.[0] || '').match(heading);
+    if (!match) continue;
+    const period = `${Number(match[1])}.${Number(match[2])}-${Number(match[3])}.${Number(match[4])}`;
+    if (period === previous) {
+      if (firstRow >= 0) return pending('上周排名出现多个同日期区段，无法唯一核验轮转名单');
+      firstRow = index;
+    }
+  }
+  if (firstRow < 0) return pending(`未找到 ${week.previousStart} 至 ${week.previousEnd} 的完整上周排名`);
+  const titles = (rows[firstRow + 1] || []).map(value => String(value || '').trim());
+  if (titles[0] !== '本周所在直播间' || titles[1] !== '主播' || !titles[4]?.includes('下周直播间')) return pending('上周排名 Q:U 列头与约定不符');
+  const rooms = Object.fromEntries(ROOM_NAMES.map(room => [room, []]));
+  const seen = new Set();
+  const warnings = [];
+  for (let index = firstRow + 2; index < rows.length; index += 1) {
+    const row = rows[index] || [];
+    const current = String(row[0] || '').trim();
+    if (!current || heading.test(current) || current === '本周所在直播间') break;
+    const name = safeName(row[1]);
+    if (!name) {
+      if (roomForRotation(current) || roomForRotation(row[4])) warnings.push(`周排名第 ${index + 1} 行主播姓名待核验`);
+      continue;
+    }
+    const target = roomForRotation(row[4]);
+    if (!target) {
+      if (!/(离职|考核|新人池|主播池)/u.test(String(row[4] || ''))) warnings.push(`${name}：下周直播间待核验`);
+      continue;
+    }
+    if (seen.has(name)) return pending(`上周排名中主播 ${name} 重复，已停止教练归属判断`);
+    seen.add(name);
+    rooms[target].push(name);
+  }
+  if (Object.values(rooms).every(names => names.length === 0)) return pending('上周排名没有可核验的下周直播间归属');
+  return {status:warnings.length ? 'partial' : 'ready',week,sourcePeriod:{start:week.previousStart,end:week.previousEnd},rooms,warnings};
+}
+
+/** Count only distinct calendar events whose title names exactly one assigned anchor and says 复盘. */
+export function countCoachReviews(rotation, eventsByRoom = {}, asOf = new Date()) {
+  const pending = reason => ({status:'pending',reason,week:rotation?.week || null,rooms:{}});
+  if (rotation?.status !== 'ready') return pending(rotation?.reason || '周排名存在待核验人员');
+  const result = {};
+  for (const room of ROOM_NAMES) {
+    const events = eventsByRoom[room];
+    if (!Array.isArray(events)) {
+      result[room] = {status:'pending',reason:'教练日历尚未授权或读取失败',anchors:[]};
+      continue;
+    }
+    const anchors = (rotation.rooms[room] || []).map(name => ({name,count:0}));
+    const used = new Set();
+    for (const event of events) {
+      const id = String(event?.eventId || event?.event_id || '');
+      const summary = String(event?.summary || '');
+      const date = String(event?.date || '');
+      const startAt = Date.parse(event?.startAt || '');
+      // All-day instances have start_time.date, not a timestamp. They begin
+      // at local midnight, so today's all-day review counts at 17:30.
+      const happened = Number.isFinite(startAt) ? startAt <= asOf.getTime() : date <= chinaDateFor(asOf);
+      if (!id || used.has(id) || event?.status === 'cancelled' || date < rotation.week.start || date > rotation.week.end || !happened || !summary.includes('复盘')) continue;
+      const matches = anchors.filter(item => calendarTitleNamesPerson(summary, item.name));
+      if (matches.length !== 1) continue;
+      used.add(id);
+      matches[0].count += 1;
+    }
+    result[room] = {status:'ready',anchors,zeroReview:anchors.filter(item => item.count === 0).map(item => item.name)};
+  }
+  return {status:Object.values(result).every(room => room.status === 'ready') ? 'ready' : 'partial',week:rotation.week,rooms:result};
+}
+
+export function coachReviewReminder(room, coachName, summary) {
+  const entry = summary?.rooms?.[room];
+  if (entry?.status !== 'ready') return {status:'pending',reason:entry?.reason || '教练复盘证据待核验'};
+  if (!entry.anchors.length) return {status:'pending',reason:'本周没有可核验的轮转主播名单'};
+  const lines = entry.anchors.map(item => `${item.name}：${item.count} 次${item.count ? '' : '（本周尚未记录复盘）'}`);
+  return {status:'ready',text:`【主播复盘提醒｜${summary.week.start}—${summary.week.end}】\n${coachName}，截至当前，本绩效周 ${room} 直播间主播复盘日历记录：\n${lines.join('\n')}\n请按本周名单逐一复盘；未记录的主播请及时安排。统计仅依据你本人日历中同时含主播姓名和“复盘”的可核验日程。`};
 }
 
 function numberFrom(section, pattern) {
@@ -305,6 +615,98 @@ export function mergeRecruitmentCandidates(base = [], updates = []) {
     merged.set(update.name, {...(existing || {}), ...update, media:existing?.media || update.media, timeline});
   }
   return [...merged.values()];
+}
+
+export function assessmentSubmissionKey(cycleMonth, submissionMessageId) {
+  const cycle = String(cycleMonth || '');
+  const sourceId = String(submissionMessageId || '');
+  return /^20\d{2}-(?:0[1-9]|1[0-2])$/u.test(cycle) && /^om_[A-Za-z0-9_]+$/u.test(sourceId)
+    ? `${cycle}:${sourceId}` : '';
+}
+
+export function structuredAssessmentForCandidate(summary, candidate, cycleMonth) {
+  const key = assessmentSubmissionKey(cycleMonth,candidate?.submissionEvidence?.sourceId);
+  const match = key && summary?.bySubmission?.[key];
+  return match?.candidateName === candidate?.name ? match : null;
+}
+
+/** A signed structured conclusion is distinct from, and never labelled as, a private chat. */
+export function structuredAssessmentSummary(candidates = [], entries = [], cycleMonth = '', assessors = {}) {
+  const bySubmission = {};
+  let passedCount = 0, failedCount = 0, conflictCount = 0, awaitingCount = 0;
+  const cohort = candidates.filter(item => item?.inSubmissionCohort && item?.name);
+  const sourceCounts = new Map();
+  for (const candidate of cohort) {
+    const key = assessmentSubmissionKey(cycleMonth,candidate.submissionEvidence?.sourceId);
+    if (key) sourceCounts.set(key,(sourceCounts.get(key) || 0)+1);
+  }
+  for (const candidate of cohort) {
+    const key = assessmentSubmissionKey(cycleMonth,candidate.submissionEvidence?.sourceId);
+    if (!key) {awaitingCount += 1;continue;}
+    if (sourceCounts.get(key) !== 1) {
+      bySubmission[key] = {candidateName:'',status:'送审消息对应多个候选人，待人工核验',passed:null,source:'结构化双人确认',signed:[]};
+      conflictCount += 1;
+      continue;
+    }
+    const decisions = entries.filter(entry => candidate.submissionEvidence?.sourceId && entry?.cycleMonth === cycleMonth && entry?.candidateName === candidate.name
+      && entry?.submissionMessageId === candidate.submissionEvidence?.sourceId && assessors[entry?.actorOpenId]
+      && ['pass','fail'].includes(entry?.outcome));
+    const byActor = new Map(decisions.map(entry => [entry.actorOpenId,entry]));
+    const signed = [...byActor.values()].map(entry => ({actorName:assessors[entry.actorOpenId],outcome:entry.outcome,at:entry.createdAt,recordId:entry.id}));
+    const outcomes = [...byActor.values()].map(entry => entry.outcome);
+    const duplicate = byActor.size !== decisions.length;
+    const complete = !duplicate && Object.keys(assessors).length === 2 && outcomes.length === 2;
+    const conflict = duplicate || (complete && new Set(outcomes).size !== 1);
+    const passed = complete && !conflict ? outcomes[0] === 'pass' : null;
+    const status = conflict ? '结论冲突，待人工核验' : !complete ? '待两位负责人逐人确认' : passed ? '双人确认考核通过' : '双人确认考核未通过';
+    if (conflict) conflictCount += 1;
+    else if (!complete) awaitingCount += 1;
+    else if (passed) passedCount += 1;
+    else failedCount += 1;
+    bySubmission[key] = {candidateName:candidate.name,status,passed,source:'结构化双人确认',signed};
+  }
+  return {bySubmission,passedCount,failedCount,conflictCount,awaitingCount,source:'结构化双人确认；未读取指定私聊'};
+}
+
+/** Resolve only an exact, verified OA number binding; never infer from a name or role. */
+export function centralFeishuOpenId(auth, verifiedNumbers = {}) {
+  if (auth?.mode !== 'central' || auth?.degraded || !auth?.ok) return '';
+  const user = auth.user || {};
+  const number = typeof user.number === 'string' ? user.number : '';
+  if (!/^FD-\d{6}$/u.test(number) || !Object.hasOwn(verifiedNumbers,number)) return '';
+  const boundOpenId = verifiedNumbers[number];
+  if (!/^ou_[A-Za-z0-9]+$/u.test(boundOpenId || '')) return '';
+  const values = [user.open_id,user.openId,user.feishu_open_id,user.feishuOpenId]
+    .filter(value=>typeof value==='string' && value.trim());
+  const unique=[...new Set(values)];
+  return unique.length<=1 && (!unique.length || unique[0]===boundOpenId) ? boundOpenId : '';
+}
+
+/** Only the same app's current contact record can confirm an OA employee binding. */
+export function isVerifiedLiveCenterContact(user, {openId, name, departmentId, employeeNo = ''} = {}) {
+  return Boolean(user?.open_id === openId && user?.name === name
+    && user?.status?.is_activated === true && user?.status?.is_exited === false
+    && user?.status?.is_frozen === false && user?.status?.is_resigned === false
+    && user?.status?.is_unjoin === false
+    && Array.isArray(user?.department_ids) && user.department_ids.includes(departmentId)
+    && (!employeeNo || user?.employee_no === employeeNo));
+}
+
+export function assessmentSubmissionFor(snapshot, payload) {
+  const name=safeName(payload?.candidateName);
+  if(!name || !['pass','fail'].includes(payload?.outcome))return {status:'invalid',reason:'候选人姓名或考核结论无效。'};
+  if(snapshot?.coverage?.capped || !snapshot?.coverage?.chatMessages)return {status:'pending',reason:'招聘群当前周期消息不完整，不允许确认考核。'};
+  const matches=(snapshot?.candidates||[]).filter(item=>item.inSubmissionCohort&&item.name===name);
+  if(matches.length!==1)return {status:'pending',reason:'未找到唯一的送审候选人。'};
+  if(snapshot?.submissionMessageCounts?.[name]!==1)return {status:'pending',reason:'该姓名对应多条送审消息，须核验候选人唯一身份。'};
+  const submissionId=matches[0].submissionEvidence?.sourceId;
+  const requestId=String(payload?.submissionMessageId||'');
+  if(!/^om_[A-Za-z0-9_]+$/u.test(submissionId||'')||requestId!==submissionId)return {status:'pending',reason:'送审消息编号无法与当前候选人核对。'};
+  if((snapshot.candidates||[]).filter(item=>item.inSubmissionCohort&&item.submissionEvidence?.sourceId===submissionId).length!==1)
+    return {status:'pending',reason:'同一送审消息对应多个候选人，不能确认考核。'};
+  if(Object.values(snapshot.dailyNames||{}).filter(names=>Array.isArray(names)&&names.includes(name)).length!==1)
+    return {status:'pending',reason:'同名候选人在周期内重复送审，不能仅凭姓名确认。'};
+  return {status:'ready',candidate:matches[0],candidateName:name,submissionMessageId:submissionId,outcome:payload.outcome};
 }
 
 export function normalizeAnchorReport(report, coachSummary = null) {

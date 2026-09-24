@@ -1,5 +1,5 @@
 import { createServer, request as httpRequest } from 'node:http';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { Readable } from 'node:stream';
@@ -9,11 +9,13 @@ import {
   mergeRecruitmentCandidates,
   normalizeAnchorReport,
   parseLatestCoachSummary,
-  parseEmploymentMessages, parseRecruitmentMessages, buildInterviewReminderPreview, extractAnchorEvaluation, verifiedAnchorEvidence, feishuDocumentLink
+  parseEmploymentMessages, parseRecruitmentMessages, buildInterviewReminderPreview, interviewReminderSourceFingerprint, reviewWeekFor, readVersionedCoachRankingRows, readVerifiedCoachInstances, coachCalendarFingerprint, assertCoachRankingRevision, parseWeeklyCoachRotation, countCoachReviews, coachReviewReminder, structuredAssessmentSummary, structuredAssessmentForCandidate, centralFeishuOpenId, isVerifiedLiveCenterContact, assessmentSubmissionFor, recruitmentCycleMonthForDate, recruitmentCycleRange, lifecycleReminderWindow, extractAnchorEvaluation, verifiedAnchorEvidence, feishuDocumentLink
 } from './lifecycle-engine.mjs';
 import { frameHeadersForHub } from './frame-policy.mjs';
 import { createCalendarUserReader } from './calendar-user-reader.mjs';
+import { createReminderJournalLock } from './lifecycle-reminder-lock.mjs';
 import { createCalendarAuthHandler } from './calendar-auth-http.mjs';
+import { createCoachCalendarAuth } from './coach-calendar-auth.mjs';
 
 const port = Number(process.env.PORT || 3000);
 const recoveryReadOnly = process.env.RECOVERY_READ_ONLY === '1';
@@ -47,6 +49,10 @@ const intelligenceRefreshMinutes = Math.max(5, Math.min(120, Number(process.env.
 const dataDir = process.env.DATA_DIR || join(process.cwd(), 'data');
 const morningDir = join(dataDir, 'morning');
 const lifecycleDir = join(dataDir, 'lifecycle');
+const lifecycleReminderPath = join(lifecycleDir, 'notification-receipts.json');
+const lifecycleReminderLock = createReminderJournalLock({lockPath:`${lifecycleReminderPath}.lock`});
+const recruitmentAssessmentPath = join(lifecycleDir, 'recruitment-assessments.json');
+const recruitmentAssessmentLock = createReminderJournalLock({lockPath:`${recruitmentAssessmentPath}.lock`});
 const materialCardPath = join(dataDir, 'material-cards.json');
 const materialAssetPath = join(dataDir, 'material-assets.json');
 const materialAssetDir = join(dataDir, 'material-uploads');
@@ -58,6 +64,52 @@ const lifecycleRefreshTimes = [...new Set(String(process.env.LIFECYCLE_REFRESH_T
   .split(',').map(value => value.trim()).filter(value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)))].sort();
 if (!lifecycleRefreshTimes.length) lifecycleRefreshTimes.push('09:30', '18:00');
 const lifecycleSchedulerEnabled = !recoveryReadOnly && process.env.LIFECYCLE_SCHEDULER_ENABLED !== '0';
+// Sending is separately gated from read-only lifecycle refreshes. Enabling it
+// requires the verified brand-marketing bot, named recipients and sources.
+// Only one production replica may schedule outbound reminders. The journal
+// remains a second line of defence, never a substitute for leader selection.
+const lifecycleReminderLeader = process.env.LIFECYCLE_REMINDER_LEADER === 'true';
+const lifecycleReminderEnabled = lifecycleSchedulerEnabled && lifecycleReminderLeader && process.env.LIFECYCLE_REMINDERS_ENABLED === 'true';
+const coachRankingBook = 'L5cZsxjochgfrWtyLeQc54v1nHd';
+const coachRankingSheet = 'jbO54B';
+const liveCenterDepartmentId = 'od-3044f2fd1042f68162820d6e770680d0';
+const verifiedRecruitmentReviewerOpenId = 'ou_0e5926902d4d6051d0ea14f042bb56f4';
+const verifiedAssessmentAssessorOpenIds = Object.freeze({
+  [verifiedRecruitmentReviewerOpenId]:'倪梦萍',
+  'ou_2f90737d743168531c00f6a066982e15':'刘慧迅',
+});
+const verifiedAssessmentEmployeeNos = Object.freeze({
+  'FD-027097':verifiedRecruitmentReviewerOpenId,
+  'FD-027340':'ou_2f90737d743168531c00f6a066982e15',
+});
+const recruitmentAssessmentEnabled = !recoveryReadOnly && process.env.RECRUITMENT_ASSESSMENT_CONFIRM_ENABLED === 'true';
+const coachNames = Object.freeze({'官旗':'曾泳淇','品牌精选':'梁瑜涵','优选':'李爽','王鸥美肤':'鲍敏纳'});
+const verifiedCoachOpenIds = Object.freeze({
+  '官旗':'ou_57dd3c1f41a299db90e8a0e8ec39b811',
+  '品牌精选':'ou_e0fb6d700b7761ff10d304fa24fca25e',
+  '优选':'ou_7d335ea053a4b824d870cd40cefb39f5',
+  '王鸥美肤':'ou_7bf9975d7038b6d80f381442cd5f233b',
+});
+// OA number, bot contact employee_no and Feishu open_id were each verified
+// against the live-centre roster; never resolve a coach by name alone.
+const verifiedCoachEmployeeNos = Object.freeze({
+  '官旗':'FD-024035','品牌精选':'FD-023807','优选':'FD-028493','王鸥美肤':'FD-026339',
+});
+const coachCalendarIds = Object.freeze({
+  '官旗':'feishu.cn_pQcZPLwwNcPCNorI81UuNc@group.calendar.feishu.cn',
+  '品牌精选':'feishu.cn_tdknXodfOV2BreSu4Qwwlc@group.calendar.feishu.cn',
+  '优选':'feishu.cn_mUczVPvHhxexy37YFYHZ6b@group.calendar.feishu.cn',
+  '王鸥美肤':'feishu.cn_xLLavzycbNr1OKdfHrV1cg@group.calendar.feishu.cn',
+});
+const coachCalendarConfig = (() => {
+  try {
+    const parsed = JSON.parse(process.env.LIVE_COACH_CALENDARS_JSON || '{}');
+    return Object.fromEntries(Object.keys(coachNames).map(room => [room, {
+      openId:parsed?.[room]?.openId === verifiedCoachOpenIds[room] ? verifiedCoachOpenIds[room] : '',
+      calendarId:!parsed?.[room]?.calendarId || parsed[room].calendarId === coachCalendarIds[room] ? coachCalendarIds[room] : '',
+    }]));
+  } catch { return Object.fromEntries(Object.keys(coachNames).map(room => [room,{openId:'',calendarId:''}])); }
+})();
 const mime = { '.html':'text/html; charset=utf-8','.js':'application/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif','.svg':'image/svg+xml','.ico':'image/x-icon','.mp4':'video/mp4','.pdf':'application/pdf' };
 const feishuReady = () => Boolean(appId && appSecret);
 const visualThemeFolders = Object.freeze(['大促主题', '品牌色平销', '特殊内容场']);
@@ -126,7 +178,7 @@ const communicationProductBase = Object.freeze({
 const communicationPersonas = Object.freeze(['成分理性型', '闺蜜种草型', '专业顾问型', '问答解惑型', '直球促单型']);
 const communicationBroadcastModes = Object.freeze(['单播', '双播']);
 const communicationPlatforms = Object.freeze(['抖音', '视频号']);
-const recruitmentReviewerOpenId = process.env.RECRUITMENT_REVIEWER_OPEN_ID || 'ou_308a92748ac8b66de306a99b2010d755';
+const recruitmentReviewerOpenId = process.env.RECRUITMENT_REVIEWER_OPEN_ID === verifiedRecruitmentReviewerOpenId ? verifiedRecruitmentReviewerOpenId : '';
 const recruitmentCalendarId = String(process.env.RECRUITMENT_CALENDAR_ID || '').trim();
 const recruitmentCalendarReader = createCalendarUserReader({appId,appSecret,calendarId:recruitmentCalendarId,
   expectedOpenId:process.env.RECRUITMENT_CALENDAR_READER_OPEN_ID || '',
@@ -134,6 +186,20 @@ const recruitmentCalendarReader = createCalendarUserReader({appId,appSecret,cale
   storePath:process.env.RECRUITMENT_CALENDAR_OAUTH_STORE_PATH || '',
   encryptionKey:process.env.RECRUITMENT_CALENDAR_OAUTH_KEY || ''});
 const calendarAuth = createCalendarAuthHandler({reader:recruitmentCalendarReader,basePath,readOnly:recoveryReadOnly,json});
+const coachCalendarAuthEnabled = !recoveryReadOnly && process.env.COACH_CALENDAR_USER_AUTH_ENABLED === 'true';
+const coachCalendarReaders = Object.fromEntries(Object.keys(coachNames).map(room => [room,createCalendarUserReader({
+  appId,appSecret,calendarId:coachCalendarIds[room],expectedOpenId:verifiedCoachOpenIds[room],ownerLabel:coachNames[room],
+  requireOwnPrimaryCalendar:true,
+  allowInstanceView:true,
+  redirectUri:process.env.RECRUITMENT_CALENDAR_OAUTH_REDIRECT_URI || '',
+  storePath:join(lifecycleDir,`coach-calendar-${room}.json`),
+  encryptionKey:process.env.RECRUITMENT_CALENDAR_OAUTH_KEY || '',
+})]));
+const coachCalendarAuth = createCoachCalendarAuth({
+  readers:coachCalendarReaders,coachNames,employeeNos:verifiedCoachEmployeeNos,openIds:verifiedCoachOpenIds,
+  basePath,enabled:coachCalendarAuthEnabled,readOnly:recoveryReadOnly,json,
+  verifyActor:async(room,openId,name,employeeNo) => verifiedLiveCenterPerson(openId,name,employeeNo),
+});
 const communicationProductSources = Object.freeze({
   '水润面膜': [
     'https://jqx28l0j4lx.feishu.cn/wiki/Jejow2SyBiEeHXkm2WGcGTXwnkc',
@@ -196,8 +262,8 @@ async function feishuGet(path) {
   if (!response.ok || payload.code !== 0) throw new FeishuError(payload.msg || '飞书接口请求失败。', response.status === 403 ? 403 : 502, `feishu_${payload.code || response.status}`);
   return payload.data || {};
 }
-async function feishuPost(path, body) {
-  const token = await getTenantToken();
+async function feishuPost(path, body, {token: suppliedToken} = {}) {
+  const token = suppliedToken || await getTenantToken();
   const response = await fetch(`https://open.feishu.cn/open-apis${path}`, {
     method:'POST',
     headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json; charset=utf-8'},
@@ -261,9 +327,11 @@ async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
   const requested = Math.min(500, Math.max(1, Number(limit) || 20));
   const startTime = Math.max(0, Number(timeRange.startTime || timeRange.start_time) || 0);
   const endTime = Math.max(0, Number(timeRange.endTime || timeRange.end_time) || 0);
-  return cached(`chat:${sourceKey}:${requested}:${startTime}:${endTime}`, 60 * 1000, async () => {
+  const cacheKey=`chat:${sourceKey}:${requested}:${startTime}:${endTime}`;
+  const load=async () => {
     const items = [];
     let pageToken = '';
+    let truncated = false;
     for (let page = 0; page < Math.ceil(requested / 50); page += 1) {
       const params = new URLSearchParams({container_id_type:'chat',container_id:source.chatId,sort_type:'ByCreateTimeDesc',page_size:String(Math.min(50, requested - items.length))});
       if (startTime) params.set('start_time', String(Math.floor(startTime)));
@@ -272,6 +340,7 @@ async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
       const data = await feishuGet(`/im/v1/messages?${params}`);
       items.push(...(data.items || []));
       pageToken = data.page_token || '';
+      truncated = Boolean(data.has_more);
       if (!data.has_more || !pageToken || items.length >= requested) break;
     }
     let reactions = new Map(); let reactionStatus = sourceKey === 'recruitment' ? '待读取' : '不适用'; let reactionFailure = '';
@@ -295,8 +364,12 @@ async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
         appLink: item.message_position ? `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(item.chat_id || source.chatId)}&position=${encodeURIComponent(item.message_position)}` : ''
       };
     });
-    return { key: sourceKey, name: source.name, chatId: source.chatId, messages, fetchedAt: new Date().toISOString(), reactionStatus, reactionFailure };
-  });
+    return { key: sourceKey, name: source.name, chatId: source.chatId, messages, truncated, fetchedAt: new Date().toISOString(), reactionStatus, reactionFailure };
+  };
+  // The send path bypasses the UI cache, then refreshes it after a complete
+  // read. Otherwise a new submission inside the last 60 seconds can be missed.
+  if(timeRange.fresh===true){const value=await load();feishuCache.set(cacheKey,{value,expiresAt:Date.now()+60000});return value;}
+  return cached(cacheKey,60*1000,load);
 }
 async function findChatByName(name) {
   return cached(`chat-name:${name}`, 15 * 60 * 1000, async () => {
@@ -1525,42 +1598,115 @@ async function serveAnchorPhoto(res, name) {
     res.end(content);
   } catch { return json(res, 404, {ok:false,error:'主播照片文件不可用。'}); }
 }
+function supplementalEmploymentCandidates(items) {
+  return items.map(item => ({...item,
+    assessmentReported:item.assessmentPassed===true,
+    assessmentPassed:null,
+    assessmentEvidenceStatus:'WIS直播战队日报可见；指定私聊结论待核验',
+    status:item.assessmentPassed===true ? '已入职 · 考核结论待指定来源核验' : item.status,
+  }));
+}
+async function readRecruitmentAssessmentJournal() {
+  let journal;
+  try { journal=JSON.parse(await readFile(recruitmentAssessmentPath,'utf8')); }
+  catch(error) {
+    if(error?.code==='ENOENT')return {schemaVersion:1,entries:[]};
+    throw new FeishuError('招聘考核确认记录不可读，结论保持待核验。',503,'assessment_journal_unreadable');
+  }
+  const valid=journal?.schemaVersion===1 && Array.isArray(journal.entries) && journal.entries.every(item=>
+    typeof item?.id==='string' && /^[0-9a-f-]{36}$/iu.test(item.id)
+    && /^20\d{2}-(?:0[1-9]|1[0-2])$/u.test(item.cycleMonth)
+    && /^[\p{Script=Han}·]{2,12}$/u.test(item.candidateName)
+    && /^om_[A-Za-z0-9_]+$/u.test(item.submissionMessageId)
+    && verifiedAssessmentAssessorOpenIds[item.actorOpenId]===item.actorName
+    && ['pass','fail'].includes(item.outcome)
+    && item.source==='structured_self_confirmation'
+    && !Number.isNaN(Date.parse(item.createdAt)));
+  if(!valid)throw new FeishuError('招聘考核确认记录结构异常，结论保持待核验。',503,'assessment_journal_invalid');
+  return journal;
+}
+async function addStructuredAssessments(candidates, cycleMonth, chatComplete) {
+  let journal;
+  try {journal=await readRecruitmentAssessmentJournal();}
+  catch {return {candidates,summary:null,status:'结构化考核记录待核验；指定私聊没有被读取。'};}
+  const summary=structuredAssessmentSummary(candidates,journal.entries,cycleMonth,verifiedAssessmentAssessorOpenIds);
+  const cycleEntries=journal.entries.filter(entry=>entry.cycleMonth===cycleMonth && candidates.some(candidate=>
+    candidate.inSubmissionCohort && candidate.name===entry.candidateName && candidate.submissionEvidence?.sourceId===entry.submissionMessageId));
+  const updated=candidates.map(candidate=>{
+    const verified=chatComplete&&cycleEntries.length ? structuredAssessmentForCandidate(summary,candidate,cycleMonth) : null;
+    if(!verified)return candidate;
+    return {...candidate,
+      assessmentPassed:verified.passed,
+      assessmentEvidenceStatus:verified.status,
+      assessmentEvidence:verified.signed,
+      ...(verified.passed===true ? {status:candidate.stage==='hired'?'已入职 · 结构化双人确认考核通过':'结构化双人确认考核通过 · 入职待核验'} : {}),
+      ...(verified.passed===false ? {status:candidate.stage==='hired'?'已入职 · 结构化双人确认考核未通过':'结构化双人确认考核未通过 · 入职待核验'} : {}),
+    };
+  });
+  const status=!chatComplete ? '招聘群当前周期消息不完整；考核统计待核验。'
+    : !cycleEntries.length ? '指定私聊未授权；当前招聘周期尚无结构化双人确认记录。'
+    : `指定私聊未读取；结构化双人确认已核验通过 ${summary.passedCount} 人、未通过 ${summary.failedCount} 人，另有 ${summary.awaitingCount+summary.conflictCount} 人待确认。`;
+  return {candidates:updated,summary:chatComplete&&cycleEntries.length?summary:null,status};
+}
 async function refreshRecruitmentLifecycle(targetDate) {
   const endTime = Math.ceil(Date.now() / 1000);
   const startTime = endTime - 60 * 24 * 60 * 60;
-  const [chatResult, coachResult, employmentResult] = await Promise.allSettled([
+  const cycleMonth=recruitmentCycleMonthForDate(targetDate);
+  const [chatResult, coachResult, employmentResult, calendarResult] = await Promise.allSettled([
     getChatMessages('recruitment', 500, {startTime,endTime}),
     getDocument('coach'),
-    getChatMessages('coaching', 500, {startTime,endTime})
+    getChatMessages('coaching', 500, {startTime,endTime}),
+    readRecruitmentCalendar(recruitmentCycleRange(cycleMonth))
   ]);
   if (chatResult.status === 'rejected') throw chatResult.reason;
   const parsed = parseRecruitmentMessages(chatResult.value.messages || [], {reviewerOpenId:recruitmentReviewerOpenId});
   const employment = employmentResult.status === 'fulfilled' ? parseEmploymentMessages(employmentResult.value.messages || [], {reviewerOpenId:recruitmentReviewerOpenId}) : {candidates:[],sourceDate:''};
-  const candidates = mergeRecruitmentCandidates(parsed.candidates, employment.candidates);
+  const merged = mergeRecruitmentCandidates(parsed.candidates, supplementalEmploymentCandidates(employment.candidates));
+  const assessment=await addStructuredAssessments(merged,cycleMonth,!chatResult.value.truncated);
+  const candidates=assessment.candidates;
   const summary = coachResult.status === 'fulfilled' ? parseLatestCoachSummary(coachResult.value.content) : null;
   const sourceDate = [parsed.sourceDate, summary?.date, employment.sourceDate].filter(Boolean).sort().at(-1) || '';
   const funnel = {...parsed.funnel,
     hiredCount:candidates.filter(item => item.inSubmissionCohort && item.stage === 'hired').length,
-    assessmentPassedCount:candidates.filter(item => item.inSubmissionCohort && item.assessmentPassed).length,
+    assessmentPassedCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount>0 ? assessment.summary.passedCount : null,
+    assessmentFailedCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount>0 ? assessment.summary.failedCount : null,
+    assessmentConflictCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount+assessment.summary.conflictCount>0 ? assessment.summary.conflictCount : null,
+    supplementalAssessmentReportedCount:candidates.filter(item => item.inSubmissionCohort && item.assessmentReported).length,
   };
+  const calendar=calendarResult.status==='fulfilled' ? calendarResult.value : {events:{},status:'待核验：正式面试日历无法读取，当前群聊记录不冒充正式日历。'};
+  const interviewEvents=structuredClone(parsed.interviewEvents || {});
+  Object.entries(calendar.events || {}).forEach(([date,items]) => {interviewEvents[date]=[...(interviewEvents[date]||[]),...items]});
+  if (calendar.status.startsWith('已连接：') && !chatResult.value.truncated) {
+    const cohort=new Set(parsed.cohortNames);
+    const matched=new Set();
+    Object.values(calendar.events).flat().forEach(event=>{
+      const names=[...cohort].filter(name=>String(event.name||'').includes(name));
+      if (names.length===1) matched.add(names[0]);
+    });
+    funnel.interviewScheduledCount=matched.size;
+  } else funnel.interviewScheduledCount=null;
   const snapshot = {
     schemaVersion: 1,
     module: 'recruitment',
     targetDate,
     generatedAt: new Date().toISOString(),
     sourceDate,
-    status: lifecycleSourceStatus(sourceDate, targetDate),
+    status: recruitmentReviewerOpenId && !chatResult.value.truncated ? lifecycleSourceStatus(sourceDate, targetDate) : 'partial',
     candidates,
     cohortNames: parsed.cohortNames,
+    submissionMessageCounts:parsed.submissionMessageCounts,
     funnel,
     dailyCounts: parsed.dailyCounts,
     dailyNames: parsed.dailyNames,
-    interviewEvents: parsed.interviewEvents,
     submittedCount: parsed.submittedCount,
     summary,
+    calendarStatus:calendar.status,
+    assessmentStatus:assessment.status,
+    interviewEvents,
     coverage: {
       chatMessages: chatResult.value.messages?.length || 0,
-      reactionStatus:chatResult.value.reactionStatus || '待核验',
+      capped: Boolean(chatResult.value.truncated),
+      reactionStatus:recruitmentReviewerOpenId ? (chatResult.value.reactionStatus || '待核验') : '待配置审查人身份',
       reactionFailure:chatResult.value.reactionFailure || '',
       coachDocument: coachResult.status === 'fulfilled',
       employmentStatus:employmentResult.status === 'fulfilled' ? '已读取' : '待授权',
@@ -1568,33 +1714,17 @@ async function refreshRecruitmentLifecycle(targetDate) {
       failures: [
         ...(coachResult.status === 'rejected' ? [String(coachResult.reason?.message || '教练日报读取失败')] : []),
         ...(employmentResult.status === 'rejected' ? [String(employmentResult.reason?.message || 'WIS直播战队日报读取失败')] : []),
+        ...(calendarResult.status === 'rejected' ? ['正式面试日历读取失败，请核验只读授权。'] : []),
       ]
     }
   };
   await writeJsonAtomic(lifecycleSnapshotPath('recruitment'), snapshot);
   return snapshot;
 }
-function recruitmentCycleRange(month) {
-  const value = String(month || '');
-  if (!/^20\d{2}-\d{2}$/u.test(value)) throw Object.assign(new Error('招聘月份格式应为 YYYY-MM。'), {status:400});
-  const [year, monthNumber] = value.split('-').map(Number);
-  if (monthNumber < 1 || monthNumber > 12) throw Object.assign(new Error('招聘月份无效。'), {status:400});
-  const startMonth = monthNumber === 1 ? 12 : monthNumber - 1;
-  const startYear = monthNumber === 1 ? year - 1 : year;
-  const startDate = `${startYear}-${String(startMonth).padStart(2, '0')}-25`;
-  const endDate = `${year}-${String(monthNumber).padStart(2, '0')}-25`;
-  return {
-    month:value,
-    startDate,
-    endDate,
-    startTime:Math.floor(new Date(`${startDate}T00:00:00+08:00`).getTime() / 1000),
-    endTime:Math.floor(new Date(`${endDate}T23:59:59+08:00`).getTime() / 1000)
-  };
-}
 async function readRecruitmentCalendar(cycle) {
-  if (!recruitmentCalendarId) return {events:{},status:'待配置：正式面试日历来源尚未配置，群聊记录不冒充正式日历。'};
+  if (!recruitmentCalendarId) return {events:{},status:'待配置：正式面试日历来源尚未配置，当前群聊记录不冒充正式日历。'};
   const authorization=await recruitmentCalendarReader.status();
-  if(!authorization.authorized)return {events:{},status:`待授权：${authorization.reason}；无需在日历共享人中查找机器人。`};
+  if(!authorization.authorized)return {events:{},status:`待授权：${authorization.reason}；当前群聊记录不冒充正式日历。`};
   const query = new URLSearchParams({start_time:String(cycle.startTime),end_time:String(cycle.endTime),page_size:'1000'});
   const items=[],seenPages=new Set();
   for(let page=0;page<20;page++){
@@ -1616,10 +1746,10 @@ async function readRecruitmentCalendar(cycle) {
   });
   return {events,status:`已连接：正式面试日历已读取 ${Object.values(events).flat().length} 条详情事件。`};
 }
-async function recruitmentCycleSnapshot(month) {
+async function recruitmentCycleSnapshot(month,{fresh=false}={}) {
   const cycle = recruitmentCycleRange(month);
   const [chatResult, employmentResult, calendarResult] = await Promise.allSettled([
-    getChatMessages('recruitment', 500, cycle),
+    getChatMessages('recruitment', 500, {...cycle,fresh}),
     getChatMessages('coaching', 500, cycle),
     readRecruitmentCalendar(cycle),
   ]);
@@ -1627,33 +1757,260 @@ async function recruitmentCycleSnapshot(month) {
   const chat = chatResult.value;
   const parsed = parseRecruitmentMessages(chat.messages || [], {reviewerOpenId:recruitmentReviewerOpenId});
   const employment = employmentResult.status === 'fulfilled' ? parseEmploymentMessages(employmentResult.value.messages || [], {reviewerOpenId:recruitmentReviewerOpenId}) : {candidates:[],sourceDate:''};
-  const candidates = mergeRecruitmentCandidates(parsed.candidates, employment.candidates);
+  const merged = mergeRecruitmentCandidates(parsed.candidates, supplementalEmploymentCandidates(employment.candidates));
+  const assessment=await addStructuredAssessments(merged,cycle.month,!chat.truncated);
+  const candidates=assessment.candidates;
   const funnel = {...parsed.funnel,
     hiredCount:candidates.filter(item => item.inSubmissionCohort && item.stage === 'hired').length,
-    assessmentPassedCount:candidates.filter(item => item.inSubmissionCohort && item.assessmentPassed).length,
+    assessmentPassedCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount>0 ? assessment.summary.passedCount : null,
+    assessmentFailedCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount>0 ? assessment.summary.failedCount : null,
+    assessmentConflictCount:assessment.summary && assessment.summary.passedCount+assessment.summary.failedCount+assessment.summary.conflictCount>0 ? assessment.summary.conflictCount : null,
+    supplementalAssessmentReportedCount:candidates.filter(item => item.inSubmissionCohort && item.assessmentReported).length,
   };
-  const calendar = calendarResult.status === 'fulfilled' ? calendarResult.value : {events:{},status:`待核验：正式面试日历读取失败（${truncateForModel(calendarResult.reason?.message || '权限不足', 120)}）；请由舒豪在中枢“正式面试日历授权”入口核验个人只读授权，不需要共享给机器人。`};
+  const calendar = calendarResult.status === 'fulfilled' ? calendarResult.value : {events:{},status:`待核验：正式面试日历读取失败（${truncateForModel(calendarResult.reason?.message || '权限不足', 120)}）；当前群聊记录不冒充正式日历。`};
   const interviewEvents = structuredClone(parsed.interviewEvents || {});
   Object.entries(calendar.events || {}).forEach(([date, items]) => { interviewEvents[date] = [...(interviewEvents[date] || []), ...items]; });
+  if (calendar.status.startsWith('已连接：') && !chat.truncated) {
+    const cohort=new Set(parsed.cohortNames),matched=new Set();
+    Object.values(calendar.events).flat().forEach(event=>{
+      const names=[...cohort].filter(name=>String(event.name||'').includes(name));
+      if(names.length===1)matched.add(names[0]);
+    });
+    funnel.interviewScheduledCount=matched.size;
+  } else funnel.interviewScheduledCount=null;
   return {
     schemaVersion:3,
     module:'recruitment',
     generatedAt:new Date().toISOString(),
     sourceDate:[parsed.sourceDate, employment.sourceDate].filter(Boolean).sort().at(-1) || '',
-    status:chat.reactionStatus === '已核验' && employmentResult.status === 'fulfilled' ? 'current' : 'partial',
+    status:recruitmentReviewerOpenId && !chat.truncated && chat.reactionStatus === '已核验' && employmentResult.status === 'fulfilled' ? 'current' : 'partial',
     calendarStatus:calendar.status,
-    assessmentStatus:employmentResult.status === 'fulfilled' ? '已读取：WIS直播战队日报中的可核验考核结论' : '待授权：WIS直播战队日报尚不可读取',
+    assessmentStatus:assessment.status,
     cycle,
     candidates,
     cohortNames:parsed.cohortNames,
+    submissionMessageCounts:parsed.submissionMessageCounts,
     funnel,
     dailyCounts:parsed.dailyCounts,
     dailyNames:parsed.dailyNames,
     interviewEvents,
     submittedCount:parsed.submittedCount,
     unmappedCount:candidates.filter(item => item.stage === 'unmapped').length,
-    coverage:{chatMessages:chat.messages?.length || 0,capped:(chat.messages?.length || 0) >= 500,reactionStatus:chat.reactionStatus || '待核验',reactionFailure:chat.reactionFailure || '',employmentStatus:employmentResult.status === 'fulfilled' ? '已读取' : '待授权',employmentMessages:employmentResult.status === 'fulfilled' ? employmentResult.value.messages?.length || 0 : null,employmentFailure:employmentResult.status === 'rejected' ? String(employmentResult.reason?.message || 'WIS直播战队日报读取失败') : ''}
+    coverage:{chatMessages:chat.messages?.length || 0,capped:Boolean(chat.truncated),reactionStatus:recruitmentReviewerOpenId ? (chat.reactionStatus || '待核验') : '待配置审查人身份',reactionFailure:chat.reactionFailure || '',employmentStatus:employmentResult.status === 'fulfilled' ? '已读取' : '待授权',employmentMessages:employmentResult.status === 'fulfilled' ? employmentResult.value.messages?.length || 0 : null,employmentFailure:employmentResult.status === 'rejected' ? String(employmentResult.reason?.message || 'WIS直播战队日报读取失败') : ''}
   };
+}
+
+const rankingCellText = value => Array.isArray(value) ? value.map(rankingCellText).join('')
+  : value && typeof value === 'object' ? String(value.text ?? value.value ?? '').trim() : String(value ?? '').trim();
+
+async function fetchCoachRankingRange(start,end) {
+  const range = `${coachRankingSheet}!Q${start}:U${end}`;
+  const query = new URLSearchParams({valueRenderOption:'ToString',dateTimeRenderOption:'FormattedString'});
+  const data = await feishuGet(`/sheets/v2/spreadsheets/${encodeURIComponent(coachRankingBook)}/values/${encodeURIComponent(range)}?${query}`);
+  return {revision:data.revision ?? data.valueRange?.revision,values:data.valueRange?.values};
+}
+async function readWeeklyCoachRotation(date, {fresh=false} = {}) {
+  const load = async () => {
+    const metadata = await feishuGet(`/sheets/v3/spreadsheets/${encodeURIComponent(coachRankingBook)}/sheets/query`);
+    const sheet = (metadata.sheets || []).find(item => String(item.sheet_id || item.sheetId || '') === coachRankingSheet);
+    const rows = Number(sheet?.grid_properties?.row_count ?? sheet?.gridProperties?.rowCount ?? 0);
+    if (!Number.isInteger(rows) || rows < 5 || rows > 4000) throw new Error('周排名工作表行数无法核验，已停止轮转统计。');
+    const {values,revision} = await readVersionedCoachRankingRows(rows,fetchCoachRankingRange);
+    return {rotation:parseWeeklyCoachRotation(values.map(row=>row.map(rankingCellText)),date),source:{spreadsheetToken:coachRankingBook,sheetId:coachRankingSheet,revision,checkedAt:new Date().toISOString()}};
+  };
+  return fresh ? load() : cached(`coach-ranking:${date}`, 10 * 60 * 1000, load);
+}
+
+async function readCoachCalendar(room, week) {
+  const configuration = coachCalendarConfig[room];
+  if (!configuration?.calendarId) throw new Error(`${coachNames[room]}的日历来源未配置。`);
+  if (!coachCalendarAuthEnabled) throw new Error('教练本人日历只读授权入口尚未开放。');
+  const reader=coachCalendarReaders[room];
+  const authorization = await reader.status();
+  if (!authorization.authorized) throw new Error(`${coachNames[room]}本人日历只读授权待完成。`);
+  await reader.verifyCalendar(configuration.calendarId);
+  return readVerifiedCoachInstances(week,async(start,end) => {
+    const query=new URLSearchParams({start_time:String(start),end_time:String(end)});
+    return reader.get(`/calendar/v4/calendars/${encodeURIComponent(configuration.calendarId)}/events/instance_view?${query}`);
+  });
+}
+
+async function coachReviewSnapshot(date = chinaDateFor(), {freshRanking=false} = {}) {
+  const {rotation,source} = await readWeeklyCoachRotation(date,{fresh:freshRanking});
+  const calendarResults = await Promise.allSettled(Object.keys(coachNames).map(async room => [room,await readCoachCalendar(room,rotation.week)]));
+  const eventsByRoom = {}, calendarStatus = {}, calendarFingerprints = {};
+  Object.keys(coachNames).forEach((room,index) => {
+    const outcome = calendarResults[index];
+    if (outcome.status === 'fulfilled') {
+      eventsByRoom[room] = outcome.value[1];
+      calendarFingerprints[room] = coachCalendarFingerprint(outcome.value[1]);
+      // Do not expose the count of all private calendar events to module readers.
+      calendarStatus[room] = {status:'已读取'};
+    } else calendarStatus[room] = {status:'待核验',reason:String(outcome.reason?.message || '日历不可读').slice(0,160)};
+  });
+  const snapshot = {date,rotation,summary:countCoachReviews(rotation,eventsByRoom),calendarStatus,source,checkedAt:new Date().toISOString()};
+  // This digest is intentionally non-serializable: the public API must not
+  // expose private event IDs, titles, or even their fingerprint.
+  Object.defineProperty(snapshot,'calendarFingerprints',{value:calendarFingerprints});
+  return snapshot;
+}
+
+const lifecycleReminderState = {running:false,lastCheckAt:null,lastError:null,lastGate:{}};
+async function readReminderJournal() {
+  try {
+    const value = JSON.parse(await readFile(lifecycleReminderPath,'utf8'));
+    if (value?.schemaVersion !== 1 || !Array.isArray(value.receipts)) throw new Error('提醒发送记录结构无效');
+    return value;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return {schemaVersion:1,receipts:[]};
+    throw error;
+  }
+}
+async function withReminderJournalLock(operation) {
+  return lifecycleReminderLock.run(operation);
+}
+async function verifiedLiveCenterPerson(openId, name, expectedEmployeeNo = '') {
+  if (!/^ou_[A-Za-z0-9]+$/u.test(openId) || !name || !notificationBotIdentityMatches()) throw new Error('品牌营销部中枢应用或人员身份尚未核验。');
+  const data = await feishuGet(`/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id&department_id_type=open_department_id`);
+  const user = data.user;
+  if (!isVerifiedLiveCenterContact(user,{openId,name,departmentId:liveCenterDepartmentId,employeeNo:expectedEmployeeNo})) {
+    throw new Error(`${name}的飞书账号、在职状态或部门无法核验，已停止办理。`);
+  }
+  return true;
+}
+const verifiedReminderRecipient = verifiedLiveCenterPerson;
+async function verifyReminderReadback(receipt) {
+  if (!receipt.messageId) return false;
+  const data = await feishuGet(`/im/v1/messages/${encodeURIComponent(receipt.messageId)}`);
+  const messages = Array.isArray(data.items) ? data.items : data.message ? [data.message] : [];
+  return messages.some(item => item.message_id === receipt.messageId);
+}
+async function deliverLifecycleReminder({key,date,kind,recipientId,recipientName,text,verifyBeforeSend,verifyBeforePost}) {
+  if (!lifecycleReminderEnabled || !notificationBotIdentityMatches()) return {state:'disabled'};
+  await verifiedReminderRecipient(recipientId,recipientName);
+  return withReminderJournalLock(async () => {
+    const journal = await readReminderJournal();
+    let receipt = journal.receipts.find(item => item.key === key);
+    if (receipt) {
+      if (receipt.state === 'sent_unverified' && receipt.messageId) {
+        try {
+          if (await verifyReminderReadback(receipt)) { receipt.state='verified'; receipt.verifiedAt=new Date().toISOString(); await writeJsonAtomic(lifecycleReminderPath,journal); }
+        } catch { /* A failed GET never licenses another send. */ }
+      }
+      return {state:receipt.state,messageId:receipt.messageId || null};
+    }
+    if (verifyBeforeSend) await verifyBeforeSend();
+    receipt = {id:randomUUID(),key,date,kind,recipientName,recipientId,createdAt:new Date().toISOString(),state:'sending',messageId:null};
+    journal.receipts.push(receipt);
+    await writeJsonAtomic(lifecycleReminderPath,journal);
+    let sendToken;
+    try {
+      // Token acquisition can block. Do it before the final source check so
+      // no awaited operation separates that check from the actual POST.
+      sendToken = await getTenantToken();
+      if (verifyBeforePost) await verifyBeforePost();
+    } catch (error) {
+      // No POST has started. Remove this intent so a freshly reconciled
+      // same-day source can still be sent; if the journal write fails, the
+      // old `sending` intent remains a conservative duplicate barrier.
+      journal.receipts=journal.receipts.filter(item=>item.id!==receipt.id);
+      await writeJsonAtomic(lifecycleReminderPath,journal);
+      throw error;
+    }
+    try {
+      const data = await feishuPost('/im/v1/messages?receive_id_type=open_id',{
+        receive_id:recipientId,msg_type:'text',
+        uuid:createHash('sha256').update(key).digest('hex').slice(0,32),
+        content:JSON.stringify({text})
+      },{token:sendToken});
+      if (!data.message_id) throw new Error('飞书未返回消息编号，发送结果待核验。');
+      receipt.messageId = String(data.message_id);
+      receipt.sentAt = new Date().toISOString();
+      receipt.state = 'sent_unverified';
+      await writeJsonAtomic(lifecycleReminderPath,journal);
+      try {
+        if (await verifyReminderReadback(receipt)) { receipt.state='verified'; receipt.verifiedAt=new Date().toISOString(); await writeJsonAtomic(lifecycleReminderPath,journal); }
+      } catch { /* Keep the message ID for a later read-only receipt check. */ }
+    } catch (error) {
+      // A timeout or crash can happen after Feishu accepts the message. The
+      // persisted key and stable UUID prevent an automatic duplicate.
+      receipt.state='uncertain';
+      receipt.error=String(error?.details || error?.code || 'send_result_unknown').slice(0,100);
+      await writeJsonAtomic(lifecycleReminderPath,journal);
+    }
+    return {state:receipt.state,messageId:receipt.messageId};
+  });
+}
+async function refreshReminderReadbacks() {
+  if (!lifecycleReminderEnabled) return;
+  await withReminderJournalLock(async () => {
+    const journal=await readReminderJournal();let changed=false;
+    for (const receipt of journal.receipts.filter(item => item.state==='sent_unverified'&&item.messageId).slice(-20)) {
+      try { if (await verifyReminderReadback(receipt)) {receipt.state='verified';receipt.verifiedAt=new Date().toISOString();changed=true;} }
+      catch { /* Remain pending; never resend a message with an ID. */ }
+    }
+    if (changed) await writeJsonAtomic(lifecycleReminderPath,journal);
+  });
+}
+async function runLifecycleReminders(now = new Date()) {
+  if (!lifecycleReminderEnabled || !notificationBotIdentityMatches() || lifecycleReminderState.running) return;
+  lifecycleReminderState.running=true;
+  lifecycleReminderState.lastCheckAt=new Date().toISOString();
+  try {
+    const date=chinaDateFor(now),minutes=chinaMinutes(now);
+    const failures=[];
+    const gates={};
+    await refreshReminderReadbacks();
+    const interviewWindow=lifecycleReminderWindow('interview',minutes);
+    gates.interview=interviewWindow==='before'?'未到 17:00 发送窗口':interviewWindow==='missed'?'已错过 17:00—18:00 窗口，未补发':'发送窗口待核验';
+    if (interviewWindow === 'open') {
+      try {
+        const cycleMonth=recruitmentCycleMonthForDate(date);
+        const source=await recruitmentCycleSnapshot(cycleMonth,{fresh:true});
+        const preview=buildInterviewReminderPreview(source,date);
+        gates.interview=preview.sourceReady ? (recruitmentReviewerOpenId ? '已具备发送条件' : '收件人 open_id 待核验') : preview.reason;
+        if (preview.sourceReady && recruitmentReviewerOpenId) {
+          const expectedSource=interviewReminderSourceFingerprint(source,date);
+          await deliverLifecycleReminder({key:`interview-feedback:${date}:${recruitmentReviewerOpenId}`,date,kind:'interview_feedback',recipientId:recruitmentReviewerOpenId,recipientName:'倪梦萍',text:preview.text,
+            verifyBeforePost:async()=>{
+              if (chinaDateFor() !== date || lifecycleReminderWindow('interview',chinaMinutes(new Date())) !== 'open') throw new Error('面评提醒已错过当日发送窗口。');
+              const latestSource=await recruitmentCycleSnapshot(cycleMonth,{fresh:true});
+              const latestPreview=buildInterviewReminderPreview(latestSource,date);
+              if(!latestPreview.sourceReady||latestPreview.text!==preview.text||interviewReminderSourceFingerprint(latestSource,date)!==expectedSource)
+                throw new Error('正式面试日历或招聘送审名单在通知前发生变化，已停止发送并等待下一轮重查。');
+              if (chinaDateFor() !== date || lifecycleReminderWindow('interview',chinaMinutes(new Date())) !== 'open') throw new Error('面评提醒已错过当日发送窗口。');
+            }});
+        }
+      } catch(error) { gates.interview='来源或授权待核验';failures.push(`17:00 面评：${String(error?.message||'检查失败').slice(0,120)}`); }
+    }
+    const coachWindow=lifecycleReminderWindow('coach',minutes);
+    gates.coach=coachWindow==='before'?'未到 17:30 发送窗口':coachWindow==='missed'?'已错过 17:30—18:30 窗口，未补发':'17:30 发送窗口已开放';
+    if (coachWindow === 'open') {
+      try {
+        const review=await coachReviewSnapshot(date,{freshRanking:true});
+        for (const [room,coachName] of Object.entries(coachNames)) {
+          const reminder=coachReviewReminder(room,coachName,review.summary);
+          const recipientId=coachCalendarConfig[room]?.openId;
+          gates[room]=reminder.status==='ready' ? (recipientId?'已具备发送条件':'收件人 open_id 待核验') : reminder.reason;
+          if (reminder.status !== 'ready' || !recipientId) continue;
+          try {await deliverLifecycleReminder({key:`coach-review:${review.summary.week.start}:${date}:${room}:${recipientId}`,date,kind:'coach_review',recipientId,recipientName:coachName,text:reminder.text,
+             verifyBeforePost:async()=>{
+               if (chinaDateFor() !== date || lifecycleReminderWindow('coach',chinaMinutes(new Date())) !== 'open') throw new Error('教练提醒已错过当日发送窗口。');
+               await assertCoachRankingRevision(review.source.revision,()=>fetchCoachRankingRange(2,3));
+               const latest = await readCoachCalendar(room,review.summary.week);
+               if (coachCalendarFingerprint(latest) !== review.calendarFingerprints[room]) throw new Error(`${coachName}的日历在通知前发生变化，已停止发送。`);
+               if (chinaDateFor() !== date || lifecycleReminderWindow('coach',chinaMinutes(new Date())) !== 'open') throw new Error('教练提醒已错过当日发送窗口。');
+             }});}
+          catch(error) {failures.push(`17:30 ${coachName}：${String(error?.message||'通知失败').slice(0,120)}`);}
+        }
+      } catch(error) {gates.coach='周排名或日历来源待核验';failures.push(`17:30 教练复盘：${String(error?.message||'检查失败').slice(0,120)}`);}
+    }
+    lifecycleReminderState.lastGate={date,...gates};
+    lifecycleReminderState.lastError=failures.length?{at:new Date().toISOString(),message:failures.join('；').slice(0,500)}:null;
+  } catch(error) {
+    lifecycleReminderState.lastError={at:new Date().toISOString(),message:String(error?.message||'提醒检查失败').slice(0,200)};
+    console.error('lifecycle reminder check failed',lifecycleReminderState.lastError.message);
+  } finally { lifecycleReminderState.running=false; }
 }
 function documentBlockText(block) {
   const texts = [];
@@ -1954,6 +2311,40 @@ function canRefreshLifecycle(auth) {
   const permissions = auth?.permissions || {};
   return auth?.mode === 'internal' || permissions.super_admin || permissions.operation_admin || permissions.manage_permissions;
 }
+async function submitStructuredAssessment(req,auth) {
+  if(!recruitmentAssessmentEnabled)throw new FeishuError('结构化考核确认入口尚未启用；指定私聊未读取。',423,'assessment_disabled');
+  const actorOpenId=centralFeishuOpenId(auth,verifiedAssessmentEmployeeNos);
+  const actorName=verifiedAssessmentAssessorOpenIds[actorOpenId];
+  if(!actorName)throw new FeishuError('仅两位已核验的考核负责人本人可以确认，不接受姓名或管理员代办。',403,'assessment_identity_unverified');
+  let origin;
+  try {origin=new URL(String(req.headers.origin||''));}
+  catch {throw new FeishuError('请从中枢同源页面发起考核确认。',403,'assessment_origin_unverified');}
+  if(origin.host!==req.headers.host || !['https:','http:'].includes(origin.protocol) || req.headers['sec-fetch-site']==='cross-site'
+    || req.headers['x-requested-with']!=='XMLHttpRequest' || !/^application\/json(?:;|$)/iu.test(String(req.headers['content-type']||'')))
+    throw new FeishuError('考核确认请求来源或格式无法核验。',403,'assessment_origin_unverified');
+  const payload=await readRequestJson(req,4096);
+  const cycleMonth=String(payload?.cycleMonth||'');
+  recruitmentCycleRange(cycleMonth);
+  const snapshot=await recruitmentCycleSnapshot(cycleMonth);
+  const submission=assessmentSubmissionFor(snapshot,payload);
+  if(submission.status!=='ready')throw new FeishuError(submission.reason,submission.status==='invalid'?400:409,'assessment_source_unverified');
+  await verifiedLiveCenterPerson(actorOpenId,actorName,auth.user.number);
+  const result=await recruitmentAssessmentLock.run(async()=>{
+    const journal=await readRecruitmentAssessmentJournal();
+    const existing=journal.entries.find(item=>item.cycleMonth===cycleMonth&&item.candidateName===submission.candidateName
+      && item.submissionMessageId===submission.submissionMessageId&&item.actorOpenId===actorOpenId);
+    if(existing)throw new FeishuError('本人已对该送审候选人提交结论；不自动覆盖历史记录。',409,'assessment_already_confirmed');
+    const record={id:randomUUID(),cycleMonth,candidateName:submission.candidateName,submissionMessageId:submission.submissionMessageId,
+      actorOpenId,actorName,outcome:submission.outcome,source:'structured_self_confirmation',createdAt:new Date().toISOString()};
+    journal.entries.push(record);
+    await writeJsonAtomic(recruitmentAssessmentPath,journal);
+    const confirmation=structuredAssessmentForCandidate(
+      structuredAssessmentSummary(snapshot.candidates,journal.entries,cycleMonth,verifiedAssessmentAssessorOpenIds),
+      submission.candidate,cycleMonth);
+    return {recordId:record.id,candidateName:record.candidateName,outcome:record.outcome,createdAt:record.createdAt,confirmation};
+  });
+  return result;
+}
 async function lifecycleApi(req, res, url, routePath, auth) {
   try {
     if (req.method === 'GET' && routePath === '/api/lifecycle/status') return json(res, 200, await lifecycleStatus());
@@ -1967,6 +2358,38 @@ async function lifecycleApi(req, res, url, routePath, auth) {
       const [year, month, day] = date.split('-').map(Number);
       const cycleMonth = new Date(Date.UTC(year, month - 1 + (day > 25 ? 1 : 0), 1)).toISOString().slice(0, 7);
       return json(res, 200, {ok:true,preview:buildInterviewReminderPreview(await recruitmentCycleSnapshot(cycleMonth), date)});
+    }
+    if (routePath === '/api/lifecycle/recruitment-assessment') {
+      const actorOpenId=centralFeishuOpenId(auth,verifiedAssessmentEmployeeNos);
+      if(req.method==='GET'){
+        const lock=await recruitmentAssessmentLock.inspect();
+        let identityVerified=false;
+        if(actorOpenId) {
+          try {await verifiedLiveCenterPerson(actorOpenId,verifiedAssessmentAssessorOpenIds[actorOpenId],auth.user.number);identityVerified=true;}
+          catch { /* Unreadable or mismatched contact data is not proof of identity. */ }
+        }
+        return json(res,200,{ok:true,enabled:recruitmentAssessmentEnabled,identityVerified,
+          actorName:identityVerified?verifiedAssessmentAssessorOpenIds[actorOpenId]:null,source:'结构化双人确认；不读取指定私聊',lock:{state:lock.state,reason:lock.reason}});
+      }
+      if(req.method==='POST')return json(res,200,{ok:true,result:await submitStructuredAssessment(req,auth)});
+      return json(res,405,{ok:false,error:'考核确认仅支持 GET 状态和 POST 本人结论。'});
+    }
+    if (req.method === 'GET' && routePath === '/api/lifecycle/coach-review') {
+      const date = String(url.searchParams.get('date') || chinaDateFor());
+      if (!reviewWeekFor(date)) return json(res,400,{ok:false,error:'请提供有效的 YYYY-MM-DD 日期。'});
+      return json(res,200,{ok:true,data:await coachReviewSnapshot(date)});
+    }
+    if (req.method === 'GET' && routePath === '/api/lifecycle/reminder-status') {
+      if (!canRefreshLifecycle(auth)) return json(res,403,{ok:false,error:'当前账号没有通知审计查看权限。'});
+      const lock=await lifecycleReminderLock.inspect();
+      let journal, journalStatus='已读取';
+      try { journal=await readReminderJournal(); }
+      catch { journal={receipts:[]};journalStatus='待核验：发送记录不可读，已停止自动发送。'; }
+      const receipts=journal.receipts.slice(-60).map(item=>({key:item.key,date:item.date,kind:item.kind,recipientName:item.recipientName,state:item.state,messageId:item.messageId,sentAt:item.sentAt,verifiedAt:item.verifiedAt,error:item.error}));
+      return json(res,200,{ok:true,enabled:lifecycleReminderEnabled,leader:lifecycleReminderLeader,botVerified:notificationBotIdentityMatches(),scheduler:lifecycleReminderState,
+        lock,lastLockRecovery:lifecycleReminderLock.recentRecovery(),journalStatus,unresolvedReceiptCount:journal.receipts.filter(item=>['sending','uncertain','sent_unverified'].includes(item.state)).length,
+        configured:{interviewRecipient:Boolean(recruitmentReviewerOpenId),coaches:Object.fromEntries(Object.keys(coachNames).map(room=>[room,{recipient:Boolean(coachCalendarConfig[room]?.openId),calendar:Boolean(coachCalendarConfig[room]?.calendarId)}]))},
+        receipts});
     }
     if (req.method === 'GET' && routePath === '/api/lifecycle/snapshot') {
       const module = url.searchParams.get('module') || '';
@@ -2157,7 +2580,10 @@ async function handleRequest(req, res) {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/healthz') { res.writeHead(200, {'Content-Type':'text/plain'}); return res.end('ok'); }
   const routePath = url.pathname.startsWith(basePath) ? (url.pathname.slice(basePath.length) || '/') : url.pathname;
-  if(routePath==='/api/lifecycle/calendar-auth/callback')return calendarAuth(req,res,url,routePath,null);
+  if(routePath==='/api/lifecycle/calendar-auth/callback'){
+    if(await coachCalendarAuth.handleCallback(req,res,url))return;
+    return calendarAuth(req,res,url,routePath,null);
+  }
   if (routePath === '/auth/login' || routePath === '/auth/callback') return redirect(res, marketingHubUrl);
   const auth = await authorizeCentral(req);
   if (!auth.ok) {
@@ -2189,6 +2615,9 @@ async function handleRequest(req, res) {
   if (routePath.startsWith('/api/script-generator/')) return scriptGeneratorApi(req,res,routePath,auth);
   if (routePath.startsWith('/api/anchor-development')) return anchorDevelopmentApi(req,res,routePath,auth);
   if (routePath.startsWith('/api/lifecycle/calendar-auth/')) return calendarAuth(req,res,url,routePath,auth);
+  if (routePath.startsWith('/api/lifecycle/coach-calendar-auth/')) {
+    if(await coachCalendarAuth.handleApi(req,res,routePath,auth))return;
+  }
   if (routePath.startsWith('/api/lifecycle/')) return lifecycleApi(req,res,url,routePath,auth);
   if (routePath === '/modules/tasks' || routePath.startsWith('/modules/tasks/')) return proxyCollaboration(req,res,routePath,url.search);
   return serveStatic(res,routePath);
@@ -2238,5 +2667,10 @@ createServer((req, res) => {
     console.log(`Recruitment and anchor lifecycle refresh scheduled daily at ${lifecycleRefreshTimes.join(', ')} Asia/Shanghai.`);
     setTimeout(refreshLifecycleIfDue, 15000);
     setInterval(refreshLifecycleIfDue, 5 * 60 * 1000).unref();
+  }
+  if (lifecycleReminderEnabled) {
+    console.log('Verified lifecycle reminders scheduled at 17:00 and 17:30 Asia/Shanghai.');
+    setTimeout(() => runLifecycleReminders().catch(error => console.error('initial lifecycle reminder check failed',error?.message||error)),20000);
+    setInterval(() => runLifecycleReminders().catch(error => console.error('scheduled lifecycle reminder check failed',error?.message||error)),5*60*1000).unref();
   }
 });

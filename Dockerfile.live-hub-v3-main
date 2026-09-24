@@ -5,8 +5,10 @@ COPY site/ /app/public/
 COPY server.js /app/server.js
 COPY calendar-user-reader.mjs /app/calendar-user-reader.mjs
 COPY calendar-auth-http.mjs /app/calendar-auth-http.mjs
+COPY coach-calendar-auth.mjs /app/coach-calendar-auth.mjs
 COPY frame-policy.mjs /app/frame-policy.mjs
 COPY lifecycle-engine.mjs /app/lifecycle-engine.mjs
+COPY lifecycle-reminder-lock.mjs /app/lifecycle-reminder-lock.mjs
 COPY container-entrypoint.sh /app/container-entrypoint.sh
 COPY exports/recruitment-pool/ /app/public/modules/recruitment/
 COPY exports/anchor-archives/ /app/public/modules/anchors/

@@ -8,13 +8,16 @@ import {createDeviceRecovery,scopes} from './calendar-device-recovery.mjs';
 
 const reply=(data,status=200)=>({ok:status>=200&&status<300,status,json:async()=>data});
 const grant={code:0,access_token:'private_access',refresh_token:'private_refresh',expires_in:7200,refresh_token_expires_in:604800,scope:scopes.join(' ')};
-async function fixture(run,{identity='ou_expected',role='reader',token=grant,override}={}){
+async function fixture(run,{identity='ou_expected',role='reader',token=grant,override,requireOwnPrimaryCalendar=false,
+ primaryUserId='ou_expected',primaryCalendarId='exact_calendar',primaryType='primary',primaryDeleted=false}={}){
  const dir=await mkdtemp(join(tmpdir(),'live-device-test-'));let clock=1000000;const calls=[];
- const config={appId:'cli_fixture',appSecret:'private_secret',calendarId:'exact_calendar',expectedOpenId:'ou_expected',storePath:join(dir,'calendar.enc'),encryptionKey:randomBytes(32).toString('base64'),now:()=>clock,fetchImpl:async(url,options)=>{
+ const config={appId:'cli_fixture',appSecret:'private_secret',calendarId:'exact_calendar',expectedOpenId:'ou_expected',storePath:join(dir,'calendar.enc'),encryptionKey:randomBytes(32).toString('base64'),requireOwnPrimaryCalendar,now:()=>clock,fetchImpl:async(url,options)=>{
   calls.push({url,options});if(override){const r=await override(url,options);if(r)return r;}
   if(url.endsWith('/device_authorization'))return reply({device_code:'private_device',user_code:'ABCD-EFGH',verification_uri_complete:'https://accounts.feishu.cn/device?user_code=ABCD-EFGH',expires_in:600,interval:5});
   if(url.endsWith('/oauth/token'))return reply(token);
   if(url.endsWith('/user_info'))return reply({code:0,data:{open_id:identity}});
+  if(url.includes('/calendars/primary?'))return reply({code:0,data:{calendars:[{user_id:primaryUserId,
+    calendar:{calendar_id:primaryCalendarId,type:primaryType,is_deleted:primaryDeleted}}]}});
   if(url.endsWith('/exact_calendar'))return reply({code:0,data:{calendar_id:'exact_calendar',role}});
   throw Error('unexpected request');
  }};
@@ -76,3 +79,23 @@ test('untrusted authorization URL is not exposed',()=>fixture(async({r})=>{await
  {override:url=>url.endsWith('/device_authorization')?reply({device_code:'private_device',verification_uri_complete:'https://evil.invalid/steal',expires_in:600}):null}));
 test('wrong calendar identifier is rejected despite reader role',()=>fixture(async({r,advance})=>{await r.issue();advance(5000);await assert.rejects(r.poll(),{code:'device_calendar_details_denied'});},
  {override:url=>url.endsWith('/exact_calendar')?reply({code:0,data:{calendar_id:'other_calendar',role:'reader'}}):null}));
+test('coach mode verifies the authorized user owns the exact active primary calendar before saving',()=>fixture(async({r,config,advance,calls})=>{
+ await r.issue();advance(5000);assert.equal((await r.poll()).authorized,true);
+ const primary=calls.find(call=>call.url.includes('/calendars/primary?'));
+ assert.equal(primary.options.method,'POST');assert.equal(primary.options.headers['Content-Type'],'application/json; charset=utf-8');
+ assert.equal(new URL(primary.url).searchParams.get('user_id_type'),'open_id');
+ assert.ok(await readFile(config.storePath,'utf8'));
+},{requireOwnPrimaryCalendar:true}));
+for(const [title,option] of [
+ ['different owner',{primaryUserId:'ou_other'}],
+ ['different calendar',{primaryCalendarId:'other_calendar'}],
+ ['not a primary calendar',{primaryType:'shared'}],
+ ['deleted primary calendar',{primaryDeleted:true}],
+]) test('coach mode rejects '+title+' even when detail role is reader',()=>fixture(async({r,config,advance})=>{
+ await r.issue();advance(5000);await assert.rejects(r.poll(),{code:'device_primary_calendar_unverified'});
+ await assert.rejects(readFile(config.storePath,'utf8'),{code:'ENOENT'});
+},{requireOwnPrimaryCalendar:true,...option}));
+test('coach mode rejects malformed primary response without saving credentials',()=>fixture(async({r,config,advance})=>{
+ await r.issue();advance(5000);await assert.rejects(r.poll(),{code:'device_primary_calendar_unverified'});
+ await assert.rejects(readFile(config.storePath,'utf8'),{code:'ENOENT'});
+},{requireOwnPrimaryCalendar:true,override:url=>url.includes('/calendars/primary?')?reply(null):null}));

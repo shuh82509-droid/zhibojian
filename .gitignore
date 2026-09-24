@@ -5,6 +5,10 @@ dist/
 .next/
 .wrangler/
 coverage/
+# Runtime records contain encrypted OAuth credentials and business audit data.
+# They belong on private persistent volumes, never in a source commit.
+/data/
+/runtime/dispatch-center/data/
 
 # Local configuration and diagnostics
 .env

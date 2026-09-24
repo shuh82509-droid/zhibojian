@@ -38,3 +38,49 @@ test('all selected metrics have separate readable value rows and cards load has 
   for(const match of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g))new vm.Script(match[1]);
  }
 });
+
+test('structured assessment UI is closed by default and source-bound to two verified actors',async()=>{
+ const html=await readFile(new URL('../exports/recruitment-pool/recruitment-dashboard.html',import.meta.url),'utf8');
+ assert.match(html,/id="assessmentCandidate" disabled/);
+ assert.match(html,/id="assessmentOutcomes" disabled/);
+ assert.match(html,/id="assessmentAttest" type="checkbox" disabled/);
+ assert.match(html,/id="assessmentSubmit" type="submit" disabled/);
+ assert.match(html,/assessmentAccess\.enabled&&assessmentAccess\.identityVerified/);
+ assert.match(html,/assessmentAccess\.lock\?\.state==='free'/);
+ assert.match(html,/snapshot\.submissionMessageCounts\?\.\[item\.name\]===1/);
+ assert.match(html,/item\.submissionEvidence\?\.sourceId/);
+ assert.match(html,/method:'POST',credentials:'same-origin'/);
+ assert.match(html,/'X-Requested-With':'XMLHttpRequest'/);
+ assert.match(html,/先读回记录，不自动重试/);
+ assert.match(html,/不读取指定私聊|指定私聊没有被读取/);
+ for(const match of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g))new vm.Script(match[1]);
+});
+
+test('招聘读取回填与本人提交回执均按周期和送审消息 ID 绑定',async()=>{
+ const server=await readFile(new URL('../server.js',import.meta.url),'utf8');
+ assert.match(server,/const verified=chatComplete&&cycleEntries\.length \? structuredAssessmentForCandidate\(summary,candidate,cycleMonth\) : null/);
+ assert.match(server,/const confirmation=structuredAssessmentForCandidate\([\s\S]*?submission\.candidate,cycleMonth\)/);
+ assert.doesNotMatch(server,/summary\.byName\[|\)\.byName\[/);
+});
+
+test('recruitment page and 17:00 reminder use the same 25th cycle boundary',async()=>{
+ const html=await readFile(new URL('../exports/recruitment-pool/recruitment-dashboard.html',import.meta.url),'utf8');
+ const server=await readFile(new URL('../server.js',import.meta.url),'utf8');
+ assert.match(html,/Number\(TODAY\.slice\(8,10\)\)>=25/);
+ assert.match(server,/const cycleMonth=recruitmentCycleMonthForDate\(targetDate\)/);
+ assert.match(server,/const cycleMonth=recruitmentCycleMonthForDate\(date\)/);
+ assert.doesNotMatch(server,/day>25/);
+ assert.match(server,/if \(interviewWindow === 'open'\) \{/);
+ assert.match(server,/if \(coachWindow === 'open'\) \{/);
+ assert.match(server,/已错过 17:00—18:00 窗口，未补发/);
+  assert.match(server,/已错过 17:30—18:30 窗口，未补发/);
+  assert.match(server,/verifyBeforePost:async\(\)=>\{[\s\S]*?const latestSource=await recruitmentCycleSnapshot\(cycleMonth,\{fresh:true\}\);[\s\S]*?interviewReminderSourceFingerprint\(latestSource,date\)!==expectedSource[\s\S]*?lifecycleReminderWindow\('interview',chinaMinutes\(new Date\(\)\)\) !== 'open'/);
+  const durableIntent=server.indexOf('await writeJsonAtomic(lifecycleReminderPath,journal);',server.indexOf('async function deliverLifecycleReminder'));
+  const check=server.indexOf('if (verifyBeforePost)',durableIntent);
+  const post=server.indexOf("const data = await feishuPost('/im/v1/messages",check);
+  assert.ok(durableIntent>=0&&check>durableIntent&&post>check,'fresh source check must happen after durable intent and before Feishu POST');
+  const token=server.indexOf('sendToken = await getTenantToken();',durableIntent);
+  assert.ok(token>durableIntent&&token<check,'token acquisition must finish before the final source check');
+  assert.match(server.slice(post,post+300),/\},\{token:sendToken\}\)/);
+  assert.match(server,/kind:'coach_review'[\s\S]*?verifyBeforePost:async\(\)=>\{/);
+});

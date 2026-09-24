@@ -110,6 +110,96 @@ test('并行进程锁不会被当成过期文件删除或绕过',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'calendar-reader-test-'));try{const reader=setup(dir,async()=>{throw Error('不应换取令牌');}),attempt=reader.begin();await mkdir(join(dir,'calendar-user.enc.lock'));await assert.rejects(reader.complete({code:'test_code',state:attempt.state,cookieState:attempt.state}),{code:'calendar_authorization_busy'});}finally{await rm(dir,{recursive:true,force:true});}
 });
 
+test('only coach readers explicitly allow bounded instance_view on their own calendar',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'calendar-reader-test-'));
+ try{
+  const calls=[];
+  const reader=createCalendarUserReader({appId:'cli_test',appSecret:'test_secret',calendarId:'test_calendar',expectedOpenId:'ou_expected',
+   redirectUri:'https://example.com/callback',storePath:join(dir,'calendar-user.enc'),encryptionKey:randomBytes(32).toString('base64'),allowInstanceView:true,
+   fetchImpl:async(url)=>{calls.push(url);if(url.endsWith('/oauth/v3/token'))return response({code:0,access_token:'access',refresh_token:'refresh',expires_in:7200,refresh_token_expires_in:604800,scope});
+    if(url.endsWith('/user_info'))return response({code:0,data:{open_id:'ou_expected'}});
+    if(url.endsWith('/test_calendar'))return response({code:0,data:{calendar:{role:'reader'}}});
+    return response({code:0,data:{items:[]}});
+   }});
+  const attempt=reader.begin();await reader.complete({code:'test',state:attempt.state,cookieState:attempt.state});
+  const path='/calendar/v4/calendars/test_calendar/events/instance_view?start_time=1000000&end_time=1003600';
+  assert.deepEqual((await reader.get(path)).items,[]);
+  assert.match(calls.at(-1),/instance_view\?start_time=1000000&end_time=1003600/u);
+  const before=calls.length;
+  await assert.rejects(reader.get(`${path}&page_token=other`),{code:'calendar_path_denied'});
+  await assert.rejects(reader.get('/calendar/v4/calendars/other/events/instance_view?start_time=1000000&end_time=1003600'),{code:'calendar_path_denied'});
+  await assert.rejects(reader.get('/calendar/v4/calendars/test_calendar/events/instance_view?start_time=1000000&end_time=1691200'),{code:'calendar_path_denied'});
+  assert.equal(calls.length,before);
+  const plain=setup(dir,async()=>{throw Error('不应发起网络请求');});
+  await assert.rejects(plain.get(path),{code:'calendar_path_denied'});
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+test('教练仅能授权与本人 open_id 精确匹配的预置主日历',async()=>{
+ for(const [calendars,allowed] of [
+  [[{user_id:'ou_expected',calendar:{calendar_id:'test_calendar',type:'primary'}}],true],
+  [[{user_id:'ou_other',calendar:{calendar_id:'test_calendar',type:'primary'}}],false],
+  [[{user_id:'ou_expected',calendar:{calendar_id:'test_calendar',type:'shared'}}],false],
+  [[{user_id:'ou_expected',calendar:{calendar_id:'other_calendar',type:'primary'}}],false],
+  [[{user_id:'ou_expected',calendar:{calendar_id:'test_calendar',type:'primary',is_deleted:true}}],false],
+  [[{user_id:'ou_expected',calendar:{calendar_id:'test_calendar',type:'primary'}},{user_id:'ou_expected',calendar:{calendar_id:'test_calendar',type:'primary'}}],false],
+  [[],false],
+ ]){
+  const dir=await mkdtemp(join(tmpdir(),'calendar-primary-test-'));
+  try{
+   const reader=createCalendarUserReader({appId:'cli_test',appSecret:'test_secret',calendarId:'test_calendar',expectedOpenId:'ou_expected',ownerLabel:'教练',requireOwnPrimaryCalendar:true,
+    redirectUri:'https://example.com/callback',storePath:join(dir,'coach.enc'),encryptionKey:randomBytes(32).toString('base64'),
+    fetchImpl:async(url,options)=>url.endsWith('/oauth/v3/token')?response({code:0,access_token:'access',refresh_token:'refresh',expires_in:7200,refresh_token_expires_in:604800,scope})
+     :url.endsWith('/user_info')?response({code:0,data:{open_id:'ou_expected'}})
+     :url.includes('/calendars/primary?')?(assert.equal(options.method,'POST'),response({code:0,data:{calendars}}))
+     :response({code:0,data:{calendar:{role:'reader'}}})});
+   const attempt=reader.begin(),completion=reader.complete({code:'test',state:attempt.state,cookieState:attempt.state});
+   if(allowed){assert.equal((await completion).authorized,true);assert.equal((await reader.status()).authorized,true);}
+   else {await assert.rejects(completion,{code:'calendar_primary_unverified'});assert.equal((await reader.status()).authorized,false);}
+  }finally{await rm(dir,{recursive:true,force:true});}
+ }
+});
+test('主日历接口异常或详情权限不足时不保存教练授权',async()=>{
+ for(const mode of ['provider-error','free-busy']){
+  const dir=await mkdtemp(join(tmpdir(),'calendar-primary-test-'));
+  try{
+   const reader=createCalendarUserReader({appId:'cli_test',appSecret:'test_secret',calendarId:'test_calendar',expectedOpenId:'ou_expected',requireOwnPrimaryCalendar:true,
+    redirectUri:'https://example.com/callback',storePath:join(dir,'coach.enc'),encryptionKey:randomBytes(32).toString('base64'),
+    fetchImpl:async url=>url.endsWith('/oauth/v3/token')?response({code:0,access_token:'access',refresh_token:'refresh',expires_in:7200,refresh_token_expires_in:604800,scope})
+     :url.endsWith('/user_info')?response({code:0,data:{open_id:'ou_expected'}})
+     :url.includes('/calendars/primary?')?response(mode==='provider-error'?{code:1234}:{code:0,data:{calendars:[{user_id:'ou_expected',calendar:{calendar_id:'test_calendar',type:'primary'}}]}})
+     :response({code:0,data:{calendar:{role:'free_busy_reader'}}})});
+   const attempt=reader.begin();
+   await assert.rejects(reader.complete({code:'test',state:attempt.state,cookieState:attempt.state}),{code:mode==='provider-error'?'calendar_primary_unverified':'calendar_detail_permission_missing'});
+   assert.equal((await reader.status()).authorized,false);
+  }finally{await rm(dir,{recursive:true,force:true});}
+ }
+});
+
+test('additional coach calendar requires explicit allowlist and detail-reader role',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'calendar-reader-test-'));
+ try{
+  const calls=[];
+  let coachRole='reader';
+  const reader=createCalendarUserReader({appId:'cli_test',appSecret:'test_secret',calendarId:'test_calendar',additionalCalendarIds:['coach_calendar'],expectedOpenId:'ou_expected',redirectUri:'https://example.com/callback',storePath:join(dir,'calendar-user.enc'),encryptionKey:randomBytes(32).toString('base64'),fetchImpl:async(url)=>{
+   calls.push(url);
+   if(url.endsWith('/oauth/v3/token'))return response({code:0,access_token:'access',refresh_token:'refresh',expires_in:7200,refresh_token_expires_in:604800,scope});
+   if(url.endsWith('/user_info'))return response({code:0,data:{open_id:'ou_expected'}});
+   if(url.endsWith('/test_calendar'))return response({code:0,data:{calendar:{role:'reader'}}});
+   if(url.endsWith('/coach_calendar'))return response({code:0,data:{calendar:{role:coachRole}}});
+   return response({code:0,data:{items:[]}});
+  }});
+  const attempt=reader.begin();await reader.complete({code:'test',state:attempt.state,cookieState:attempt.state});
+  await reader.verifyCalendar('coach_calendar');
+  await reader.get('/calendar/v4/calendars/coach_calendar/events?start_time=1&end_time=2');
+  coachRole='free_busy_reader';
+  await assert.rejects(reader.verifyCalendar('coach_calendar'),{code:'calendar_detail_permission_missing'});
+  const count=calls.length;
+  await assert.rejects(reader.verifyCalendar('other_calendar'),{code:'calendar_path_denied'});
+  await assert.rejects(reader.get('/calendar/v4/calendars/other_calendar/events'),{code:'calendar_path_denied'});
+  assert.equal(calls.length,count);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
 test('exchange diagnostics identify the upstream failure without leaking any credentials',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'calendar-reader-test-'));
  try{

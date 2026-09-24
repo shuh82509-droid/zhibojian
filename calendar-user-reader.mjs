@@ -6,11 +6,12 @@ const requiredScopes = ['calendar:calendar:read', 'calendar:calendar.event:read'
 const tokenEndpoint = 'https://accounts.feishu.cn/oauth/v3/token';
 const userInfoEndpoint = 'https://open.feishu.cn/open-apis/authen/v1/user_info';
 
-export function createCalendarUserReader({appId, appSecret, calendarId, expectedOpenId, redirectUri, storePath, encryptionKey, fetchImpl = fetch, now = Date.now, diagnostic = item => console.warn('[calendar-oauth]', JSON.stringify(item))}) {
+export function createCalendarUserReader({appId, appSecret, calendarId, additionalCalendarIds = [], expectedOpenId, ownerLabel = '舒豪', requireOwnPrimaryCalendar = false, allowInstanceView = false, redirectUri, storePath, encryptionKey, fetchImpl = fetch, now = Date.now, diagnostic = item => console.warn('[calendar-oauth]', JSON.stringify(item))}) {
   const key = /^[A-Za-z0-9+/]{43}=$/u.test(encryptionKey || '') ? Buffer.from(encryptionKey, 'base64') : Buffer.alloc(0);
   const configured = Boolean(appId && appSecret && calendarId && expectedOpenId && redirectUri && storePath && key.length === 32);
   const pending = new Map();
   const context = Buffer.from(JSON.stringify([appId, calendarId, expectedOpenId]));
+  const permittedCalendars = new Set([calendarId, ...(Array.isArray(additionalCalendarIds) ? additionalCalendarIds : [])].filter(value => typeof value === 'string' && /^[A-Za-z0-9_@.\-]{3,256}$/u.test(value)));
   let refreshInFlight = null;
   const error = (code, message) => Object.assign(new Error(message), {code});
   const same = (left, right) => {
@@ -58,9 +59,9 @@ export function createCalendarUserReader({appId, appSecret, calendarId, expected
   }
   function statusFrom(record) {
     if (!configured) return {configured:false, authorized:false, reason:'日历用户授权配置不完整'};
-    if (!record) return {configured:true, authorized:false, reason:'等待舒豪完成飞书用户授权'};
+    if (!record) return {configured:true, authorized:false, reason:`等待${ownerLabel}完成飞书用户授权`};
     const authorized = same(record.openId, expectedOpenId) && record.refreshExpiresAt > now() && requiredScopes.every(s => String(record.scopes).split(/\s+/u).includes(s));
-    return {configured:true, authorized, ...(authorized ? {} : {reason:'舒豪用户授权已过期或账号不匹配'}), openId:record.openId, refreshExpiresAt:record.refreshExpiresAt};
+    return {configured:true, authorized, ...(authorized ? {} : {reason:`${ownerLabel}用户授权已过期或账号不匹配`}), openId:record.openId, refreshExpiresAt:record.refreshExpiresAt};
   }
   async function status() { return statusFrom(await load()); }
   function begin() {
@@ -104,10 +105,22 @@ export function createCalendarUserReader({appId, appSecret, calendarId, expected
     if (!response.ok || data.code !== 0 || !data.data?.open_id) throw error('calendar_identity_unverified', '无法核验日历授权用户身份。');
     return data.data.open_id;
   }
-  async function verifyCalendarAccess(accessToken) {
-    const response=await fetchImpl(`https://open.feishu.cn/open-apis/calendar/v4/calendars/${encodeURIComponent(calendarId)}`,{redirect:'error',headers:{Authorization:`Bearer ${accessToken}`},signal:AbortSignal.timeout(12000)});
+  async function verifyCalendarAccess(accessToken, targetCalendarId = calendarId) {
+    if (!permittedCalendars.has(targetCalendarId)) throw error('calendar_path_denied','此日历未列入已核验的只读来源。');
+    if (requireOwnPrimaryCalendar) {
+      if (targetCalendarId !== calendarId) throw error('calendar_path_denied','仅允许核验本人预置的主日历。');
+      const primaryResponse = await fetchImpl('https://open.feishu.cn/open-apis/calendar/v4/calendars/primary?user_id_type=open_id',
+        {method:'POST',redirect:'error',headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json; charset=utf-8'},body:'{}',signal:AbortSignal.timeout(12000)});
+      const primary = await primaryResponse.json().catch(() => ({}));
+      if (!primaryResponse.ok || primary.code !== 0 || !Array.isArray(primary.data?.calendars))
+        throw error('calendar_primary_unverified','无法核验本人主日历，未读取或保存日历资料。');
+      const matches = primary.data.calendars.filter(item => item?.user_id === expectedOpenId
+        && item.calendar?.calendar_id === calendarId && item.calendar?.type === 'primary' && item.calendar?.is_deleted !== true);
+      if (matches.length !== 1) throw error('calendar_primary_unverified','日历与当前教练本人主日历不一致，未读取或保存日历资料。');
+    }
+    const response=await fetchImpl(`https://open.feishu.cn/open-apis/calendar/v4/calendars/${encodeURIComponent(targetCalendarId)}`,{redirect:'error',headers:{Authorization:`Bearer ${accessToken}`},signal:AbortSignal.timeout(12000)});
     const data=await response.json().catch(()=>({}));
-    if(!response.ok||data.code!==0||!['reader','writer','owner'].includes(data.data?.calendar?.role||data.data?.role))throw error('calendar_detail_permission_missing','舒豪对指定日历尚无详情读取权限，请由日历所有者授予“订阅者（可查看详情）”后重新授权。');
+    if(!response.ok||data.code!==0||!['reader','writer','owner'].includes(data.data?.calendar?.role||data.data?.role))throw error('calendar_detail_permission_missing','当前授权用户对指定日历尚无详情读取权限，请由日历所有者授予“订阅者（可查看详情）”。');
   }
   function recordFrom(data, openId) {
     return {openId, accessToken:data.access_token, accessExpiresAt:now() + Number(data.expires_in || 0) * 1000,
@@ -122,7 +135,7 @@ export function createCalendarUserReader({appId, appSecret, calendarId, expected
     return exclusive(async () => {
     const data = await tokenRequest({grant_type:'authorization_code',code,redirect_uri:redirectUri,code_verifier:attempt.verifier,scope:requiredScopes.join(' ')});
     const openId = await getUserInfo(data.access_token);
-    if (!same(openId, expectedOpenId)) throw error('calendar_oauth_wrong_user', '授权账号不是指定的舒豪账号，凭据未保存。');
+    if (!same(openId, expectedOpenId)) throw error('calendar_oauth_wrong_user', `授权账号不是指定的${ownerLabel}账号，凭据未保存。`);
     await verifyCalendarAccess(data.access_token);
     await save(recordFrom(data, openId));
     return status();
@@ -131,7 +144,7 @@ export function createCalendarUserReader({appId, appSecret, calendarId, expected
   async function accessToken() {
     if (!configured) throw error('calendar_auth_not_configured', '正式面试日历的用户授权尚未配置。');
     const record = await load();
-    if (!record || !same(record.openId, expectedOpenId) || record.refreshExpiresAt <= now()) throw error('calendar_authorization_required', '正式面试日历需舒豪重新授权。');
+    if (!record || !same(record.openId, expectedOpenId) || record.refreshExpiresAt <= now()) throw error('calendar_authorization_required', `${ownerLabel}日历需本人重新授权。`);
     if (record.accessExpiresAt > now() + 300_000) return record.accessToken;
     if (!refreshInFlight) refreshInFlight = exclusive(async () => {
       const latest = await load();
@@ -146,12 +159,20 @@ export function createCalendarUserReader({appId, appSecret, calendarId, expected
   }
   async function get(path) {
     const url = new URL(`https://open.feishu.cn/open-apis${path}`);
-    const allowedPath = `/open-apis/calendar/v4/calendars/${encodeURIComponent(calendarId)}/events`;
-    if (url.pathname !== allowedPath || url.hash || [...url.searchParams.keys()].some(k => !['start_time','end_time','page_size','page_token'].includes(k))) throw error('calendar_path_denied', '用户授权仅可读取指定面试日历的事件。');
+    const eventPaths = new Set([...permittedCalendars].map(id => `/open-apis/calendar/v4/calendars/${encodeURIComponent(id)}/events`));
+    const instancePaths = new Set(allowInstanceView ? [...permittedCalendars].map(id => `/open-apis/calendar/v4/calendars/${encodeURIComponent(id)}/events/instance_view`) : []);
+    const instance = instancePaths.has(url.pathname);
+    const permitted = instance ? ['start_time','end_time'] : ['start_time','end_time','page_size','page_token'];
+    if ((!eventPaths.has(url.pathname) && !instance) || url.hash || [...url.searchParams.keys()].some(k => !permitted.includes(k))) throw error('calendar_path_denied', '用户授权仅可读取已列入清单的日历事件。');
+    if (instance) {
+      const start=Number(url.searchParams.get('start_time')),end=Number(url.searchParams.get('end_time'));
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start <= 0 || end < start || end-start >= 8*86400) throw error('calendar_path_denied','复盘实例仅允许读取指定的单个绩效周。');
+    }
     const response = await fetchImpl(url.href, {redirect:'error',headers:{Authorization:`Bearer ${await accessToken()}`},signal:AbortSignal.timeout(12_000)});
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data.code !== 0) throw error('calendar_read_failed', '正式面试日历读取失败，请核验用户授权及日历权限。');
     return data.data || {};
   }
-  return {calendarId, status, begin, complete, get};
+  async function verifyCalendar(targetCalendarId) { return verifyCalendarAccess(await accessToken(), targetCalendarId); }
+  return {calendarId, status, begin, complete, get, verifyCalendar};
 }

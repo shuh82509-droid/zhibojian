@@ -4,8 +4,22 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { ROOM_PLANNING, SHIFT_TIMES, formatShiftCell, generateDraft, generateMakeupDraft, parseRestSource, parseRestSources, restAdjustmentFromNote, transitionAllowed } = require('./planning-engine');
-const { buildMakeupImportPlan, buildPlanningImportPlan, headerDateKey, parseMakeupScheduleRows } = require('./schedule-api-server');
+const SHIFT_LEGEND = '班次信息: L（05:30-14:30）: 05:30 ~ 14:30; R（06:30-15:30）: 06:30 ~ 15:30; M（21:30-05:00）: 21:30 ~ 次日 05:00; P（16:30-01:00）: 16:30 ~ 次日 01:00; J2（14:30-23:00）: 14:30 ~ 23:00';
+const { alignPlanningRangeRow, assertPlanningFormulaRow, buildMakeupImportPlan, buildPlanningImportPlan, changedRowRanges, fullScheduleRange, headerDateKey, parseMakeupScheduleRows, planningReadbackState, spreadsheetValueRows, validateWriteOrigin } = require('./schedule-api-server');
+
+test('candidate dispatch page keeps planning API requests within its own route',()=>{
+  for(const [file,variable] of [['planning-workbench.js','planningBase'],['app.js','apiBase']]){
+    const script=fs.readFileSync(path.join(__dirname,file),'utf8');
+    const statements=script.split(/\r?\n/u).filter(line=>line.includes('const hubDispatchPath =')||line.includes(`const ${variable} =`)).join('\n').replaceAll('const ','var ');
+    const baseFor=pathname=>vm.runInNewContext(`${statements}\n${variable}`,{window:{location:{protocol:'https:',pathname}}});
+    assert.equal(baseFor('/yxb/wis-marketing-hub/live-flow-candidate-r55/modules/dispatch-center/'),'/yxb/wis-marketing-hub/live-flow-candidate-r55/modules/dispatch-center',file);
+    assert.equal(baseFor('/yxb/wis-marketing-hub/modules/dispatch-center/'),'/yxb/wis-marketing-hub/modules/dispatch-center',file);
+    assert.equal(baseFor('/fd-027340/dispatch-center/'),'/fd-027340/dispatch-center',file);
+    assert.equal(baseFor('/not-a-dispatch-route/'),'',file);
+  }
+});
 
 test('supports independent assistant rosters in all four rooms and rotates shift types', () => {
   assert.deepEqual(ROOM_PLANNING.guanqi.assistants, ['尹珩瑞', '杨冰', '陈嘉欣', '蒙万叶', '韦彩云', '林梓烁', '雷惠朝']);
@@ -148,7 +162,7 @@ test('compensation note adjusts the global rest entitlement without treating it 
 });
 
 test('builds an exact total-schedule import preview and exposes unresolved names', () => {
-  const rows = [['', '', '', ''], ['姓名', '直播间', '2026/9/1', '2026/9/2'], ['甲', '优选', '', 'R'], ['乙', '优选', 'M', '']];
+  const rows = [[SHIFT_LEGEND], ['UID', '部门', '工号', '', '2026/9/1', '2026/9/2'], ['u-1', '凡岛-品牌营销部-直播中心-优选', 'FD-1', '甲', '', 'R'], ['u-2', '凡岛-品牌营销部-直播中心-优选', 'FD-2', '乙', 'M', '']];
   const draft = { roomCode: 'youxuan', roomName: '优选', role: 'anchor', startDate: '2026-09-01', endDate: '2026-09-02', dates: ['2026-09-01', '2026-09-02'], assignments: [{ date: '2026-09-01', name: '甲', shiftCode: 'R' }, { date: '2026-09-02', name: '乙', shiftCode: 'M' }, { date: '2026-09-02', name: '未入总表', shiftCode: 'X' }] };
   const plan = buildPlanningImportPlan(draft, rows, 12);
   assert.equal(plan.resolvedCount, 2); assert.equal(plan.unresolved.length, 1); assert.equal(plan.ranges.length, 2); assert.equal(plan.overwrites.length, 0); assert.match(plan.expectedHash, /^[a-f0-9]{64}$/u); assert.equal(headerDateKey('9月2日', '2026'), '2026-09-02');
@@ -157,10 +171,102 @@ test('builds an exact total-schedule import preview and exposes unresolved names
 });
 
 test('total-schedule preview uses the currently resolved spreadsheet target', () => {
-  const rows = [['姓名', '2026/9/1'], ['甲', '']];
+  const rows = [[SHIFT_LEGEND], ['UID', '部门', '工号', '', '2026/9/1'], ['u-1', '凡岛-品牌营销部-直播中心-官旗', 'FD-1', '甲', '']];
   const draft = { roomCode:'guanqi', roomName:'官旗', role:'anchor', startDate:'2026-09-01', endDate:'2026-09-01', dates:['2026-09-01'], assignments:[{date:'2026-09-01',name:'甲',shiftCode:'L'}] };
   const target = {spreadsheetToken:'current-token',sheetId:'current-sheet',label:'当前总表'}; const plan = buildPlanningImportPlan(draft, rows, 3, target);
   assert.equal(plan.target.spreadsheetToken, 'current-token'); assert.match(plan.ranges[0].range, /^current-sheet!/u);
+});
+
+test('total import fingerprint binds the exact after value and leaves intervening cells out of write ranges', () => {
+  const rows = [[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1','2026/9/2','2026/9/3'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','甲','','他人公式结果','']];
+  const base = {roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-03',dates:['2026-09-01','2026-09-03'],assignments:[{date:'2026-09-01',name:'甲',shiftCode:'L'},{date:'2026-09-03',name:'甲',shiftCode:'P'}]};
+  const target = {spreadsheetToken:'current-token',sheetId:'0jFdXf',label:'正式排班表'};
+  const plan = buildPlanningImportPlan(base, rows, 498, target);
+  assert.deepEqual(plan.ranges.map((range) => range.range), ['0jFdXf!E3:E3','0jFdXf!G3:G3']);
+  assert.equal(plan.ranges.some((range) => range.range.includes('F3')), false);
+  assert.notEqual(buildPlanningImportPlan({...base,assignments:[{...base.assignments[0],shiftCode:'J2'},base.assignments[1]]},rows,498,target).expectedHash,plan.expectedHash);
+});
+
+test('total import omits already-correct cells instead of rewriting their formulas or formatting', () => {
+  const rows = [[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1','2026/9/2'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','甲','L（05:30-14:30）','']];
+  const draft = {roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-02',dates:['2026-09-01','2026-09-02'],assignments:[{date:'2026-09-01',name:'甲',shiftCode:'L'},{date:'2026-09-02',name:'甲',shiftCode:'P'}]};
+  const plan = buildPlanningImportPlan(draft,rows,498,{spreadsheetToken:'test-token',sheetId:'test-sheet'});
+  assert.equal(plan.noChangeCount,1);
+  assert.deepEqual(plan.ranges.map(item=>item.range),['test-sheet!F3:F3']);
+  assert.equal(plan.overwrites.length,0);
+});
+
+test('total import formula inspection fails closed on formulas and unverifiable occupied cells', () => {
+  const item = {range:'test-sheet!E3:F3',before:['原值',''],after:['新值','P']};
+  assert.doesNotThrow(()=>assertPlanningFormulaRow(item,['原值','']));
+  assert.throws(()=>assertPlanningFormulaRow(item,['=A1','']),error=>error.code==='TOTAL_SCHEDULE_FORMULA_PROTECTED');
+  assert.throws(()=>assertPlanningFormulaRow(item,[]),error=>error.code==='TOTAL_SCHEDULE_FORMULA_UNVERIFIED');
+});
+
+test('single-range parser recognizes only the documented explicit empty range and rejects malformed readback', () => {
+  assert.deepEqual(spreadsheetValueRows({data:{valueRange:{range:'',majorDimension:'ROWS'}}}),[]);
+  assert.deepEqual(spreadsheetValueRows({data:{valueRange:{range:'',values:[]}}}),[]);
+  assert.deepEqual(spreadsheetValueRows({data:{valueRange:{range:'test-sheet!E3:E3',values:[['L']]}}}),[['L']]);
+  assert.throws(()=>spreadsheetValueRows({data:{}}),error=>error.code==='SHEET_READBACK_UNVERIFIED');
+  assert.throws(()=>spreadsheetValueRows({data:{valueRange:{range:'test-sheet!E3:E3'}}}),error=>error.code==='SHEET_READBACK_UNVERIFIED');
+  assert.throws(()=>spreadsheetValueRows({data:{valueRange:{range:'test-sheet!E3:E3',values:[]}}}),error=>error.code==='SHEET_READBACK_UNVERIFIED');
+  assert.throws(()=>spreadsheetValueRows({data:{valueRange:{range:'test-sheet!E3:E3',values:[null]}}}),error=>error.code==='SHEET_READBACK_UNVERIFIED');
+});
+
+test('exact cell readback aligns a trimmed Feishu range without shifting the column', () => {
+  assert.deepEqual(alignPlanningRangeRow('test-sheet!E3:F3','test-sheet!F3:F3',[['P']]),['','P']);
+  assert.deepEqual(alignPlanningRangeRow('test-sheet!E3:F3','',[]),['','']);
+  assert.throws(()=>alignPlanningRangeRow('test-sheet!E3:F3','test-sheet!D3:E3',[['L','P']]),error=>error.code==='SHEET_READBACK_UNVERIFIED');
+  assert.throws(()=>assertPlanningFormulaRow({range:'test-sheet!E3:F3',before:['原值',''],after:['新值','P']},['','P']),error=>error.code==='TOTAL_SCHEDULE_FORMULA_UNVERIFIED');
+});
+
+test('legacy room writeback writes only changed cells and preserves same-value formula cells', () => {
+  assert.deepEqual(changedRowRanges('test-sheet!E3:G3',['L','公式显示值',''],['L','公式显示值','P']),[{range:'test-sheet!G3:G3',before:[''],after:['P'],row:3}]);
+  assert.deepEqual(changedRowRanges('test-sheet!E3:G3',['L','公式显示值','P'],['L','公式显示值','P']),[]);
+});
+
+test('exact import readback differentiates success, unchanged, mixed, and missing responses', () => {
+  const ranges = [{before:['','旧值'],after:['L','P']}];
+  assert.equal(planningReadbackState(ranges,[['L','P']]),'after');
+  assert.equal(planningReadbackState(ranges,[['','旧值']]),'before');
+  assert.equal(planningReadbackState(ranges,[['L','旧值']]),'mixed');
+  assert.equal(planningReadbackState(ranges,[[]]),'unverified');
+});
+
+test('dispatch write origin accepts only the two exact hub origins', () => {
+  const request = origin=>({headers:{origin,'x-requested-with':'XMLHttpRequest'}});
+  for (const origin of ['https://app.fandow.top','https://hub.fandow.com']) assert.doesNotThrow(()=>validateWriteOrigin(request(origin),{mode:'central'}));
+  for (const origin of ['https://hub.fandow.com.evil.test','http://hub.fandow.com','https://other.fandow.com']) assert.throws(()=>validateWriteOrigin(request(origin),{mode:'central'}),/跨站写回/u);
+  assert.throws(()=>validateWriteOrigin({headers:{origin:'https://hub.fandow.com'}},{mode:'central'}),/写回请求标识/u);
+});
+
+test('total import blocks duplicate names and unrelated departments instead of choosing first match', () => {
+  const rows = [[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','甲',''],['u-2','凡岛-品牌营销部-直播中心-品牌精选','FD-2','甲',''],['u-3','凡岛-电商部','FD-3','乙','']];
+  const draft = {roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'甲',shiftCode:'L'},{date:'2026-09-01',name:'乙',shiftCode:'P'}]};
+  const plan = buildPlanningImportPlan(draft,rows,498,{spreadsheetToken:'current-token',sheetId:'0jFdXf'});
+  assert.equal(plan.ranges.length,0);
+  assert.deepEqual(plan.unresolved.map((item)=>item.reason),['正式总表存在同名人员，须用唯一身份核验','人员不在直播中心部门']);
+});
+
+test('total import selects the exact attendance template when a shift code has multiple times', () => {
+  const legend = '班次信息: ZBB（18:30-次日2:00）: 18:30 ~ 次日 02:00; ZBB(21:00-次日6:00): 21:00 ~ 次日 06:00; WB(17:30-次日02:00): 17:30 ~ 次日 02:00; WB(22：30—次日6：00): 22:30 ~ 次日 06:00';
+  const rows = [[legend],['UID','部门','工号','','2026/9/1','2026/9/2'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','甲','','']];
+  const draft = {roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-02',dates:['2026-09-01','2026-09-02'],assignments:[{date:'2026-09-01',name:'甲',shiftCode:'ZBB',shiftTime:'18:30–次日02:00'},{date:'2026-09-02',name:'甲',shiftCode:'WB',shiftTime:'22:30–次日06:00'}]};
+  const plan = buildPlanningImportPlan(draft,rows,498,{spreadsheetToken:'current-token',sheetId:'0jFdXf'});
+  assert.deepEqual(plan.ranges[0].after,['ZBB（18:30-次日2:00）','WB(22：30—次日6：00)']);
+  const bad = buildPlanningImportPlan({...draft,assignments:[{...draft.assignments[0],shiftTime:'20:00-次日03:00'},draft.assignments[1]]},rows,498,{spreadsheetToken:'current-token',sheetId:'0jFdXf'});
+  assert.equal(bad.unresolved[0].reason,'班次时间不符合原表考勤模板');
+});
+
+test('full source range follows sheet dimensions and rejects unknown bounds', () => {
+  assert.equal(fullScheduleRange({sheetId:'0jFdXf',rowCount:190,columnCount:34}),'0jFdXf!A1:AH190');
+  assert.throws(()=>fullScheduleRange({sheetId:'0jFdXf',rowCount:0,columnCount:34}),/尺寸异常/u);
+});
+
+test('rest source surfaces duplicate anchor rows as unverified rather than calculating a false zero', () => {
+  const rows = [['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','休息'],['u-2','凡岛-品牌营销部-直播中心-官旗','FD-2','赵媛','L']];
+  const [person] = parseRestSource(rows,'2026-09');
+  assert.equal(person.sourceStatus,'ambiguous'); assert.equal(person.usedRest,null); assert.equal(person.calendar.length,0);
 });
 
 test('makeup import appends a new month without overwriting historical rows', () => {
@@ -168,6 +274,25 @@ test('makeup import appends a new month without overwriting historical rows', ()
   const draft = generateMakeupDraft({month:'2026-09',roster:[{name:'刘玉婷',restDates:[]},{name:'肖慧萍',restDates:[]}]});
   const target = {spreadsheetToken:'makeup-token',sheetId:'33648c',label:'化妆师排班'}; const plan = buildMakeupImportPlan(draft, rows, 8, target);
   assert.equal(plan.mode, 'append'); assert.equal(plan.unresolved.length, 0); assert.equal(plan.overwrites.length, 0); assert.match(plan.ranges[0].range, /^33648c!A6:/u); assert.equal(plan.ranges[0].values[0][1], '2026/9/1');
+});
+
+test('makeup update omits unchanged dates and hashes the exact replacement values', () => {
+  const rows = [['标题'],['化妆师','2026/9/1','2026/9/2'],['星期','周二','周三'],['刘玉婷','AC1（07:30-16:30）','F（08:00-17:00）']];
+  const draft = {month:'2026-09',dates:['2026-09-01','2026-09-02'],roster:[{name:'刘玉婷'}],assignments:[{name:'刘玉婷',date:'2026-09-01',shiftCode:'AC1'},{name:'刘玉婷',date:'2026-09-02',shiftCode:'Q'}]};
+  const target = {spreadsheetToken:'makeup-token',sheetId:'33648c'};
+  const plan = buildMakeupImportPlan(draft,rows,8,target);
+  assert.equal(plan.mode,'update');
+  assert.deepEqual(plan.ranges.map(item=>item.range),['33648c!C4:C4']);
+  assert.equal(plan.overwrites.length,1);
+  assert.notEqual(buildMakeupImportPlan({...draft,assignments:[draft.assignments[0],{...draft.assignments[1],shiftCode:'F'}]},rows,8,target).expectedHash,plan.expectedHash);
+});
+
+test('makeup update refuses duplicate names in the formal month block', () => {
+  const rows = [['化妆师','2026/9/1'],['星期','周二'],['刘玉婷',''],['刘玉婷','']];
+  const draft = {month:'2026-09',dates:['2026-09-01'],roster:[{name:'刘玉婷'}],assignments:[{name:'刘玉婷',date:'2026-09-01',shiftCode:'AC1'}]};
+  const plan = buildMakeupImportPlan(draft,rows,8,{spreadsheetToken:'makeup-token',sheetId:'33648c'});
+  assert.equal(plan.ranges.length,0);
+  assert.match(plan.unresolved[0].reason,/重名/u);
 });
 
 test('dispatch UI exposes four-room anchor and assistant planning, global rest entitlement and shared makeup duty', () => {
