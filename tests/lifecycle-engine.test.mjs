@@ -341,6 +341,51 @@ test('recruitment parser ignores interview decisions from people other than the 
   assert.deepEqual(parsed.interviewEvents, {});
 });
 
+test('one reviewer marking both OK and No on the same submission remains pending regardless of reaction order', () => {
+  const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
+  for (const emojis of [['OK','No'],['No','OK']]) {
+    const parsed=parseRecruitmentMessages([{messageId:'om_conflict',createdAt:'2026-09-24T03:00:00.000Z',
+      text:'求职者【周小雨】是否符合【主播】的邀约标准',
+      reactions:{details:[...emojis.map(emojiType=>({emojiType,operatorId:reviewer})),{emojiType:'OK',operatorId:'ou_other'}]}},
+    ],{reviewerOpenId:reviewer});
+    assert.equal(parsed.funnel.initialPassedCount,0);
+    assert.equal(parsed.funnel.initialFailedCount,0);
+    assert.equal(parsed.funnel.initialPendingCount,1);
+    assert.equal(parsed.candidates[0].stage,'unmapped');
+    assert.match(parsed.candidates[0].note,/同时标记 OK 与 No/);
+  }
+  const repeated=parseRecruitmentMessages([{messageId:'om_same',createdAt:'2026-09-24T03:00:00.000Z',
+    text:'求职者【周小雨】是否符合【主播】的邀约标准',
+    reactions:{details:[{emojiType:'OK',operatorId:reviewer},{emojiType:'OK',operatorId:reviewer}]},
+  }],{reviewerOpenId:reviewer});
+  assert.equal(repeated.funnel.initialPassedCount,1);
+});
+
+test('one group message containing multiple candidates or outcomes cannot assign its conclusion to the first name', () => {
+  const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
+  const submissions=['周小雨','林小满'].map((name,index)=>({messageId:`om_submit${index}`,createdAt:`2026-09-24T0${index+1}:00:00.000Z`,
+    text:`求职者【${name}】是否符合【主播】的邀约标准`,reactions:{details:[{emojiType:'OK',operatorId:reviewer}]}}));
+  const messages=[
+    '**周小雨**\n颜值8 表现力8\n- **通过**\n**林小满**\n颜值7 表现力7\n- **不通过**',
+    '**周小雨**\n颜值8\n待确认\n**林小满**\n颜值7\n- **通过**',
+    '**周小雨**\n颜值8\n- **通过**\n**林小满**\n颜值7\n- **通过**',
+  ];
+  for (const text of messages) {
+    const parsed=parseRecruitmentMessages([...submissions,{messageId:'om_group',createdAt:'2026-09-24T04:00:00.000Z',sender:{id:reviewer},text}],{reviewerOpenId:reviewer});
+    assert.equal(parsed.funnel.groupEvaluatedCount,0);
+    assert.equal(parsed.candidates.find(item=>item.name==='周小雨').stage,'initial_pass');
+    assert.equal(parsed.candidates.find(item=>item.name==='林小满').stage,'initial_pass');
+  }
+});
+
+test('an interview report header is not misidentified as the candidate name', () => {
+  const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
+  const parsed=parseRecruitmentMessages([{messageId:'om_report',createdAt:'2026-09-24T04:00:00.000Z',sender:{id:reviewer},
+    text:'面试结果\n**周小雨**\n颜值8 表现力8\n- **通过**'}],{reviewerOpenId:reviewer});
+  assert.equal(parsed.candidates.find(item=>item.name==='周小雨')?.stage,'interview_pass');
+  assert.equal(parsed.candidates.some(item=>item.name==='面试结果'),false);
+});
+
 test('employment parser accepts only verified coaching reports and keeps expected versus actual dates separate', () => {
   const parsed = parseEmploymentMessages([
     {messageId:'e1',createdAt:'2026-09-04T01:10:00.000Z',sender:{name:'倪梦萍'},text:'新人主播-谢红香已入职；谢红香考核通过。'},

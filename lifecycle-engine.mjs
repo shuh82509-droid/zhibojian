@@ -14,7 +14,7 @@ export function chinaDateFor(value = new Date()) {
 function safeName(value) {
   const name = String(value || '').replace(/[：:，,。！？!\s]+$/gu, '').trim();
   if (!/^[\p{Script=Han}·]{2,12}$/u.test(name)) return '';
-  if (/^(候选人|求职者|初审通过|初审不通过|主播|是否符合|招聘端|面试通过)$/u.test(name)) return '';
+  if (/^(候选人|求职者|初审通过|初审不通过|主播|是否符合|招聘端|面试通过|面试结果|面试评价)$/u.test(name)) return '';
   return name;
 }
 
@@ -36,20 +36,30 @@ function findSubmissionNames(text) {
 function reviewerReaction(message, reviewerOpenId) {
   if (!reviewerOpenId) return null;
   const details = Array.isArray(message?.reactions?.details) ? message.reactions.details : [];
-  return details.map(item => ({
+  const decisions = details.map(item => ({
     emoji:String(item?.emojiType || item?.emoji_type || ''),
     operatorId:String(item?.operatorId || item?.operator?.operator_id || item?.operator?.open_id || item?.operator?.id || '')
-  })).find(item => item.operatorId === reviewerOpenId && ['OK','No'].includes(item.emoji));
+  })).filter(item => item.operatorId === reviewerOpenId && ['OK','No'].includes(item.emoji));
+  if (!decisions.length) return null;
+  // Feishu does not promise reaction order. Conflicting marks from the same
+  // reviewer cannot be resolved by whichever item happened to arrive first.
+  return new Set(decisions.map(item => item.emoji)).size === 1 ? decisions[0] : {emoji:null,conflict:true};
 }
 
 function interviewEvaluation(text) {
   const normalized = String(text || '').replace(/\r/gu, '');
   if (!/颜值\s*\d|表现力\s*\d|-\s*(?:通过|不通过)/u.test(normalized) && !/面试(?:评价|结果)/u.test(normalized)) return null;
+  const scoredHeadings = [...normalized.matchAll(/(?:^|\n)\s*\**\s*([\p{Script=Han}·]{2,12})\s*\**\s*(?=\n\s*(?:颜值|表现力)\s*\d)/gu)];
+  if (scoredHeadings.length > 1) return null;
   const nameMatch = normalized.match(/(?:^|\n)\s*\**\s*([\p{Script=Han}·]{2,12})\s*\**\s*(?:\n|颜值)/u);
-  const name = safeName(nameMatch?.[1]);
+  const name = safeName(scoredHeadings[0]?.[1] || nameMatch?.[1]);
   if (!name) return null;
-  if (/不通过/u.test(normalized)) return {name,passed:false};
-  if (/(?<!不)通过/u.test(normalized)) return {name,passed:true};
+  // One group message can discuss several candidates. Never apply an outcome
+  // elsewhere in the message to the first name found in the heading.
+  const outcomes = [...normalized.matchAll(/不通过|(?<!不)通过/gu)].map(item => item[0]);
+  if (outcomes.length > 1) return null;
+  if (outcomes[0] === '不通过') return {name,passed:false};
+  if (outcomes[0] === '通过') return {name,passed:true};
   return {name,passed:null};
 }
 
@@ -205,7 +215,7 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
       submissionEvidence.set(name, {name, date, sourceId:message?.messageId || '', initialReview:reaction?.emoji || null});
       if (reaction?.emoji === 'OK') updateCandidate(candidates, {name, date, stage:'initial_pass', status:'初审通过', note:'倪梦萍在送审消息上标记 OK。', sourceId:message?.messageId});
       else if (reaction?.emoji === 'No') updateCandidate(candidates, {name, date, stage:'initial_fail', status:'初审不通过', note:'倪梦萍在送审消息上标记 No。', sourceId:message?.messageId});
-      else updateCandidate(candidates, {name, date, stage:'unmapped', status:'初审结果待核验', note:'已找到送审记录，但未读到倪梦萍的 OK / No 表情证据。', sourceId:message?.messageId});
+      else updateCandidate(candidates, {name, date, stage:'unmapped', status:'初审结果待核验', note:reaction?.conflict ? '倪梦萍对同一送审消息同时标记 OK 与 No，需本人核验。' : '已找到送审记录，但未读到倪梦萍的 OK / No 表情证据。', sourceId:message?.messageId});
     }
     const senderId = String(message?.sender?.id || '');
     const senderName = String(message?.sender?.name || '');
