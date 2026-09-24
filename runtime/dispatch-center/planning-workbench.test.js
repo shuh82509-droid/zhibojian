@@ -137,8 +137,47 @@ test('parses the authorized monthly schedule without treating blanks as rest or 
   const people = parseRestSource(rows, '2026-09', { 主播甲: { roomName: '品牌精选', entitlement: 4, compNote: '9月补班一次' } });
   assert.equal(people.length, 1);
   assert.equal(people[0].roomName, '品牌精选');
-  assert.equal(people[0].remainingRest, 3);
+  assert.equal(people[0].remainingRest, null, 'partial dates cannot yield a final rest balance');
+  assert.match(people[0].remainingRestReason, /日期列不完整/u);
   assert.deepEqual(people[0].calendar.map((item) => item.status), ['work', 'unassigned', 'rest']);
+});
+
+test('only explicit rest is counted; generic leave and unresolved cells never become monthly rest', () => {
+  const rows = [
+    ['UID','部门','工号','','2026/9/1','2026/9/2','2026/9/3','2026/9/4','2026/9/5','2026/9/6'],
+    ['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','休息','年假','调休','病假','','L（05:30-14:30）'],
+  ];
+  const [person] = parseRestSource(rows,'2026-09',{赵媛:{entitlement:4}});
+  assert.equal(person.usedRest,1);
+  assert.deepEqual(person.calendar.map((day)=>day.status),['rest','leave','leave','leave','unassigned','work']);
+  assert.equal(person.remainingRest,null);
+  assert.equal(person.monthComplete,false);
+  assert.match(person.remainingRestReason,/日期列不完整/u);
+});
+
+test('cross-room and missing formal identity cannot present a final rest balance', () => {
+  const header=['UID','部门','工号','','2026/9/1'];
+  const row=['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','休息'];
+  const crossRoom=parseRestSource([header,row],'2026-09',{赵媛:{entitlement:4,roomName:'官旗'}},{赵媛:'直播间待核验'})[0];
+  assert.equal(crossRoom.sourceStatus,'ambiguous');
+  assert.equal(crossRoom.remainingRest,null);
+  assert.match(crossRoom.sourceReason,/跨房/u);
+  const missingIdentity=parseRestSource([header,['','凡岛-品牌营销部-直播中心-官旗','','赵媛','休息']],'2026-09',{赵媛:{entitlement:4}})[0];
+  assert.equal(missingIdentity.sourceStatus,'ambiguous');
+  assert.equal(missingIdentity.remainingRest,null);
+  assert.match(missingIdentity.sourceReason,/身份/u);
+});
+
+test('even a complete month cannot show final remaining rest until person-level cross-room policy is settled', () => {
+  const dates=Array.from({length:30},(_,index)=>`2026/9/${index+1}`);
+  const values=dates.map((_,index)=>index===0?'休息':'L（05:30-14:30）');
+  const rows=[['UID','部门','工号','',...dates],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛',...values]];
+  const [person]=parseRestSource(rows,'2026-09',{赵媛:{entitlement:4}});
+  assert.equal(person.sourceStatus,'matched');
+  assert.equal(person.monthComplete,true);
+  assert.equal(person.usedRest,1);
+  assert.equal(person.remainingRest,null);
+  assert.match(person.remainingRestReason,/跨直播间个人休息规则待确认/u);
 });
 
 test('filters the real attendance-table schema to the verified anchor roster', () => {
@@ -176,7 +215,21 @@ test('compensation note adjusts the global rest entitlement without treating it 
   assert.equal(restAdjustmentFromNote('上月少休2天'), 2);
   const rows=[['姓名','2026/9/1'],['赵媛','L']];
   const [person]=parseRestSource(rows,'2026-09',{赵媛:{roomName:'官旗',entitlement:7,compNote:'上月多休一天'}});
-  assert.equal(person.baseEntitlement,7);assert.equal(person.entitlement,6);assert.equal(person.remainingRest,6);
+  assert.equal(person.baseEntitlement,7);assert.equal(person.entitlement,7);
+  assert.equal(person.restAdjustment,null,'free-text history is not an approved entitlement adjustment');
+  assert.equal(person.remainingRest,null,'a compensation note cannot finalize a partial-month balance');
+});
+
+test('compound carry-over notes remain visible but never change monthly entitlement', () => {
+  const dates=Array.from({length:30},(_,index)=>`2026/9/${index+1}`);
+  const rows=[['UID','部门','工号','',...dates],
+    ['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛',...dates.map(()=> 'L（05:30-14:30）')]];
+  const [person]=parseRestSource(rows,'2026-09',{赵媛:{entitlement:7,compNote:'上月多休一天，另有调班两次待核'}});
+  assert.equal(person.compNote,'上月多休一天，另有调班两次待核');
+  assert.equal(person.entitlement,7);
+  assert.equal(person.restAdjustment,null);
+  assert.equal(person.remainingRest,null);
+  assert.match(person.remainingRestReason,/补班备注/u);
 });
 
 test('builds an exact total-schedule import preview and exposes unresolved names', () => {
@@ -327,7 +380,14 @@ test('full-month four-room timelines prove role and rest; missing, conflicting, 
   assert.equal(rest.assignmentCount,1,'休息草稿仍保留在预览中');
   const restingAnchor=draft('赵媛','anchor','guanqi','休');
   const restingProof=buildPlanningRoleEvidence(restingAnchor,liveRoleSheets({guanqi:{anchor:(day)=>day===1?'':'赵媛'}}));
-  assert.equal(buildPlanningImportPlan(restingAnchor,rows,504,target,restingProof).ranges.length,1,'other days prove the home role while the rest day has no live shift');
+  const absentRest=buildPlanningImportPlan(restingAnchor,rows,504,target,restingProof);
+  assert.equal(absentRest.ranges.length,0,'other days cannot turn an absent person into explicit rest');
+  assert.match(absentRest.unresolved[0].reason,/缺席或空白不能写为休息/u);
+  const explicitRestSheets=liveRoleSheets({guanqi:{anchor:(day)=>day===1?'':'赵媛'}});
+  explicitRestSheets.guanqi.rows[0][13]='赵媛';
+  explicitRestSheets.guanqi.rows[0][14]='休息';
+  const explicitRest=buildPlanningImportPlan(restingAnchor,rows,504,target,buildPlanningRoleEvidence(restingAnchor,explicitRestSheets));
+  assert.equal(explicitRest.ranges.length,1,'exact home-room rest evidence permits the precise cell');
   const workingOnRest=buildPlanningImportPlan(restingAnchor,rows,504,target,proof);
   assert.equal(workingOnRest.ranges.length,0);assert.match(workingOnRest.unresolved[0].reason,/仍有排播/u);
   const conflictSheets=liveRoleSheets({guanqi:{anchor:'赵媛'},brand_selection:{assistant:'赵媛'}});

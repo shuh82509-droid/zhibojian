@@ -252,6 +252,17 @@ function restAdjustmentFromNote(value) {
   return 0;
 }
 
+function restDayStatus(value) {
+  const text = cellText(value).replace(/\s+/gu, '');
+  if (!text) return 'unassigned';
+  // Paid leave, sick leave and shift swaps do not consume the monthly rest
+  // allowance. Only an explicit rest value in the source is counted.
+  if (/^(休|休息|OFF)$/iu.test(text)) return 'rest';
+  if (/假|调休|请假|休假/u.test(text)) return 'leave';
+  if (/^[A-Za-z][A-Za-z0-9]*(?:[（(][^）)]+[）)])?$/u.test(text)) return 'work';
+  return 'unverified';
+}
+
 function parseRestSource(rows, month, profiles = {}, verifiedAnchorRooms = VERIFIED_ANCHOR_ROOMS) {
   const safeMonth = /^20\d{2}-\d{2}$/u.test(String(month || '')) ? String(month) : ''; if (!safeMonth || !Array.isArray(rows)) return [];
   const yearHint = safeMonth.slice(0, 4); let headerIndex = -1; let dateColumns = [];
@@ -259,6 +270,11 @@ function parseRestSource(rows, month, profiles = {}, verifiedAnchorRooms = VERIF
   if (headerIndex < 0 || !dateColumns.length) return [];
   const duplicateDateColumns = new Set(dateColumns.map((item) => item.date)).size !== dateColumns.length;
   const header = rows[headerIndex] || []; const foundNameColumn = header.findIndex((cell) => /姓名|主播/u.test(cellText(cell))); const employeeNumberColumn = header.findIndex((cell) => /工号/u.test(cellText(cell))); const nameColumn = foundNameColumn >= 0 ? foundNameColumn : employeeNumberColumn >= 0 ? employeeNumberColumn + 1 : 0;
+  const formalIdentityColumns = ['UID', '部门', '工号'].every((value, index) => cellText(header[index]) === value);
+  const [year, monthNumber] = safeMonth.split('-').map(Number);
+  const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  const monthComplete = !duplicateDateColumns && dateColumns.length === daysInMonth &&
+    dateColumns.every((item, index) => item.date === `${safeMonth}-${String(index + 1).padStart(2, '0')}`);
   const eligible = new Set([...Object.keys(verifiedAnchorRooms), ...Object.keys(profiles || {})]); const people = [];
   const nameCounts = new Map();
   rows.slice(headerIndex + 1).forEach((row) => {
@@ -268,15 +284,41 @@ function parseRestSource(rows, month, profiles = {}, verifiedAnchorRooms = VERIF
   const ambiguous = new Set();
   rows.slice(headerIndex + 1).forEach((row) => {
     const name = cellText((row || [])[nameColumn]); if (!name || !eligible.has(name)) return;
-    const profile = profiles[name] || {}; const roomName = ['官旗', '品牌精选', '优选', '王鸥美肤'].includes(profile.roomName) ? profile.roomName : verifiedAnchorRooms[name] || '直播间待核验';
-    if (nameCounts.get(name) !== 1 || duplicateDateColumns) {
-      if (!ambiguous.has(name)) people.push({ name, roomName, sourceStatus: 'ambiguous', sourceReason: duplicateDateColumns ? '总表存在重复日期列，休息统计待核验' : '总表同名人员不唯一，休息统计待核验', usedRest: null, remainingRest: null, maximumConsecutiveWorkDays: null, suggestedRestDate: null, calendar: [], alert: '' });
+    const profile = profiles[name] || {}; const verifiedRoom = verifiedAnchorRooms[name];
+    const roomName = ['官旗', '品牌精选', '优选', '王鸥美肤'].includes(verifiedRoom) ? verifiedRoom :
+      ['官旗', '品牌精选', '优选', '王鸥美肤'].includes(profile.roomName) ? profile.roomName : '直播间待核验';
+    const uid = cellText((row || [])[0]); const employeeNo = cellText((row || [])[2]);
+    const department = cellText((row || [])[1]).replace(/\s+/gu, '');
+    const identityIssue = formalIdentityColumns && (!uid || !employeeNo ||
+      !department.startsWith('凡岛-品牌营销部-直播中心') ||
+      (roomName !== '直播间待核验' && department !== '凡岛-品牌营销部-直播中心' &&
+        !department.startsWith(`凡岛-品牌营销部-直播中心-${roomName}`)));
+    const crossRoomIssue = verifiedRoom === '直播间待核验';
+    if (nameCounts.get(name) !== 1 || duplicateDateColumns || identityIssue || crossRoomIssue) {
+      const sourceReason = duplicateDateColumns ? '总表存在重复日期列，休息统计待核验' :
+        nameCounts.get(name) !== 1 ? '总表同名人员不唯一，休息统计待核验' :
+        crossRoomIssue ? '同人跨房或兼任，个人休息规则待确认' : '总表本人唯一身份或部门待核验';
+      if (!ambiguous.has(name)) people.push({ name, roomName, sourceStatus: 'ambiguous', sourceReason, usedRest: null, remainingRest: null, maximumConsecutiveWorkDays: null, suggestedRestDate: null, calendar: [], alert: '' });
       ambiguous.add(name);
       return;
     }
-    const calendar = dateColumns.map(({ date, columnIndex }) => { const shiftCode = cellText((row || [])[columnIndex]); const status = !shiftCode ? 'unassigned' : /休|假/u.test(shiftCode) ? 'rest' : 'work'; return { date, shiftCode, status }; });
-    const usedRest = calendar.filter((day) => day.status === 'rest').length; const baseEntitlement = Number.isInteger(profile.entitlement) ? profile.entitlement : null; const compNote = String(profile.compNote || ''); const restAdjustment = restAdjustmentFromNote(compNote); const entitlement = baseEntitlement == null ? null : Math.max(0, baseEntitlement + restAdjustment); const maximumConsecutiveWorkDays = longestWorkStreak(calendar); const suggestedRestDate = calendar.find((day, index) => day.status === 'unassigned' && calendar.slice(Math.max(0, index - 6), index).filter((item) => item.status === 'work').length >= 6)?.date || null;
-    people.push({ name, roomName, sourceStatus: 'matched', baseEntitlement, restAdjustment, entitlement, usedRest, remainingRest: entitlement == null ? null : Math.max(0, entitlement - usedRest), compNote, maximumConsecutiveWorkDays, suggestedRestDate, calendar, alert: maximumConsecutiveWorkDays >= 6 ? `最长连续排播 ${maximumConsecutiveWorkDays} 天，建议优先确认休息日。` : '' });
+    const calendar = dateColumns.map(({ date, columnIndex }) => { const shiftCode = cellText((row || [])[columnIndex]); return { date, shiftCode, status: restDayStatus(shiftCode) }; });
+    const usedRest = calendar.filter((day) => day.status === 'rest').length; const baseEntitlement = Number.isInteger(profile.entitlement) ? profile.entitlement : null; const compNote = String(profile.compNote || '');
+    // A free-text carry-over note is evidence to review, not an approved
+    // adjustment to monthly entitlement. The old manual ledger is still pending
+    // recovery, so it must not change a displayed or written balance.
+    const restAdjustment = null; const entitlement = baseEntitlement;
+    const maximumConsecutiveWorkDays = longestWorkStreak(calendar); const suggestedRestDate = calendar.find((day, index) => day.status === 'unassigned' && calendar.slice(Math.max(0, index - 6), index).filter((item) => item.status === 'work').length >= 6)?.date || null;
+    // The four-room person-level rest policy has not been confirmed. A count of
+    // observed explicit rest cells is useful, but it is not a final balance.
+    const remainingRestReason = !monthComplete ? '本月日期列不完整，剩余休息待核验' :
+      calendar.some((day) => !['work','rest'].includes(day.status)) ? '本月存在未排班、请假或待核验班次，剩余休息待核验' :
+      !formalIdentityColumns ? '本人唯一身份未核验，剩余休息待核验' :
+      entitlement == null ? '月应休配置待恢复，剩余休息待核验' :
+      compNote ? '补班备注与跨直播间个人休息规则待核验' : '跨直播间个人休息规则待确认，剩余休息待核验';
+    people.push({ name, roomName, sourceStatus: 'matched', baseEntitlement, restAdjustment, entitlement, usedRest,
+      remainingRest: null, remainingRestReason, monthComplete, compNote, maximumConsecutiveWorkDays,
+      suggestedRestDate, calendar, alert: maximumConsecutiveWorkDays >= 6 ? `最长连续排播 ${maximumConsecutiveWorkDays} 天，建议优先确认休息日。` : '' });
   });
   return people.sort((a, b) => Number(Boolean(b.alert)) - Number(Boolean(a.alert)) || a.roomName.localeCompare(b.roomName, 'zh-CN') || a.name.localeCompare(b.name, 'zh-CN'));
 }

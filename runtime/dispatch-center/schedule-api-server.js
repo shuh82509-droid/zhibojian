@@ -1086,7 +1086,10 @@ function planningImportIdentityIssue({item,name,matches,columnIndex,formattedShi
   if (roster.some((entry) => entry.unverifiedName)) return '四房考勤名单中的本人姓名带未核验备注或同名包含，须先核对来源';
   if (item.rest === true || item.shiftCode === '休') {
     if (sameDayClaims.length || roleEvidence.timelineMentions?.[key]) return '拟休息日期在四房时间轴仍有排播或待定姓名，须先核对来源';
-    return roster.some((entry) => !/^(休息|OFF)$/iu.test(entry.raw.replace(/\s+/gu,''))) ? '拟休息日期在四房考勤名单仍有工作或待定，须先核对来源' : '';
+    // No roster entry means "not observed", not an affirmative rest. Require
+    // exactly one explicit rest cell in the person's verified home room.
+    if (roster.length !== 1 || roster[0].roomCode !== draft.roomCode) return '拟休息日期在四房考勤名单未找到本人唯一休息记录，缺席或空白不能写为休息';
+    return /^(休息|OFF)$/iu.test(roster[0].raw.replace(/\s+/gu,'')) ? '' : '拟休息日期在四房考勤名单仍有工作或待定，须先核对来源';
   }
   if (sameDayClaims.length !== 1) return '拟上班日期在四房时间轴无唯一岗位，须先核对来源';
   if (sameDayClaims[0].roomCode !== draft.roomCode || sameDayClaims[0].role !== draft.role) return '四房同日班表岗位或直播间与草稿不一致';
