@@ -17,7 +17,10 @@ const sourceDate = value => {
  */
 export function inspectInterviewPost(message, candidateName, knownNames = []) {
   const text = String(message?.text || '').replace(/\r/gu,'');
-  if (message?.type !== 'post' || !text || text.length > 8000) return pending('本人面评必须是可核验的招聘群富文本帖');
+  if (message?.type !== 'post' || !text || text.length > 8000
+    || message?.textTruncated || message?.reviewTextTruncated
+    || message?.hasMediaOrResource || message?.resources?.length)
+    return pending('本人面评必须是完整、可核验的招聘群富文本帖');
   const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
   const names = [...new Set([candidateName,...knownNames].filter(name => typeof name === 'string' && name))]
     .sort((a,b) => b.length-a.length || a.localeCompare(b,'zh-CN'));
@@ -51,22 +54,20 @@ export function inspectInterviewPost(message, candidateName, knownNames = []) {
   const unformat=line=>line.replace(/[*_]/gu,''); // Structural checks only; source fingerprints retain the original text.
   if(beforeResult.some(line=>/通过/u.test(unformat(line))))return pending('面评帖在末尾结论前还有结果陈述，归属须人工核验');
   const scored=/^(?:(?:颜值|表现力)\s*[：:]?\s*\d+(?:\.\d+)?(?:\s+|[，,、；;]\s*)?)+$/u;
+  // An open-ended bullet can name a person outside this cycle's roster. Only
+  // explicitly person-free observations are machine-attributable; all other
+  // prose remains visible for the reviewer but cannot produce a signed result.
+  const safeDescription=/^(?:自然流话术较琐碎，须补充用户疑问处理[。.]?|镜头状态(?:稳定|自然|良好|较好|一般|待提升)(?:[，,、；;]\s*互动(?:自然|良好|较好|一般|待提升))?[。；;]?|表现力[：:]\s*(?:答复|回答|表达|口播|互动|讲解)(?:清晰|自然|流畅|良好|较好|一般|待提升)[。；;]?)$/u;
   for(let index=0;index<beforeResult.length;index+=1){
     const line=beforeResult[index];
     if(index===headings[0].index||/^\[Media:\s*[A-Za-z0-9_-]+\]$/u.test(line))continue;
     if(index<headings[0].index&&/^(?:面试结果|面试评价)$/u.test(line))continue;
     if(index>headings[0].index&&scored.test(line))continue;
-    // Preserve descriptive bullets for the reviewer to read, but not another
-    // free-standing heading, inline name+score block, or unlabelled paragraph.
+    // Preserve a narrow set of person-free bullets for the reviewer to read.
+    // The full post remains available through its original Feishu link.
     if(index>headings[0].index&&/^[-—]\s+\S/u.test(line)){
       const description=unformat(line).replace(/^[-—]\s+/u,'').trim();
-      const label=description.match(/^([\p{Script=Han}·]{2,12})\s*[：:]/u)?.[1];
-      const possiblePersonHeading=/^[【\[]?[\p{Script=Han}·]{2,12}[】\]]?[。；;]?$/u.test(description);
-      const personLabel=/^(?:候选人|求职者|姓名)\s*[:：【\[]/u.test(description);
-      const otherResult=/^(?:合格|不合格|淘汰|录用|待定)(?:[^\p{Script=Han}]|$)/u.test(description);
-      if(!possiblePersonHeading&&!personLabel&&!otherResult
-        && (!label||['颜值','表现力','镜头状态'].includes(label))
-        && !/(?:颜值|表现力)\s*[：:]?\s*\d/u.test(description))continue;
+      if(safeDescription.test(description))continue;
     }
     return pending('面评帖含无法唯一归属的标题、评分或段落，须人工核验');
   }
@@ -129,14 +130,22 @@ export function verifyInterviewBindingSources(snapshot, chat, payload, {
     return pending('面评帖并非倪梦萍本人在面试后发布于指定招聘群');
   const post=inspectInterviewPost(posts[0],name,(snapshot.candidates||[]).map(item=>item.name));
   if(post.status!=='ready')return post;
+  const systemMessageTypes=new Set(['system','notice','reaction']);
   const relatedOpinions=chat.messages.filter(item=>item?.messageId!==postId
-    && ['post','text'].includes(item?.type) && item.sender?.id===reviewerOpenId
+    && item.sender?.id===reviewerOpenId && !systemMessageTypes.has(item?.type)
     && Date.parse(item.createdAt)>=endAt && sourceDate(item.createdAt)<=today
-    && String(item.text||'').includes(name)
-    && (/(?:通过|未通过|不通过|更正|改为|面试结论|面评)/u.test(String(item.text||''))
-      ||inspectInterviewPost(item,name,(snapshot.candidates||[]).map(candidate=>candidate.name)).status==='ready'));
+    // A later same-name statement can reverse the result without using one
+    // of our known outcome words. A truncated or opaque message may conceal
+    // the name itself. Image, audio, file, card and future authored message
+    // types cannot be checked from the flattened text. System events and
+    // reactions are not reviewer-authored message bodies.
+    && (!['post','text'].includes(item.type)
+      || item.textTruncated || item.reviewTextTruncated || item.hasMediaOrResource
+      || item.resources?.length
+      || !String(item.text||'').trim() || String(item.text||'').includes(name)
+      || String(item.reviewText||'').includes(name)));
   if(relatedOpinions.length)
-    return pending('同一候选人在面试后存在另一条本人结果或更正消息，结论须人工核验');
+    return pending('面试后存在另一条本人结果、同名消息或不完整内容，结论须人工核验');
   if(post.outcome!==outcome)return pending('本人选择的结论与面评帖末尾明确结论冲突');
   if(candidate.evaluationEvidence?.sourceId&&candidate.evaluationEvidence.sourceId!==postId)
     return pending('当前周期已有另一条面评帖，须先核验相互关系');

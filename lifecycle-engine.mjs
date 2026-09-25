@@ -640,6 +640,12 @@ export function buildInterviewReminderPreview(snapshot, date) {
       || !/^20\d{2}-\d{2}-\d{2}$/u.test(String(candidate?.submissionEvidence?.date || ''))
       || candidate.submissionEvidence.date > date || candidate.calendarEvidence?.eventId !== event.eventId)
       return pending('面试日程与唯一送审候选人无法一一核对');
+    // A carried submission is read from the previous recruitment cycle, but
+    // the self-binding path still accepts only this cycle's submission cohort.
+    // Do not call the full-day 17:00 roster send-ready until that older source
+    // can be signed and read back through the same exact-ID binding path.
+    if (candidate.boundaryCarryover)
+      return pending('跨周期首日候选人的上周期送审与本人面评尚不能完整绑定读回，17:00 提醒待核验');
     matches.push({name:candidate.name,eventId:event.eventId || ''});
   }
   const unique = [...new Set(matches.map(item => item.name))];

@@ -2548,10 +2548,11 @@ async function interviewBindingSources(month,{fresh=true}={}) {
 function interviewBindingOptions(snapshot,chat) {
   const options=[];
   const knownNames=(snapshot.candidates||[]).map(item=>item.name).filter(Boolean);
-  const sourceReviewable=item=>{
+  const sourceReviewable=(item,{plainOnly=false}={})=>{
     const body=String(item?.reviewText??item?.text??'');
     const hasOriginalLink=/^https:\/\/applink\.feishu\.cn\/client\/chat\/open\?/u.test(String(item?.appLink||''));
     return Boolean(item&&body.trim()&&body.length<=8000&&!item.textTruncated&&!item.reviewTextTruncated
+      &&(!plainOnly||!(item.hasMediaOrResource||item.resources?.length))
       &&(hasOriginalLink||!(item.hasMediaOrResource||item.resources?.length)));
   };
   for(const candidate of snapshot.candidates||[]) {
@@ -2570,7 +2571,7 @@ function interviewBindingOptions(snapshot,chat) {
         calendarId:recruitmentCalendarId,today:chinaDateFor()});
       if(binding.status!=='ready')continue;
       const submission=chat.messages.find(item=>item.messageId===binding.submissionMessageId);
-      if(!sourceReviewable(submission)||!sourceReviewable(post))continue;
+      if(!sourceReviewable(submission)||!sourceReviewable(post,{plainOnly:true}))continue;
       options.push({candidateName:candidate.name,submissionMessageId:binding.submissionMessageId,
         submissionDate:candidate.submissionEvidence.date,calendarEventId:binding.calendarEventId,
         calendarDate:binding.calendarDate,calendarTitle:candidate.calendarEvidence.title,
@@ -2601,15 +2602,16 @@ async function submitInterviewBinding(req,auth) {
     const binding=verifyInterviewBindingSources(snapshot,chat,payload,{reviewerOpenId:actorOpenId,
       recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor()});
     if(binding.status!=='ready')throw new FeishuError(binding.reason,409,'interview_binding_source_unverified');
-    const sourceReviewable=item=>{
+    const sourceReviewable=(item,{plainOnly=false}={})=>{
       const body=String(item?.reviewText??item?.text??'');
       const hasOriginalLink=/^https:\/\/applink\.feishu\.cn\/client\/chat\/open\?/u.test(String(item?.appLink||''));
       return Boolean(item&&body.trim()&&body.length<=8000&&!item.textTruncated&&!item.reviewTextTruncated
+        &&(!plainOnly||!(item.hasMediaOrResource||item.resources?.length))
         &&(hasOriginalLink||!(item.hasMediaOrResource||item.resources?.length)));
     };
     const submission=chat.messages.find(item=>item.messageId===binding.submissionMessageId);
     const post=chat.messages.find(item=>item.messageId===binding.postMessageId);
-    if(!sourceReviewable(submission)||!sourceReviewable(post))
+    if(!sourceReviewable(submission)||!sourceReviewable(post,{plainOnly:true}))
       throw new FeishuError('送审或面评来源含无法在此页完整核对的内容，请先在飞书原消息核验并重新读取。',409,'interview_binding_source_not_reviewable');
     if(payload.expectedSourceFingerprint!==binding.sourceFingerprint)
       throw new FeishuError('送审、日历或面评帖在打开页面后发生变化，请重新读取后核对。',409,'interview_binding_source_changed');

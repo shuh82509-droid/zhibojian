@@ -173,7 +173,12 @@ test('17:00 first-day preview needs verified prior-cycle carryover and binds its
     boundaryCarryover:{status:'verified',date,sourceCycle:'2026-09',chatMessages:386,
       submissionMessageCounts:{周小雨:1}},
     interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',eventId:'cal_one'}]}};
-  assert.equal(buildInterviewReminderPreview(snapshot,date).status,'preview');
+  const carried=buildInterviewReminderPreview(snapshot,date);
+  assert.equal(carried.status,'pending');
+  assert.match(carried.reason,/跨周期首日候选人/u);
+  const currentCycle={...snapshot,candidates:[{...candidate,inSubmissionCohort:true,boundaryCarryover:false}],
+    submissionMessageCounts:{周小雨:1}};
+  assert.equal(buildInterviewReminderPreview(currentCycle,date).status,'preview');
   assert.equal(buildInterviewReminderPreview({...snapshot,boundaryCarryover:{...snapshot.boundaryCarryover,status:'pending'}},date).status,'pending');
   assert.equal(buildInterviewReminderPreview({...snapshot,boundaryCarryover:{...snapshot.boundaryCarryover,submissionMessageCounts:{周小雨:2}}},date).status,'pending');
   assert.equal(buildInterviewReminderPreview({...snapshot,coverage:{...snapshot.coverage,reactionStatus:'待核验'}},date).status,'pending');

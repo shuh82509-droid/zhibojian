@@ -74,7 +74,7 @@ test('无原帖直达链接的纯文本来源向本人完整展示，而非 180 
   assert.match(html,/\.assessment-source-text\{[^}]*white-space:pre-wrap/u);
 });
 
-test('媒体来源无可核原帖链接时，不出现在本人可办选项',()=>{
+test('面评帖媒体即使有原帖链接也不能证明机器读到了完整结果',()=>{
   const {snapshot,chat,submission,post}=fixture();
   submission.resources=[{type:'image',key:'img_one'}];
   assert.equal(optionsFor(snapshot,chat).length,0);
@@ -82,6 +82,11 @@ test('媒体来源无可核原帖链接时，不出现在本人可办选项',()=
   post.resources=[{type:'file',key:'file_one'}];
   assert.equal(optionsFor(snapshot,chat).length,0);
   post.appLink='https://applink.feishu.cn/client/chat/open?openChatId=oc_recruitment&position=1';
+  assert.equal(optionsFor(snapshot,chat).length,0);
+  post.resources=[];
+  post.hasMediaOrResource=true;
+  assert.equal(optionsFor(snapshot,chat).length,0);
+  post.hasMediaOrResource=false;
   assert.equal(optionsFor(snapshot,chat).length,1);
   post.textTruncated=true;
   assert.equal(optionsFor(snapshot,chat).length,0);
@@ -142,12 +147,16 @@ test('完整审阅文本仅在本人绑定的专用实时源读取中返回，�
   assert.match(source,/getChatMessages\('recruitment',1000,\{\.\.\.cycle,fresh,includeReviewText:true\}\)/u);
 });
 
-test('绕过页面直接 POST 无链接媒体也禁办；纯文本仍可提交',async()=>{
+test('绕过页面直接 POST 的面评媒体即使有链接也禁办；纯文本仍可提交',async()=>{
   const {snapshot,chat,post}=fixture();
   post.resources=[{type:'image',key:'img_one'}];
   const denied=submitFor(snapshot,chat);
   await assert.rejects(denied.submit(denied.req,{}),error=>error.status===409);
   assert.equal(denied.writes(),0);
+  post.appLink='https://applink.feishu.cn/client/chat/open?openChatId=oc_recruitment&position=1';
+  const linked=submitFor(snapshot,chat);
+  await assert.rejects(linked.submit(linked.req,{}),error=>error.status===409);
+  assert.equal(linked.writes(),0);
   post.resources=[];
   const allowed=submitFor(snapshot,chat);
   assert.equal((await allowed.submit(allowed.req,{})).postMessageId,'om_post');

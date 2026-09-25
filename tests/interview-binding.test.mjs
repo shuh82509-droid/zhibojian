@@ -42,6 +42,16 @@ test('本人富文本帖允许自由描述，但仅末尾明确结论与唯一�
   assert.equal(inspectInterviewPost({...chat.messages[1],text:'面试结果\n**周小雨**\n颜值4 表现力4\n**未知新人**\n颜值3 表现力3\n- **不通过**'},'周小雨',['周小雨']).status,'pending');
 });
 
+test('当期名单以外的第二人混入自由描述时不能归属末尾结论',()=>{
+  const {snapshot,chat,payload}=fixture();
+  const mixed={...chat.messages[1],text:'面试结果\n**周小雨**\n颜值4 表现力4\n- 李晓燕也参加本轮面试，镜头状态一般\n- **不通过**@倪梦萍'};
+  assert.equal(inspectInterviewPost(mixed,'周小雨',['周小雨']).status,'pending');
+  assert.equal(verifyInterviewBindingSources(snapshot,{...chat,messages:[chat.messages[0],mixed]},payload,options).status,'pending');
+  assert.equal(inspectInterviewPost({...chat.messages[1],textTruncated:true},'周小雨',['周小雨']).status,'pending');
+  assert.equal(inspectInterviewPost({...chat.messages[1],hasMediaOrResource:true},'周小雨',['周小雨']).status,'pending');
+  assert.equal(inspectInterviewPost({...chat.messages[1],resources:[{type:'image',key:'img_one'}]},'周小雨',['周小雨']).status,'pending');
+});
+
 test('三项精确来源加本人身份和帖末结论共同构成可绑定证据',()=>{
   const {snapshot,chat,payload}=fixture();
   const result=verifyInterviewBindingSources(snapshot,chat,payload,options);
@@ -124,6 +134,33 @@ test('同一候选人的两条本人面评帖即使结论一致，也不能任�
   assert.equal(verifyInterviewBindingSources(snapshot,sameConclusion,payload,options).status,'pending');
   const correction={...two,messages:[...chat.messages,{...second,type:'text',text:'更正：周小雨面试通过。'}]};
   assert.equal(verifyInterviewBindingSources(snapshot,correction,payload,options).status,'pending');
+});
+
+test('本人面试后另发同名口语结论、截断帖或不完整富文本时原绑定保持待核验',()=>{
+  const {snapshot,chat,payload}=fixture();
+  for(const extra of [
+    {type:'text',text:'周小雨：淘汰'},
+    {type:'text',text:'周小雨：录用'},
+    {type:'text',text:'周小雨：待定'},
+    {type:'post',text:'其它候选人的面评'.repeat(500),textTruncated:true},
+    {type:'post',text:'其它候选人的面评',reviewTextTruncated:true},
+    {type:'post',text:'其它候选人的面评',hasMediaOrResource:true},
+    {type:'image',text:'',resources:[{type:'image',key:'img_one'}]},
+    {type:'file',text:'',resources:[{type:'file',key:'file_one'}]},
+    {type:'audio',text:'',hasMediaOrResource:true},
+    {type:'media',text:'',hasMediaOrResource:true},
+    {type:'interactive',text:'卡片内容'},
+  ]){
+    const second={...extra,messageId:'om_later',chatId,sender:{id:reviewer},createdAt:'2026-09-24T10:30:00.000Z'};
+    const expanded={...chat,sourceMessageCount:3,messages:[...chat.messages,second]};
+    assert.equal(verifyInterviewBindingSources(snapshot,expanded,payload,options).status,'pending',extra.text.slice(0,20));
+  }
+  const unrelated={...chat.messages[1],messageId:'om_other',text:'面试结果\n**陈小河**\n颜值4 表现力4\n- **通过**@倪梦萍',createdAt:'2026-09-24T10:30:00.000Z'};
+  assert.equal(verifyInterviewBindingSources(snapshot,{...chat,sourceMessageCount:3,messages:[...chat.messages,unrelated]},payload,options).status,'ready');
+  for(const type of ['system','notice','reaction']){
+    const metadata={messageId:'om_metadata',chatId,type,text:'周小雨：通过',sender:{id:reviewer},createdAt:'2026-09-24T10:30:00.000Z'};
+    assert.equal(verifyInterviewBindingSources(snapshot,{...chat,sourceMessageCount:3,messages:[...chat.messages,metadata]},payload,options).status,'ready',type);
+  }
 });
 
 test('本人签署投影有读回；来源变更、重复记录或自动结论冲突不冒充面试通过',()=>{
