@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import vm from 'node:vm';
 import {activeChatMessages,readCompleteMessageReactions,linkVerifiedRecruitmentCalendar,
   linkRecruitmentCalendarAcrossBoundary,recruitmentCycleMonthForDate,recruitmentCycleRange,
-  recruitmentBoundaryCycleRange,parseRecruitmentMessages} from '../lifecycle-engine.mjs';
+  recruitmentBoundaryCycleRange,parseRecruitmentMessages,buildInterviewReminderPreview} from '../lifecycle-engine.mjs';
 
 const reaction=(operator_id,emoji_type,index)=>({operator:{operator_id},emoji_type,action_time:String(1700000000000+index)});
 const page=(messageId,items,{more=false,token='',count=items.length}={})=>({
@@ -404,6 +404,41 @@ test('cross-cycle repeated name, current-cycle collision and duplicate event all
   const duplicate=linkRecruitmentCalendarAcrossBoundary([],prior,{'2026-09-25':[...day['2026-09-25'],calendarEvent('周小雨复试','cal_two')]},{},options);
   assert.equal(duplicate.boundary.status,'pending');
   assert.equal(duplicate.carryCandidates.length,0);
+});
+
+test('a new-cycle first-day interview cannot inherit a previous-cycle outcome or interview evidence',()=>{
+  const range=recruitmentBoundaryCycleRange('2026-10');
+  const candidate=submissionCandidate('周小雨',{sourceId:'om_prior',date:'2026-09-23'});
+  const options={boundaryDate:range.date,previousCycle:range.previous,currentSourceReady:true,previousSourceReady:true,advanceStage:true};
+  for(const extra of [
+    {stage:'interview_pass',evaluationEvidence:{passed:true,date:'2026-09-24',sourceId:'om_old_pass'}},
+    {stage:'interview_fail',evaluationEvidence:{passed:false,date:'2026-09-24',sourceId:'om_old_fail'}},
+    {stage:'pending_feedback',evaluationEvidence:{passed:null,date:'2026-09-24',sourceId:'om_old_feedback'}},
+    {stage:'interview_pass',startDate:'2026-09-28'},
+    {calendarEvidence:{eventId:'cal_old',date:'2026-09-24',title:'周小雨面试'}},
+    {evaluationEvidence:{passed:true,date:'2026-09-22',sourceId:'om_before_submission'}},
+  ]){
+    const prior={candidates:[{...candidate,...extra}],submissionMessageCounts:{周小雨:1}};
+    const original=structuredClone(prior);
+    const result=linkRecruitmentCalendarAcrossBoundary([],prior,
+      {'2026-09-25':[calendarEvent('周小雨复试','cal_new')]},{},options);
+    assert.equal(result.boundary.status,'pending',JSON.stringify(extra));
+    assert.equal(result.matchedCount,null);
+    assert.equal(result.carryCandidates.length,0);
+    assert.deepEqual(prior,original,'prior-cycle evidence must remain intact');
+    const preview=buildInterviewReminderPreview({candidates:result.candidates,boundaryCarryover:result.boundary,
+      calendarStatus:'已连接：正式面试日历',coverage:{capped:false,reactionStatus:'已核验',chatMessages:0},
+      submissionMessageCounts:{},interviewEvents:{'2026-09-25':[calendarEvent('周小雨复试','cal_new')]}},range.date);
+    assert.equal(preview.status,'pending','an old result cannot make the first-day reminder send-ready');
+    assert.equal(preview.readyForSend,false);
+  }
+  const unrelatedOld={candidates:[{...candidate,stage:'interview_pass',
+    evaluationEvidence:{passed:true,date:'2026-09-24',sourceId:'om_old_pass'}}],submissionMessageCounts:{周小雨:1}};
+  const current=submissionCandidate('林小满',{sourceId:'om_current',date:'2026-09-25'});
+  const independent=linkRecruitmentCalendarAcrossBoundary([current],unrelatedOld,
+    {'2026-09-25':[calendarEvent('林小满面试','cal_current')]},{林小满:1},options);
+  assert.equal(independent.boundary.status,'verified','an unrelated older result must not block the current interview');
+  assert.equal(independent.candidates[0].stage,'pending_feedback');
 });
 
 test('first-day current-cycle report for a prior-cycle candidate does not duplicate or re-remind that person',()=>{

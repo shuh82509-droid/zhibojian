@@ -295,7 +295,7 @@ async function cached(key, ttl, loader) {
   return value;
 }
 function parseMessageContent(raw) { try { return JSON.parse(raw || '{}'); } catch { return { text: String(raw || '') }; } }
-function messageText(value) {
+function messageText(value, maxLength = 8000, dedupe = true) {
   const parts = [];
   const visit = item => {
     if (typeof item === 'string') return;
@@ -306,7 +306,10 @@ function messageText(value) {
     Object.entries(item).forEach(([key, child]) => { if (!['text','title','image_key','file_key'].includes(key)) visit(child); });
   };
   visit(value);
-  return [...new Set(parts.map(part => part.trim()).filter(Boolean))].join('\n').slice(0, 8000);
+  const visibleParts=dedupe
+    ?[...new Set(parts.map(part => part.trim()).filter(Boolean))]
+    :parts.filter(part => part.trim());
+  return visibleParts.join('\n').slice(0, maxLength);
 }
 function messageResources(value) {
   const resources = [];
@@ -321,12 +324,35 @@ function messageResources(value) {
   return resources.slice(0, 20);
 }
 async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
+  function messageHasMediaOrResource(value) {
+    let found = false;
+    const visit = item => {
+      if (found || !item || typeof item !== 'object') return;
+      if (Array.isArray(item)) { item.forEach(visit); return; }
+      const tag=String(item.tag || '').toLowerCase();
+      // A mention, hyperlink or unknown rich-text node may carry meaning that
+      // the extracted plain text cannot show. Without an original link it is
+      // not safe to ask the reviewer to sign the flattened text alone.
+      if (tag && !['text','plain_text'].includes(tag)) {
+        found = true; return;
+      }
+      for (const [key, child] of Object.entries(item)) {
+        if (typeof child === 'string' && child && /(?:image|file|media|video|audio|sticker|resource|attachment)_key$/iu.test(key)) {
+          found = true; return;
+        }
+        visit(child);
+      }
+    };
+    visit(value);
+    return found;
+  }
   const source = feishuChats[sourceKey];
   if (!source) throw new FeishuError('未知的群聊数据源。', 404, 'unknown_chat_source');
   const requested = Math.min(1000, Math.max(1, Number(limit) || 20));
   const startTime = Math.max(0, Number(timeRange.startTime || timeRange.start_time) || 0);
   const endTime = Math.max(0, Number(timeRange.endTime || timeRange.end_time) || 0);
-  const cacheKey=`chat:${sourceKey}:${requested}:${startTime}:${endTime}`;
+  const includeReviewText=timeRange.includeReviewText===true;
+  const cacheKey=`chat:${sourceKey}:${requested}:${startTime}:${endTime}:${includeReviewText?'review':'standard'}`;
   const load=async () => {
     const items = [];
     let pageToken = '';
@@ -382,11 +408,16 @@ async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
     }
     const messages = activeItems.map(item => {
       const content = parseMessageContent(item.body?.content);
+      const extractedText = messageText(content, 8001);
+      const reviewText = includeReviewText?messageText(content, 8001, false):'';
       return {
         messageId: item.message_id,
         chatId: item.chat_id,
         type: item.msg_type,
-        text: messageText(content),
+        text: extractedText.slice(0, 8000),
+        textTruncated: extractedText.length > 8000,
+        ...(includeReviewText?{reviewText:reviewText.slice(0, 8000),reviewTextTruncated:reviewText.length > 8000}:{}),
+        hasMediaOrResource: messageHasMediaOrResource(content),
         contentFingerprint: createHash('sha256').update(String(item.body?.content || '')).digest('hex'),
         sender: { id: item.sender?.id || '', name: item.sender?.sender_name || item.sender?.name || '' },
         createdAt: item.create_time ? new Date(Number(item.create_time)).toISOString() : null,
@@ -401,6 +432,12 @@ async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
       sourceMessageCount:items.length, deletedMessageCount:items.length - activeItems.length,
       truncated, paginationIssue, fetchedAt: new Date().toISOString(), reactionStatus, reactionFailure };
   };
+  // Full review bodies contain source text for a single verified OA actor.
+  // Never retain them in the shared chat cache or allow a stale read.
+  if(includeReviewText){
+    if(timeRange.fresh!==true)throw new FeishuError('本人面评来源必须实时读取。',409,'interview_binding_requires_fresh_source');
+    return load();
+  }
   // The send path bypasses the UI cache, then refreshes it after a complete
   // read. Otherwise a new submission inside the last 60 seconds can be missed.
   if(timeRange.fresh===true){const value=await load();feishuCache.set(cacheKey,{value,expiresAt:Date.now()+60000});return value;}
@@ -2501,7 +2538,7 @@ async function verifiedInterviewBindingActor(auth) {
 }
 async function interviewBindingSources(month,{fresh=true}={}) {
   const cycle=recruitmentCycleRange(month);
-  const chat=await getChatMessages('recruitment',1000,{...cycle,fresh});
+  const chat=await getChatMessages('recruitment',1000,{...cycle,fresh,includeReviewText:true});
   // The candidate projection and signed source verifier must inspect the exact
   // same fresh group snapshot; a separate cached read could pair an old OK
   // reaction with an edited or recalled submission.
@@ -2511,6 +2548,12 @@ async function interviewBindingSources(month,{fresh=true}={}) {
 function interviewBindingOptions(snapshot,chat) {
   const options=[];
   const knownNames=(snapshot.candidates||[]).map(item=>item.name).filter(Boolean);
+  const sourceReviewable=item=>{
+    const body=String(item?.reviewText??item?.text??'');
+    const hasOriginalLink=/^https:\/\/applink\.feishu\.cn\/client\/chat\/open\?/u.test(String(item?.appLink||''));
+    return Boolean(item&&body.trim()&&body.length<=8000&&!item.textTruncated&&!item.reviewTextTruncated
+      &&(hasOriginalLink||!(item.hasMediaOrResource||item.resources?.length)));
+  };
   for(const candidate of snapshot.candidates||[]) {
     if(!candidate.inSubmissionCohort||!candidate.submissionEvidence?.sourceId||!candidate.calendarEvidence?.eventId
       ||(snapshot.interviewBindings||[]).some(item=>item.submissionMessageId===candidate.submissionEvidence.sourceId))continue;
@@ -2526,13 +2569,16 @@ function interviewBindingOptions(snapshot,chat) {
       },{reviewerOpenId:recruitmentReviewerOpenId,recruitmentChatId:feishuChats.recruitment.chatId,
         calendarId:recruitmentCalendarId,today:chinaDateFor()});
       if(binding.status!=='ready')continue;
+      const submission=chat.messages.find(item=>item.messageId===binding.submissionMessageId);
+      if(!sourceReviewable(submission)||!sourceReviewable(post))continue;
       options.push({candidateName:candidate.name,submissionMessageId:binding.submissionMessageId,
         submissionDate:candidate.submissionEvidence.date,calendarEventId:binding.calendarEventId,
         calendarDate:binding.calendarDate,calendarTitle:candidate.calendarEvidence.title,
         postMessageId:binding.postMessageId,postDate:binding.postDate,
-        submissionLink:chat.messages.find(item=>item.messageId===binding.submissionMessageId)?.appLink||'',
+        submissionLink:submission.appLink||'',
         postLink:post.appLink||'',
-        postExcerpt:String(post.text||'').slice(0,180),postOutcome:binding.outcome,
+        submissionText:String(submission.reviewText??submission.text),
+        postText:String(post.reviewText??post.text),postOutcome:binding.outcome,
         sourceFingerprint:binding.sourceFingerprint});
     }
   }
@@ -2555,6 +2601,16 @@ async function submitInterviewBinding(req,auth) {
     const binding=verifyInterviewBindingSources(snapshot,chat,payload,{reviewerOpenId:actorOpenId,
       recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor()});
     if(binding.status!=='ready')throw new FeishuError(binding.reason,409,'interview_binding_source_unverified');
+    const sourceReviewable=item=>{
+      const body=String(item?.reviewText??item?.text??'');
+      const hasOriginalLink=/^https:\/\/applink\.feishu\.cn\/client\/chat\/open\?/u.test(String(item?.appLink||''));
+      return Boolean(item&&body.trim()&&body.length<=8000&&!item.textTruncated&&!item.reviewTextTruncated
+        &&(hasOriginalLink||!(item.hasMediaOrResource||item.resources?.length)));
+    };
+    const submission=chat.messages.find(item=>item.messageId===binding.submissionMessageId);
+    const post=chat.messages.find(item=>item.messageId===binding.postMessageId);
+    if(!sourceReviewable(submission)||!sourceReviewable(post))
+      throw new FeishuError('送审或面评来源含无法在此页完整核对的内容，请先在飞书原消息核验并重新读取。',409,'interview_binding_source_not_reviewable');
     if(payload.expectedSourceFingerprint!==binding.sourceFingerprint)
       throw new FeishuError('送审、日历或面评帖在打开页面后发生变化，请重新读取后核对。',409,'interview_binding_source_changed');
     const journal=await readRecruitmentInterviewJournal();

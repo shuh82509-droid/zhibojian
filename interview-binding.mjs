@@ -44,8 +44,32 @@ export function inspectInterviewPost(message, candidateName, knownNames = []) {
   const named=new RegExp(`^(?:\\*{1,2})?${escapeRegExp(candidateName)}(?:\\*{1,2})?\\s*[：:—-]\\s*(?:\\*{1,2})?(未通过|不通过|通过)(?:\\*{1,2})?$`,'u');
   const result=last.match(/^(?:[-—]\s*)?(?:\*{1,2})?(未通过|不通过|通过)(?:\*{1,2})?(?:\s*@倪梦萍)?$/u)||last.match(named);
   if(!result)return pending('面评帖末尾没有唯一、明确的通过或不通过结论');
-  const otherConclusions=lines.slice(0,-1).filter(line=>/^(?:[-—]\s*)?(?:\*{1,2})?(?:未通过|不通过|通过)(?:\*{1,2})?$/u.test(line));
-  if(otherConclusions.length)return pending('面评帖包含多个独立结论');
+  // The current cycle's roster is not a complete list of people who can be
+  // mentioned in a post. A second person's named conclusion must not slip
+  // through merely because that person was submitted in an older cycle.
+  const beforeResult=lines.slice(0,-1);
+  const unformat=line=>line.replace(/[*_]/gu,''); // Structural checks only; source fingerprints retain the original text.
+  if(beforeResult.some(line=>/通过/u.test(unformat(line))))return pending('面评帖在末尾结论前还有结果陈述，归属须人工核验');
+  const scored=/^(?:(?:颜值|表现力)\s*[：:]?\s*\d+(?:\.\d+)?(?:\s+|[，,、；;]\s*)?)+$/u;
+  for(let index=0;index<beforeResult.length;index+=1){
+    const line=beforeResult[index];
+    if(index===headings[0].index||/^\[Media:\s*[A-Za-z0-9_-]+\]$/u.test(line))continue;
+    if(index<headings[0].index&&/^(?:面试结果|面试评价)$/u.test(line))continue;
+    if(index>headings[0].index&&scored.test(line))continue;
+    // Preserve descriptive bullets for the reviewer to read, but not another
+    // free-standing heading, inline name+score block, or unlabelled paragraph.
+    if(index>headings[0].index&&/^[-—]\s+\S/u.test(line)){
+      const description=unformat(line).replace(/^[-—]\s+/u,'').trim();
+      const label=description.match(/^([\p{Script=Han}·]{2,12})\s*[：:]/u)?.[1];
+      const possiblePersonHeading=/^[【\[]?[\p{Script=Han}·]{2,12}[】\]]?[。；;]?$/u.test(description);
+      const personLabel=/^(?:候选人|求职者|姓名)\s*[:：【\[]/u.test(description);
+      const otherResult=/^(?:合格|不合格|淘汰|录用|待定)(?:[^\p{Script=Han}]|$)/u.test(description);
+      if(!possiblePersonHeading&&!personLabel&&!otherResult
+        && (!label||['颜值','表现力','镜头状态'].includes(label))
+        && !/(?:颜值|表现力)\s*[：:]?\s*\d/u.test(description))continue;
+    }
+    return pending('面评帖含无法唯一归属的标题、评分或段落，须人工核验');
+  }
   return {status:'ready',outcome:result[1]==='通过'?'pass':'fail'};
 }
 

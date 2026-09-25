@@ -58,6 +58,41 @@ test('三项精确来源加本人身份和帖末结论共同构成可绑定证�
   assert.equal(verifyInterviewBindingSources(snapshot,beforeEnd,payload,options).status,'pending');
 });
 
+test('第二人未出现在当期名单时，具名结论或第二份面评仍不能绑定到首人',()=>{
+  const {snapshot,chat,payload}=fixture();
+  for(const body of [
+    '林小满：通过',
+    '- 林小满：通过',
+    '- **通过**@倪梦萍',
+    '- **周小雨：通过**',
+    '- 结论（林小满）：通过',
+    '林小满：颜值8 表现力8',
+    '**林小满**\n待补充评分',
+    '- **林小满**',
+    '- 林小满',
+    '- 林小满：淘汰',
+    '- 林小满：面评如下',
+    '- 求职者【林小满】',
+    '- 林小满：颜值8 表现力8',
+    '- 林小满：通**过**',
+    '- **通**过',
+    '- __林小满__',
+    '- 淘汰 ✅',
+  ]){
+    const mixed={...chat.messages[1],text:`**周小雨**\n颜值4 表现力4\n${body}\n- **不通过**@倪梦萍`};
+    assert.equal(inspectInterviewPost(mixed,'周小雨',['周小雨']).status,'pending',body);
+    assert.equal(verifyInterviewBindingSources(snapshot,{...chat,messages:[chat.messages[0],mixed]},payload,options).status,'pending',body);
+  }
+  const verified=verifyInterviewBindingSources(snapshot,chat,payload,options);
+  const signed={...verified,id:'65acc534-c889-47e9-a80e-9832bd142039',actorOpenId:reviewer,
+    source:'structured_self_interview_binding',createdAt:'2026-09-24T11:00:00.000Z'};
+  const edited={...chat,messages:[chat.messages[0],{...chat.messages[1],
+    text:'**周小雨**\n颜值4 表现力4\n- 林小满：通过\n- **不通过**@倪梦萍'}]};
+  const reread=projectInterviewBindings(snapshot,edited,[signed],options);
+  assert.equal(reread.candidates[0].interviewBinding.status,'pending');
+  assert.equal(reread.funnel.groupEvaluatedCount,0);
+});
+
 test('同名、初审未通过、多日历事件、伪造发送人及撤回帖均保持待核验',()=>{
   const {snapshot,chat,payload}=fixture();
   assert.equal(verifyInterviewBindingSources({...snapshot,submissionMessageCounts:{周小雨:2}},chat,payload,options).status,'pending');

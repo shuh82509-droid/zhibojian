@@ -489,6 +489,14 @@ export function linkRecruitmentCalendarAcrossBoundary(currentCandidates = [], pr
     && item.submissionEvidence?.date >= previousCycle.startDate
     && item.submissionEvidence?.date < previousCycle.endDate)
     .map(item => ({...item,boundaryCarryoverDate:boundaryDate,boundarySourceCycle:previousCycle.month}));
+  // A first-day event can carry an unreviewed, OK-marked submission, not the
+  // previous cycle's interview result. Retests and offers need a new explicit
+  // source association; retaining the old pass/fail would label the new event
+  // as already evaluated. Leave the old record untouched and fail closed.
+  if(prior.some(item=>firstDayEvents.some(event=>calendarTitleNamesPerson(event.name,item.name))
+    && (item.stage!=='initial_pass'||item.evaluationEvidence||item.calendarEvidence
+      ||item.interviewBinding||item.startDate||item.actualStartDate)))
+    return pending('上周期已有面评、面试或录用证据，不能自动归属到新周期首日面试');
   // A new-cycle report for the same person is a separate, unlinked assertion.
   // Do not render it beside an older submission as two contradictory people or
   // send a reminder from the older row until the evidence is reconciled.
