@@ -27,6 +27,7 @@ async function candidate(t,dir,readOnly,options={}){
       FEISHU_APP_ID:readOnly?'fixture':'',FEISHU_APP_SECRET:readOnly?'fixture':'',
       TOTAL_SCHEDULE_SPREADSHEET_TOKEN:token,TOTAL_SCHEDULE_SHEET_ID:'0jFdXf',
       PLANNING_DRAFT_WRITES_ENABLED:options.draftWrites?'1':'0',PLANNING_TOTAL_IMPORT_ENABLED:options.totalImport?'1':'0',
+      PLANNING_REST_STATISTICS_ENABLED:options.restStatistics?'1':'0',
        ...(options.mockFeishu?{NODE_OPTIONS:`--require=${path.join(__dirname,'planning-live-source-test-fixture.js')}`,TEST_FEISHU_REVISION:String(options.mockRevision ?? (options.fullRestSource ? 505 : 499)),TEST_MONTHLY_REST_FULL:options.fullRestSource?'1':'0'}:{}),
       ...(options.authorityBase?{CENTRAL_AUTHORITY_BASE:options.authorityBase}:{})},
   });
@@ -164,9 +165,21 @@ test('read-only source behind baseline revision is marked unverified, without ze
   assert.match(rest.reason,/未通过新基线核验/);
 });
 
-test('administrator reads 52-person monthly rest counts without creating a draft or import',async t=>{
+test('monthly rest statistics stay hidden and reject direct reads before source access when the flag is off',async t=>{
   const dir=folder(t);fs.writeFileSync(path.join(dir,'planning-baseline-manifest.json'),JSON.stringify(source()));
-  const base=await candidate(t,dir,true,{mockFeishu:true,fullRestSource:true});
+  const base=await candidate(t,dir,true);
+  const response=await fetch(base+'/api/planning/rest-statistics?month=2026-09');
+  assert.equal(response.status,423);
+  assert.equal((await response.json()).code,'REST_STATISTICS_DISABLED');
+  const capability=await (await fetch(base+'/api/planning')).json();
+  assert.equal(capability.restStatisticsCapability.enabled,false);
+  assert.equal(fs.existsSync(path.join(dir,'planning-workbench.json')),false);
+  assert.equal(fs.existsSync(path.join(dir,'schedule-writeback-audit.ndjson')),false);
+});
+
+test('administrator reads 52-person monthly rest counts without creating a draft or import when enabled',async t=>{
+  const dir=folder(t);fs.writeFileSync(path.join(dir,'planning-baseline-manifest.json'),JSON.stringify(source()));
+  const base=await candidate(t,dir,true,{mockFeishu:true,fullRestSource:true,restStatistics:true});
   const capability=await (await fetch(base+'/api/planning')).json();
   assert.equal(capability.restStatisticsCapability.enabled,true);
   const response=await fetch(base+'/api/planning/rest-statistics?month=2026-09');
@@ -186,7 +199,7 @@ test('administrator reads 52-person monthly rest counts without creating a draft
 
 test('rest statistics reject a newer source until gray-cell styles are audited again',async t=>{
   const dir=folder(t);fs.writeFileSync(path.join(dir,'planning-baseline-manifest.json'),JSON.stringify(source()));
-  const base=await candidate(t,dir,true,{mockFeishu:true,fullRestSource:true,mockRevision:506});
+  const base=await candidate(t,dir,true,{mockFeishu:true,fullRestSource:true,mockRevision:506,restStatistics:true});
   const response=await fetch(base+'/api/planning/rest-statistics?month=2026-09');
   assert.equal(response.status,503);
   assert.equal((await response.json()).code,'REST_STATISTICS_STYLE_UNVERIFIED');
@@ -230,7 +243,7 @@ test('ordinary live-module member sees disabled capabilities and cannot persist 
   });
   await new Promise(resolve=>authority.listen(0,'127.0.0.1',resolve));
   t.after(()=>authority.close());
-  const base=await candidate(t,dir,false,{authorityBase:`http://127.0.0.1:${authority.address().port}`,draftWrites:true,totalImport:true});
+  const base=await candidate(t,dir,false,{authorityBase:`http://127.0.0.1:${authority.address().port}`,draftWrites:true,totalImport:true,restStatistics:true});
   const planning=await fetch(base+'/api/planning');assert.equal(planning.status,200);
   const view=await planning.json();
   assert.equal(view.draftCapability.enabled,false);assert.equal(view.draftCapability.code,'planning_admin_required');

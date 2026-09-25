@@ -71,6 +71,7 @@ const PLANNING_EPOCH_PATH = process.env.PLANNING_EPOCH_PATH || path.join(DATA_DI
 // explicit gates; legacy room and makeup sheets have no new baseline yet.
 const PLANNING_DRAFT_WRITES_ENABLED = process.env.PLANNING_DRAFT_WRITES_ENABLED === '1';
 const PLANNING_TOTAL_IMPORT_ENABLED = process.env.PLANNING_TOTAL_IMPORT_ENABLED === '1';
+const PLANNING_REST_STATISTICS_ENABLED = process.env.PLANNING_REST_STATISTICS_ENABLED === '1';
 const HOURLY_REFRESH_MS = 60 * 60 * 1000;
 const MAX_BODY_BYTES = 512 * 1024;
 const WIKI_RESOLUTION_TTL_MS = 5 * 60 * 1000;
@@ -2164,6 +2165,7 @@ async function planningApi(request, response, requestUrl, auth) {
     }
     if (request.method === 'GET' && route === '/api/planning/rest-statistics') {
       if (!canManagePlanning(auth)) throw Object.assign(new Error('仅排班管理员可查看人员休息统计。'), {status:403,code:'PLANNING_ADMIN_REQUIRED'});
+      if (!PLANNING_REST_STATISTICS_ENABLED) throw Object.assign(new Error('正式总表休息统计仍处于只读核验，暂未开放。'), {status:423,code:'REST_STATISTICS_DISABLED'});
       return json(response, {ok:true,data:await readMonthlyRestStatistics(requestUrl.searchParams.get('month') || '')});
     }
     if (request.method === 'GET' && route === '/api/planning') {
@@ -2186,7 +2188,7 @@ async function planningApi(request, response, requestUrl, auth) {
           reason: userFacingErrorMessage(error, '排班表暂不可读取。'),
         };
       }
-      return json(response, { ok: true, rooms: ROOM_PLANNING, shiftTimes: SHIFT_TIMES, drafts: store ? store.drafts || {} : null, makeupDrafts: store ? store.makeupDrafts || {} : null, updatedAt: store?.updatedAt || null, historyAvailable:Boolean(store), totalSchedule: { ...target, url: TOTAL_SCHEDULE_WIKI_URL }, restStatisticsCapability:{enabled:canManagePlanning(auth)}, draftCapability:await draftCapability(auth),totalImportCapability:await totalImportCapability(auth), ...(baseline ? {planningBaseline:baseline,historyStatus:baseline.historyStatus,epochId:store?.epochId||null} : {}) });
+      return json(response, { ok: true, rooms: ROOM_PLANNING, shiftTimes: SHIFT_TIMES, drafts: store ? store.drafts || {} : null, makeupDrafts: store ? store.makeupDrafts || {} : null, updatedAt: store?.updatedAt || null, historyAvailable:Boolean(store), totalSchedule: { ...target, url: TOTAL_SCHEDULE_WIKI_URL }, restStatisticsCapability:{enabled:PLANNING_REST_STATISTICS_ENABLED && canManagePlanning(auth)}, draftCapability:await draftCapability(auth),totalImportCapability:await totalImportCapability(auth), ...(baseline ? {planningBaseline:baseline,historyStatus:baseline.historyStatus,epochId:store?.epochId||null} : {}) });
     }
     if (request.method === 'POST' && route === '/api/planning/generate') { validateWriteOrigin(request, auth); return json(response, { ok: true, draft: generateDraft(await readJsonBody(request)) }); }
     if (request.method === 'POST' && route === '/api/planning/draft') {
