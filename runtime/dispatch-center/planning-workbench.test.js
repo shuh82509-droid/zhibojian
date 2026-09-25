@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { ROOM_PLANNING, SHIFT_TIMES, formatShiftCell, generateDraft, generateMakeupDraft, parseRestSource, parseRestSources, restAdjustmentFromNote, transitionAllowed } = require('./planning-engine');
+const { ROOM_PLANNING, SHIFT_TIMES, formatShiftCell, generateDraft, generateMakeupDraft, parseMonthlyRestStatistics, parseRestSource, parseRestSources, restAdjustmentFromNote, transitionAllowed } = require('./planning-engine');
 const SHIFT_LEGEND = '班次信息: L（05:30-14:30）: 05:30 ~ 14:30; R（06:30-15:30）: 06:30 ~ 15:30; M（21:30-05:00）: 21:30 ~ 次日 05:00; P（16:30-01:00）: 16:30 ~ 次日 01:00; J2（14:30-23:00）: 14:30 ~ 23:00';
 const { alignPlanningRangeRow, assertPlanningFormulaRow, buildMakeupImportPlan, buildPlanningImportPlan, buildPlanningRoleEvidence, buildPlanningSourceDiagnostic, projectPlanningSourceDiagnostic, changedRowRanges, dateMarkerMatches, fullScheduleRange, headerDateKey, parseMakeupScheduleRows, planningReadbackState, spreadsheetValueRows, validateWriteOrigin } = require('./schedule-api-server');
 
@@ -153,7 +153,7 @@ test('wangou auto-rests above four anchors and rotates the top resource position
   assert.ok(draft.anchorResourceSummary.every(item=>Number.isFinite(item.actualWorkDays)));
 });
 
-test('parses the authorized monthly schedule without treating blanks as rest or work', () => {
+test('legacy rest board preserves shorthand rest while leaving blanks unresolved', () => {
   const rows = [['姓名', '直播间', '2026/9/1', '2026/9/2', '2026/9/3'], ['主播甲', '官旗', 'L', '', '休'], ['尹珩瑞', '官旗', 'A', 'X', '休'], ['肖慧萍', '官旗', 'L', '', '休']];
   const people = parseRestSource(rows, '2026-09', { 主播甲: { roomName: '品牌精选', entitlement: 4, compNote: '9月补班一次' } });
   assert.equal(people.length, 1);
@@ -161,6 +161,77 @@ test('parses the authorized monthly schedule without treating blanks as rest or 
   assert.equal(people[0].remainingRest, null, 'partial dates cannot yield a final rest balance');
   assert.match(people[0].remainingRestReason, /日期列不完整/u);
   assert.deepEqual(people[0].calendar.map((item) => item.status), ['work', 'unassigned', 'rest']);
+});
+
+test('strict formal monthly rest statistics require 52 unique identities and 30 unique dates', () => {
+  const dates=Array.from({length:30},(_,index)=>`2026/9/${index+1}`);
+  const header=['UID','部门','工号','姓名',...dates];
+  const people=Array.from({length:52},(_,index)=>[
+    `u-${index+1}`,'凡岛-品牌营销部-直播中心-官旗',`FD-${index+1}`,`员工${String.fromCharCode(0x4e00+index)}`,
+    ...dates.map((_,day)=>index===0?['休息','L（05:30-14:30）','','OFF','休','年假','X（10:00-19:00）','ZZ','L（05:30-15:30）'][day]||'':'')
+  ]);
+  const result=parseMonthlyRestStatistics([['正式排班表'],header,...people],'2026-09',52,{grayCells:new Set(['E3','F3'])});
+  assert.equal(result.available,true);assert.equal(result.readOnly,true);assert.equal(result.writeBackAllowed,false);
+  assert.equal(result.personCount,52);assert.equal(result.dateCount,30);assert.equal(result.people.length,52);
+  assert.deepEqual([result.people[0].explicitRestDays,result.people[0].explicitWorkDays,result.people[0].pendingDays],[0,1,29], 'gray text must remain pending');
+  assert.equal(result.people[0].sourceRow,3);
+  assert.equal(result.totals.explicitRestDays+result.totals.explicitWorkDays+result.totals.pendingDays,52*30);
+  for(const badRows of [
+    [header,...people.slice(0,51)],
+    [header,...people.slice(0,51),[...people[51].slice(0,2),people[0][2],...people[51].slice(3)]],
+    [[...header.slice(0,-1),header[4]],...people],
+    [[...header.slice(0,-1)],...people],
+  ]) {
+    const blocked=parseMonthlyRestStatistics(badRows,'2026-09',52,{grayCells:new Set()});
+    assert.equal(blocked.available,false);assert.equal(blocked.personCount,null);assert.deepEqual(blocked.people,[]);
+  }
+  assert.equal(parseMonthlyRestStatistics([header,...people],'2026-09').available,false,
+    'missing style evidence must fail closed');
+});
+
+test('monthly rest status does not infer work from arbitrary labels or invalid shift times', () => {
+  const header=['UID','部门','工号','姓名','2026/9/1','2026/9/2','2026/9/3'];
+  const row=['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','XYZ','L（05:30-15:30）','休息'];
+  const result=parseMonthlyRestStatistics([header,row],'2026-09',1,{grayCells:new Set()});
+  assert.equal(result.available,false,'incomplete month cannot show partial counts');
+  const fullHeader=[...header,...Array.from({length:27},(_,index)=>`2026/9/${index+4}`)];
+  const fullRow=[...row,...Array.from({length:27},()=> '')];
+  const complete=parseMonthlyRestStatistics([fullHeader,fullRow],'2026-09',1,{grayCells:new Set()});
+  assert.equal(complete.available,true);
+  assert.deepEqual([complete.people[0].explicitRestDays,complete.people[0].explicitWorkDays,complete.people[0].pendingDays],[1,0,29]);
+});
+
+test('formal shift labels require the complete time and both verified ZBB/WB variants', () => {
+  const header=['UID','部门','工号','姓名',...Array.from({length:30},(_,index)=>`2026/9/${index+1}`)];
+  const values=['ZBB(21:00-次日6:00)','GJ2(7:30-15:00)','TXQJ(8:30-17:30）',
+    'ZBB（18:30-次日2:00）','R（06:30-15:31）','WB(17:30-次日02:00)',
+    'WB(22：30—次日6：00)','L','ZBB(18:30-02:00)'];
+  const row=['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛',
+    ...Array.from({length:30},(_,index)=>values[index]||'')];
+  const result=parseMonthlyRestStatistics([header,row],'2026-09',1,{grayCells:new Set()});
+  assert.equal(result.available,true);
+  assert.deepEqual([result.people[0].explicitRestDays,result.people[0].explicitWorkDays,result.people[0].pendingDays],[0,6,24]);
+});
+
+test('formal monthly statistics accept exact G/K/P/GJ5/M source spellings without 次日', () => {
+  const header=['UID','部门','工号','姓名',...Array.from({length:30},(_,index)=>`2026/9/${index+1}`)];
+  const values=['G（15:00-00:00）','K(16:00-01:00)','P（16:30-01:00）','GJ5(17:30-01:00)','M（21:30-05:00）',
+    'G（15:00-次日00:00）','K(16:00-次日01:00)','P（16:30-次日01:00）','GJ5(17:30-次日01:00)','M（21:30-次日05:00）',
+    'G（15:00-00:01）','K(16:00-01:30)','P（16:30-01:30）','GJ5(17:30-01:30)','M（21:30-05:30）','P'];
+  const row=['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛',
+    ...Array.from({length:30},(_,index)=>values[index]||'')];
+  const result=parseMonthlyRestStatistics([header,row],'2026-09',1,{grayCells:new Set()});
+  assert.equal(result.available,true);
+  assert.deepEqual([result.people[0].explicitRestDays,result.people[0].explicitWorkDays,result.people[0].pendingDays],[0,10,20]);
+});
+
+test('legacy rest board retains 休/OFF and alternate ZBB work semantics across months', () => {
+  const rows=[
+    ['UID','部门','工号','','2026/8/29','2026/8/30','2026/8/31'],
+    ['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','ZBB（18:30-次日2:00）','休','OFF'],
+  ];
+  const [person]=parseRestSource(rows,'2026-08',{赵媛:{entitlement:4}});
+  assert.deepEqual(person.calendar.map((day)=>day.status),['work','rest','rest']);
 });
 
 test('only explicit rest is counted; generic leave and unresolved cells never become monthly rest', () => {
@@ -239,6 +310,17 @@ test('compensation note adjusts the global rest entitlement without treating it 
   assert.equal(person.baseEntitlement,7);assert.equal(person.entitlement,7);
   assert.equal(person.restAdjustment,null,'free-text history is not an approved entitlement adjustment');
   assert.equal(person.remainingRest,null,'a compensation note cannot finalize a partial-month balance');
+});
+
+test('legacy cross-month streak retains both ZBB time variants from August to September', () => {
+  const august=[['姓名','2026/8/30','2026/8/31'],
+    ['赵媛','ZBB（18:30-次日2:00）','ZBB(21:00-次日6:00)']];
+  const september=[['姓名','2026/9/1','2026/9/2','2026/9/3','2026/9/4','2026/9/5'],
+    ['赵媛','ZBB（18:30-次日2:00）','ZBB(21:00-次日6:00)','ZBB（18:30-次日2:00）','ZBB(21:00-次日6:00)','']];
+  const [person]=parseRestSources([{month:'2026-08',rows:august},{month:'2026-09',rows:september}],
+    '2026-09',{赵媛:{entitlement:4,roomName:'官旗'}});
+  assert.equal(person.maximumConsecutiveWorkDays,6);
+  assert.equal(person.suggestedRestDate,'2026-09-05');
 });
 
 test('compound carry-over notes remain visible but never change monthly entitlement', () => {
@@ -1000,4 +1082,14 @@ test('rest board follows the currently viewed schedule month instead of the next
   const script = fs.readFileSync(path.join(__dirname, 'planning-workbench.js'), 'utf8');
   assert.ok(script.includes("$('#restMonth').value = currentScheduleDate().slice(0, 7)"));
   assert.equal(script.includes("$('#restMonth').value = defaultRange('guanqi', 'assistant')[0].slice(0, 7)"), false);
+});
+
+test('monthly rest detail stays hidden until the server grants administrator capability', () => {
+  const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
+  const script=fs.readFileSync(path.join(__dirname,'planning-workbench.js'),'utf8');
+  assert.match(html, /id="monthlyRestStatistics"[^>]*hidden/u);
+  assert.match(script, /restStatisticsCapability:\s*\{enabled:false\}/u);
+  assert.match(script, /restStatisticsCapability\.enabled/u);
+  assert.match(script, /\/api\/planning\/rest-statistics\?month=2026-09/u);
+  assert.match(script, /data\.people\?\.length !== 52/u);
 });

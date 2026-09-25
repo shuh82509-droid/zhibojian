@@ -27,7 +27,7 @@ async function candidate(t,dir,readOnly,options={}){
       FEISHU_APP_ID:readOnly?'fixture':'',FEISHU_APP_SECRET:readOnly?'fixture':'',
       TOTAL_SCHEDULE_SPREADSHEET_TOKEN:token,TOTAL_SCHEDULE_SHEET_ID:'0jFdXf',
       PLANNING_DRAFT_WRITES_ENABLED:options.draftWrites?'1':'0',PLANNING_TOTAL_IMPORT_ENABLED:options.totalImport?'1':'0',
-      ...(options.mockFeishu?{NODE_OPTIONS:`--require=${path.join(__dirname,'planning-live-source-test-fixture.js')}`,TEST_FEISHU_REVISION:String(options.mockRevision ?? 499)}:{}),
+       ...(options.mockFeishu?{NODE_OPTIONS:`--require=${path.join(__dirname,'planning-live-source-test-fixture.js')}`,TEST_FEISHU_REVISION:String(options.mockRevision ?? (options.fullRestSource ? 505 : 499)),TEST_MONTHLY_REST_FULL:options.fullRestSource?'1':'0'}:{}),
       ...(options.authorityBase?{CENTRAL_AUTHORITY_BASE:options.authorityBase}:{})},
   });
   let output='';child.stderr.on('data',chunk=>{output+=chunk.toString().slice(0,1000);});
@@ -164,6 +164,36 @@ test('read-only source behind baseline revision is marked unverified, without ze
   assert.match(rest.reason,/未通过新基线核验/);
 });
 
+test('administrator reads 52-person monthly rest counts without creating a draft or import',async t=>{
+  const dir=folder(t);fs.writeFileSync(path.join(dir,'planning-baseline-manifest.json'),JSON.stringify(source()));
+  const base=await candidate(t,dir,true,{mockFeishu:true,fullRestSource:true});
+  const capability=await (await fetch(base+'/api/planning')).json();
+  assert.equal(capability.restStatisticsCapability.enabled,true);
+  const response=await fetch(base+'/api/planning/rest-statistics?month=2026-09');
+  assert.equal(response.status,200);
+  const {data}=await response.json();
+  assert.equal(data.available,true);assert.equal(data.readOnly,true);assert.equal(data.writeBackAllowed,false);
+  assert.equal(data.personCount,52);assert.equal(data.dateCount,30);assert.equal(data.people.length,52);
+  assert.deepEqual([data.people[0].explicitRestDays,data.people[0].explicitWorkDays,data.people[0].pendingDays],[1,1,28]);
+  assert.deepEqual([data.people[42].explicitRestDays,data.people[42].explicitWorkDays,data.people[42].pendingDays],[0,0,30], 'gray rest text remains pending');
+  assert.deepEqual([data.people[43].explicitRestDays,data.people[43].explicitWorkDays,data.people[43].pendingDays],[0,0,30], 'gray work text remains pending');
+  assert.equal(data.source.revision,505);assert.equal(data.source.styleRevision,505);assert.equal(data.source.mode,'official_live');
+  assert.equal(fs.existsSync(path.join(dir,'planning-workbench.json')),false);
+  assert.equal(fs.existsSync(path.join(dir,'schedule-writeback-audit.ndjson')),false);
+  const wrongMonth=await fetch(base+'/api/planning/rest-statistics?month=2026-10');
+  assert.equal(wrongMonth.status,422);assert.equal((await wrongMonth.json()).code,'REST_STATISTICS_MONTH_UNVERIFIED');
+});
+
+test('rest statistics reject a newer source until gray-cell styles are audited again',async t=>{
+  const dir=folder(t);fs.writeFileSync(path.join(dir,'planning-baseline-manifest.json'),JSON.stringify(source()));
+  const base=await candidate(t,dir,true,{mockFeishu:true,fullRestSource:true,mockRevision:506});
+  const response=await fetch(base+'/api/planning/rest-statistics?month=2026-09');
+  assert.equal(response.status,503);
+  assert.equal((await response.json()).code,'REST_STATISTICS_STYLE_UNVERIFIED');
+  assert.equal(fs.existsSync(path.join(dir,'planning-workbench.json')),false);
+  assert.equal(fs.existsSync(path.join(dir,'schedule-writeback-audit.ndjson')),false);
+});
+
 test('read-only source views still require central authentication in an embedded hub',async t=>{
   const authority=http.createServer((request,response)=>{
     response.writeHead(401,{'content-type':'application/json'});
@@ -173,7 +203,7 @@ test('read-only source views still require central authentication in an embedded
   t.after(()=>authority.close());
   const dir=folder(t);fs.writeFileSync(path.join(dir,'planning-baseline-manifest.json'),JSON.stringify(source()));
   const base=await candidate(t,dir,true,{mockFeishu:true,authorityBase:`http://127.0.0.1:${authority.address().port}`});
-  for(const route of ['/api/planning','/api/planning/rest?month=2026-09','/api/schedule?date=2026-09-25']){
+  for(const route of ['/api/planning','/api/planning/rest?month=2026-09','/api/planning/rest-statistics?month=2026-09','/api/schedule?date=2026-09-25']){
     const response=await fetch(base+route);
     assert.equal(response.status,401,route);
   }
@@ -205,11 +235,15 @@ test('ordinary live-module member sees disabled capabilities and cannot persist 
   const view=await planning.json();
   assert.equal(view.draftCapability.enabled,false);assert.equal(view.draftCapability.code,'planning_admin_required');
   assert.equal(view.totalImportCapability.enabled,false);assert.equal(view.totalImportCapability.code,'planning_admin_required');
+  assert.equal(view.restStatisticsCapability.enabled,false);
   const diagnostic=await fetch(base+'/api/planning/source-diagnostic');
   assert.equal(diagnostic.status,403,'source cells with staff names require a planning manager');
   const deniedDiagnostic=await diagnostic.json();
   assert.equal(deniedDiagnostic.code,'PLANNING_ADMIN_REQUIRED');
   assert.equal(deniedDiagnostic.error,'仅排班管理员可查看原表来源诊断。');
+  const deniedRest=await fetch(base+'/api/planning/rest-statistics?month=2026-09');
+  assert.equal(deniedRest.status,403);
+  assert.equal((await deniedRest.json()).code,'PLANNING_ADMIN_REQUIRED');
   const before=fs.readFileSync(paths.storePath,'utf8');
   for(const route of ['/api/planning/draft','/api/planning/rest-setting','/api/planning/rest-profile','/api/planning/makeup/draft','/api/planning/import']){
     const response=await fetch(base+route,{method:'POST',headers:{origin:'https://hub.fandow.com','x-requested-with':'XMLHttpRequest','content-type':'application/json'},body:'{}'});

@@ -9,7 +9,7 @@ const fs = require('fs/promises');
 const { constants: fsConstants } = require('fs');
 const path = require('path');
 const { createHash, randomUUID } = require('crypto');
-const { ROOM_PLANNING, SHIFT_TIMES, VERIFIED_ANCHOR_ROOMS, formatShiftCell, linkOvernightDrafts, syncDraftRestDays, generateDraft, generateMakeupDraft, parseRestSources, summarizeAnchorResources, summarizeAttendance, summarizeResourceAverages } = require('./planning-engine');
+const { ROOM_PLANNING, SHIFT_TIMES, VERIFIED_ANCHOR_ROOMS, formatShiftCell, linkOvernightDrafts, syncDraftRestDays, generateDraft, generateMakeupDraft, parseMonthlyRestStatistics, parseRestSources, summarizeAnchorResources, summarizeAttendance, summarizeResourceAverages } = require('./planning-engine');
 const { buildOpeningPreview } = require('./notification-preview');
 
 const HOST = process.env.HOST || '0.0.0.0';
@@ -36,6 +36,17 @@ const TOTAL_SCHEDULE_SHEET_TITLE = process.env.TOTAL_SCHEDULE_SHEET_TITLE || '�
 // module update. Keep the current target configurable for future monthly books.
 const TOTAL_SCHEDULE_WIKI_TOKEN = process.env.TOTAL_SCHEDULE_WIKI_TOKEN || 'UKVDwxpz7iKAv8k5KxTcxiDVnuf';
 const SEPTEMBER_TOTAL_SCHEDULE_TOKEN = 'Wj4zs3oDfhGUfetlTXicxblmnHe';
+// Read-only cells-get(value,style) audit of the exact formal sheet at revision
+// 505. The 48 gray cells were blank then. Values API does not return styles,
+// so never apply this coordinate mask to another revision or sheet layout.
+const SEPTEMBER_REST_STYLE_AUDIT = Object.freeze({
+  revision: 505, sheetId: '0jFdXf', rowCount: 190, columnCount: 34, actualRange: '0jFdXf!A1:AH190',
+  grayCells: new Set([
+    'E47','F47','E48','F48','E49','F49','G49','H49','I49','J49',
+    'E54','F54','E55','F55','G55','H55','I55','J55','K55','L55','M55','N55','O55','P55','Q55','R55','S55','T55',
+    'E56','F56','G56','H56','I56','J56','K56','L56','M56','N56','O56','P56','Q56','R56','S56','T56','U56','V56','W56','X56',
+  ]),
+});
 const REST_SOURCE_WIKI_TOKEN = process.env.REST_SOURCE_WIKI_TOKEN || TOTAL_SCHEDULE_WIKI_TOKEN;
 const MAKEUP_SOURCE_WIKI_TOKEN = 'QrjQwGyHoi6kZYkuKYCczBGYnoc';
 const MAKEUP_SPREADSHEET_TOKEN = process.env.MAKEUP_SCHEDULE_SPREADSHEET_TOKEN || '';
@@ -2008,6 +2019,36 @@ async function readPlanningSourceDiagnostic(date = '') {
   }), checkedAt:new Date().toISOString(), sourceMode:sourceSnapshot?'verified_backup':'official_live' };
   return projectPlanningSourceDiagnostic(report, Boolean(date));
 }
+async function readMonthlyRestStatistics(month) {
+  if (month !== '2026-09') throw Object.assign(new Error('当前仅支持已核验的 2026 年 9 月总表。'), {status:422,code:'REST_STATISTICS_MONTH_UNVERIFIED'});
+  if (sourceSnapshot) throw Object.assign(new Error('休息统计需核对正式总表的当前单元格样式；只读备份不作为当前统计。'), {status:503,code:'REST_STATISTICS_STYLE_UNVERIFIED'});
+  const baseline = await readPlanningBaselineManifest();
+  if (!baseline || baseline.historyStatus !== 'pending_recovery') {
+    throw Object.assign(new Error('正式排班总表的新基线尚未核验。'), {status:503,code:'planning_baseline_invalid'});
+  }
+  const target = await resolveTotalScheduleTarget();
+  if (target.spreadsheetToken !== baseline.spreadsheetToken || target.sheetId !== baseline.sheetId) {
+    throw Object.assign(new Error('当前正式总表与已核新基线不是同一来源。'), {status:503,code:'planning_source_unverified'});
+  }
+  const source = await readSpreadsheetRange(target.spreadsheetToken, fullScheduleRange(target));
+  if (target.sheetId !== SEPTEMBER_REST_STYLE_AUDIT.sheetId ||
+      target.rowCount !== SEPTEMBER_REST_STYLE_AUDIT.rowCount ||
+      target.columnCount !== SEPTEMBER_REST_STYLE_AUDIT.columnCount ||
+      source.actualRange !== SEPTEMBER_REST_STYLE_AUDIT.actualRange || source.rows.length < 56 ||
+      !Number.isSafeInteger(source.revision) || source.revision < baseline.revision) {
+    throw Object.assign(new Error('正式总表回读坐标或版本不能核验。'), {status:503,code:'planning_source_unverified'});
+  }
+  if (source.revision !== SEPTEMBER_REST_STYLE_AUDIT.revision) {
+    throw Object.assign(new Error('正式总表版本已变化，须重新核验灰格样式后才能更新休息统计。'), {status:503,code:'REST_STATISTICS_STYLE_UNVERIFIED'});
+  }
+  const result = parseMonthlyRestStatistics(source.rows, month, 52,
+    {grayCells:SEPTEMBER_REST_STYLE_AUDIT.grayCells});
+  if (!result.available || result.people[0]?.sourceRow !== 5 || result.people.at(-1)?.sourceRow !== 56) {
+    throw Object.assign(new Error(result.reason || '正式总表身份行位置已变化，灰格样式坐标不能复用。'), {status:503,code:'REST_STATISTICS_SOURCE_UNVERIFIED'});
+  }
+  return { ...result, source: {label:target.label,revision:source.revision,
+    mode:'official_live',styleRevision:SEPTEMBER_REST_STYLE_AUDIT.revision,checkedAt:new Date().toISOString()} };
+}
 async function commitMakeupImport() {
   throw Object.assign(new Error('化妆师源表尚无独立核验的新基线，不能提交或记为无变化。'), {status:423,code:'planning_source_unbaselined'});
 }
@@ -2121,6 +2162,10 @@ async function planningApi(request, response, requestUrl, auth) {
       if (!canManagePlanning(auth)) throw Object.assign(new Error('仅排班管理员可查看含人员姓名的原表来源诊断。'), {status:403,code:'PLANNING_ADMIN_REQUIRED'});
       return json(response, {ok:true,data:await readPlanningSourceDiagnostic(requestUrl.searchParams.get('date') || '')});
     }
+    if (request.method === 'GET' && route === '/api/planning/rest-statistics') {
+      if (!canManagePlanning(auth)) throw Object.assign(new Error('仅排班管理员可查看人员休息统计。'), {status:403,code:'PLANNING_ADMIN_REQUIRED'});
+      return json(response, {ok:true,data:await readMonthlyRestStatistics(requestUrl.searchParams.get('month') || '')});
+    }
     if (request.method === 'GET' && route === '/api/planning') {
       let store;
       try { store = await readPlanningStore(); } catch(error) {
@@ -2141,7 +2186,7 @@ async function planningApi(request, response, requestUrl, auth) {
           reason: userFacingErrorMessage(error, '排班表暂不可读取。'),
         };
       }
-      return json(response, { ok: true, rooms: ROOM_PLANNING, shiftTimes: SHIFT_TIMES, drafts: store ? store.drafts || {} : null, makeupDrafts: store ? store.makeupDrafts || {} : null, updatedAt: store?.updatedAt || null, historyAvailable:Boolean(store), totalSchedule: { ...target, url: TOTAL_SCHEDULE_WIKI_URL }, draftCapability:await draftCapability(auth),totalImportCapability:await totalImportCapability(auth), ...(baseline ? {planningBaseline:baseline,historyStatus:baseline.historyStatus,epochId:store?.epochId||null} : {}) });
+      return json(response, { ok: true, rooms: ROOM_PLANNING, shiftTimes: SHIFT_TIMES, drafts: store ? store.drafts || {} : null, makeupDrafts: store ? store.makeupDrafts || {} : null, updatedAt: store?.updatedAt || null, historyAvailable:Boolean(store), totalSchedule: { ...target, url: TOTAL_SCHEDULE_WIKI_URL }, restStatisticsCapability:{enabled:canManagePlanning(auth)}, draftCapability:await draftCapability(auth),totalImportCapability:await totalImportCapability(auth), ...(baseline ? {planningBaseline:baseline,historyStatus:baseline.historyStatus,epochId:store?.epochId||null} : {}) });
     }
     if (request.method === 'POST' && route === '/api/planning/generate') { validateWriteOrigin(request, auth); return json(response, { ok: true, draft: generateDraft(await readJsonBody(request)) }); }
     if (request.method === 'POST' && route === '/api/planning/draft') {
@@ -2301,6 +2346,7 @@ function accessDenied(response, auth) {
 function userFacingErrorMessage(error, fallback = '请求处理失败。') {
   const message = String(error?.message || '');
   if (error?.code === 'PLANNING_ADMIN_REQUIRED' && message.includes('来源诊断')) return '仅排班管理员可查看原表来源诊断。';
+  if (error?.code === 'PLANNING_ADMIN_REQUIRED' && message.includes('休息统计')) return '仅排班管理员可查看人员休息统计。';
   if (['EACCES', 'EPERM', 'EROFS'].includes(String(error?.code || '')) || /(?:[A-Z]:\\|\/app\/|\/data\/)/iu.test(message)) {
     return '排班草稿存储暂不可用，请检查持久化目录权限后重试；现有飞书排班未被修改。';
   }

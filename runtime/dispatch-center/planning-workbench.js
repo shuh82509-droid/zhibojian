@@ -7,7 +7,7 @@
     youxuan: '默认周四至周三；第 3 名排官旗 M 通宵，休息时顺延第 4 名；B3/M 次日不可接 R。',
     wangou: '默认周三至下周三；第 3 名排品牌精选 M，休息顺延第 4 名；常规班按资源分排序轮转，促销日需复核。',
   };
-  const state = { rooms: {}, shiftTimes: {}, drafts: {}, makeupDrafts: {}, totalSchedule: null, planningBaseline: null, historyStatus: null, historyUnavailable: false, draftCapability: {enabled:false}, totalImportCapability: {enabled:false}, context: null, shiftOrder: [], currentDraft: null, importPlan: null, anchorRoster: [], assistantRoster: [], restData: null, selectedRestName: '', makeupData: null, makeupRoster: [], currentMakeupDraft: null, makeupImportPlan: null };
+  const state = { rooms: {}, shiftTimes: {}, drafts: {}, makeupDrafts: {}, totalSchedule: null, planningBaseline: null, historyStatus: null, historyUnavailable: false, draftCapability: {enabled:false}, totalImportCapability: {enabled:false}, restStatisticsCapability: {enabled:false}, context: null, shiftOrder: [], currentDraft: null, importPlan: null, anchorRoster: [], assistantRoster: [], restData: null, selectedRestName: '', makeupData: null, makeupRoster: [], currentMakeupDraft: null, makeupImportPlan: null };
   const $ = (selector) => document.querySelector(selector);
   const dialog = $('#planningDialog'); const title = $('#planningTitle'); const ruleHint = $('#planningRuleHint'); const startInput = $('#planningStart'); const endInput = $('#planningEnd');
   const anchorRosterBlock = $('#planningAnchorRosterBlock'); const anchorRosterRows = $('#anchorRosterRows'); const assistantRosterEditor = $('#assistantRosterEditor'); const assistantRosterRows = $('#assistantRosterRows');
@@ -92,6 +92,26 @@
       $('#planningSourceDiagnosticResult').hidden = true;
       status.textContent = `来源诊断不可用：${error.message}；保持不可写回。`;
     } finally { button.disabled = false; }
+  }
+
+  async function loadMonthlyRestStatistics() {
+    if (!state.restStatisticsCapability.enabled) return;
+    const button = $('#loadMonthlyRestStatistics'); const status = $('#monthlyRestStatisticsStatus'); const root = $('#monthlyRestStatisticsResult');
+    button.disabled = true; root.hidden = true; root.innerHTML = '';
+    status.textContent = '正在只读核对正式总表的 52 个唯一身份与 30 个日期列…';
+    try {
+      const {data} = await requestPlanning('/api/planning/rest-statistics?month=2026-09');
+      if (!data?.readOnly || data.writeBackAllowed !== false) throw new Error('休息统计未通过只读约束。');
+      if (!data.available) { status.textContent = `${data.reason || '来源待核验'}；不展示人数或天数，也不会写回。`; return; }
+      if (data.personCount !== 52 || data.dateCount !== 30 || data.people?.length !== 52 ||
+          data.people.some((person) => person.explicitRestDays + person.explicitWorkDays + person.pendingDays !== 30)) {
+        throw new Error('总表人员或日期统计不完整。');
+      }
+      status.textContent = `${data.source?.mode === 'verified_backup' ? '只读备份，不代表当前正式表' : '正式原表'}版本 ${data.source?.revision ?? '待核验'} · ${data.personCount} 人 / ${data.dateCount} 日 · 读取 ${data.source?.checkedAt || '待核验'}。只读，不写回。`;
+      root.innerHTML = `<p>${pEsc(data.scopeNote || '')}</p><div class="monthly-rest-statistics-result"><table><thead><tr><th>姓名／来源行</th><th>部门</th><th>明确休息</th><th>明确工作</th><th>待核验</th></tr></thead><tbody>${data.people.map((person) => `<tr><td>${pEsc(person.name)} <small>第 ${pEsc(person.sourceRow)} 行</small></td><td>${pEsc(person.department)}</td><td>${pEsc(person.explicitRestDays)} 天</td><td>${pEsc(person.explicitWorkDays)} 天</td><td>${pEsc(person.pendingDays)} 天</td></tr>`).join('')}</tbody></table></div>`;
+      root.hidden = false;
+    } catch (error) { root.hidden = true; root.innerHTML = ''; status.textContent = `休息统计不可核验：${error.message}；不展示人员数据。`; }
+    finally { button.disabled = false; }
   }
 
   function defaultRange(roomCode, role) {
@@ -344,7 +364,7 @@
   }
 
   async function loadPlanning() {
-    try { const payload = await requestPlanning('/api/planning'); state.rooms = payload.rooms || {}; state.shiftTimes = payload.shiftTimes || {}; state.drafts = payload.drafts || {}; state.makeupDrafts = payload.makeupDrafts || {}; state.totalSchedule = payload.totalSchedule || null; state.planningBaseline = payload.planningBaseline || null; state.historyStatus = payload.historyStatus || null; state.historyUnavailable = payload.historyAvailable === false; state.draftCapability = payload.draftCapability || {enabled:false}; state.totalImportCapability = payload.totalImportCapability || {enabled:false}; showBaselineStatus(); applyPlanningCapabilities(); const sourceLink = $('#planningSourceLink'); if (sourceLink && state.totalSchedule?.url) { try { const sourceUrl = new URL(state.totalSchedule.url); if (sourceUrl.protocol === 'https:' && sourceUrl.hostname === 'jqx28l0j4lx.feishu.cn') sourceLink.href = sourceUrl.href; } catch {} } renderDraftMeta(); if (state.totalSchedule?.permissionStatus && !['已连接','已读取'].includes(state.totalSchedule.permissionStatus)) setStatus(`${state.totalSchedule.label}：${state.totalSchedule.permissionStatus}。${state.totalSchedule.reason || ''}`, true); }
+    try { const payload = await requestPlanning('/api/planning'); state.rooms = payload.rooms || {}; state.shiftTimes = payload.shiftTimes || {}; state.drafts = payload.drafts || {}; state.makeupDrafts = payload.makeupDrafts || {}; state.totalSchedule = payload.totalSchedule || null; state.planningBaseline = payload.planningBaseline || null; state.historyStatus = payload.historyStatus || null; state.historyUnavailable = payload.historyAvailable === false; state.draftCapability = payload.draftCapability || {enabled:false}; state.totalImportCapability = payload.totalImportCapability || {enabled:false}; state.restStatisticsCapability = payload.restStatisticsCapability || {enabled:false}; $('#monthlyRestStatistics').hidden = !state.restStatisticsCapability.enabled; showBaselineStatus(); applyPlanningCapabilities(); const sourceLink = $('#planningSourceLink'); if (sourceLink && state.totalSchedule?.url) { try { const sourceUrl = new URL(state.totalSchedule.url); if (sourceUrl.protocol === 'https:' && sourceUrl.hostname === 'jqx28l0j4lx.feishu.cn') sourceLink.href = sourceUrl.href; } catch {} } renderDraftMeta(); if (state.totalSchedule?.permissionStatus && !['已连接','已读取'].includes(state.totalSchedule.permissionStatus)) setStatus(`${state.totalSchedule.label}：${state.totalSchedule.permissionStatus}。${state.totalSchedule.reason || ''}`, true); }
     catch (error) {
       if (['history_recovery_pending','planning_epoch_uninitialized'].includes(error.payload?.code)) {
         state.historyUnavailable = true; state.historyStatus = 'pending_recovery';
@@ -359,6 +379,7 @@
   $('#closePlanningDialog').addEventListener('click', () => dialog.close()); generateButton.addEventListener('click', generateDraft); saveButton.addEventListener('click', saveDraft); previewButton.addEventListener('click', previewImport);
   $('#loadPriorPlanning').addEventListener('click', loadPriorPlanning);
   $('#loadPlanningSourceDiagnostic').addEventListener('click', loadPlanningSourceDiagnostic);
+  $('#loadMonthlyRestStatistics').addEventListener('click', loadMonthlyRestStatistics);
   $('#refreshRestBoard').addEventListener('click', loadRestBoard); $('#restMonth').addEventListener('change', loadRestBoard);
   $('#makeupRosterEditor').addEventListener('click', (event) => { if (handleRestDateClick(event)) return; const row = event.target.closest('[data-makeup-row]'); if (!row || !event.target.closest('[data-remove-makeup]')) return; readMakeupRoster(); state.makeupRoster.splice(Number(row.dataset.makeupRow), 1); renderMakeupRoster(); });
   $('#makeupRosterEditor').addEventListener('input', (event) => { if (event.target.matches('[data-roster-entitlement]')) syncRestDateField(event.target.closest('[data-makeup-row]')); });

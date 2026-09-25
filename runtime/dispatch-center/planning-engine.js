@@ -255,12 +255,110 @@ function restAdjustmentFromNote(value) {
 function restDayStatus(value) {
   const text = cellText(value).replace(/\s+/gu, '');
   if (!text) return 'unassigned';
-  // Paid leave, sick leave and shift swaps do not consume the monthly rest
-  // allowance. Only an explicit rest value in the source is counted.
+  // Preserve the existing rest-board semantics. The separate official monthly
+  // statistics below use a stricter, revision-bound source interpretation.
   if (/^(休|休息|OFF)$/iu.test(text)) return 'rest';
   if (/假|调休|请假|休假/u.test(text)) return 'leave';
   if (/^[A-Za-z][A-Za-z0-9]*(?:[（(][^）)]+[）)])?$/u.test(text)) return 'work';
   return 'unverified';
+}
+
+// The September 2026 formal sheet's row-3 legend permits two exact overnight
+// periods for each of ZBB and WB. It also spells G, P and M without the
+// "次日" marker for G, K, P, GJ5 and M in the attendance cell. Keep those source spellings explicit;
+// a bare code or an unknown code/time combination is not confirmed work.
+const MONTHLY_SHIFT_EXTRA = Object.freeze({
+  G: Object.freeze(['15:00–00:00']),
+  K: Object.freeze(['16:00–01:00']),
+  P: Object.freeze(['16:30–01:00']),
+  GJ5: Object.freeze(['17:30–01:00']),
+  M: Object.freeze(['21:30–05:00']),
+  ZBB: Object.freeze(['18:30–次日02:00']),
+  WB: Object.freeze(['22:30–次日06:00']),
+});
+function normalizedMonthlyTime(value) {
+  const match = String(value || '').match(/^(次日)?(\d{1,2}):(\d{2})$/u);
+  if (!match || Number(match[2]) > 23 || Number(match[3]) > 59) return '';
+  return `${match[1] || ''}${match[2].padStart(2, '0')}:${match[3]}`;
+}
+function monthlyRestDayStatus(value) {
+  const text = cellText(value).replace(/\s+/gu, '').replace(/：/gu, ':').replace(/[－—–~～]/gu, '-');
+  if (text === '休息') return 'rest';
+  const match = text.match(/^([A-Za-z][A-Za-z0-9]*)[（(]((?:次日)?\d{1,2}:\d{2})-((?:次日)?\d{1,2}:\d{2})[）)]$/u);
+  if (!match || !Object.hasOwn(SHIFT_TIMES, match[1])) return 'unverified';
+  const actual = `${normalizedMonthlyTime(match[2])}-${normalizedMonthlyTime(match[3])}`;
+  if (actual.includes('--') || actual.startsWith('-') || actual.endsWith('-')) return 'unverified';
+  const variants = [SHIFT_TIMES[match[1]], ...(MONTHLY_SHIFT_EXTRA[match[1]] || [])];
+  return variants.some((variant) => {
+    const [start, end] = variant.replace(/[－—–~～]/gu, '-').split('-');
+    return actual === `${normalizedMonthlyTime(start)}-${normalizedMonthlyTime(end)}`;
+  }) ? 'work' : 'unverified';
+}
+
+// This is intentionally independent of the four-room roster and any writeback
+// plan. A monthly count is only shown when the formal sheet still has the
+// verified identity and date shape; absence is not a zero-valued work/rest day.
+function spreadsheetColumn(columnIndex) {
+  let value = columnIndex + 1; let letters = '';
+  while (value > 0) { value -= 1; letters = String.fromCharCode(65 + value % 26) + letters; value = Math.floor(value / 26); }
+  return letters;
+}
+
+function parseMonthlyRestStatistics(rows, month, expectedPeople = 52, options = {}) {
+  const unavailable = (reason) => ({ available: false, month, personCount: null, dateCount: null,
+    people: [], totals: null, reason, readOnly: true, writeBackAllowed: false });
+  if (!/^20\d{2}-(0[1-9]|1[0-2])$/u.test(String(month || '')) || !Array.isArray(rows) ||
+      !Number.isInteger(expectedPeople) || expectedPeople < 1 || !(options.grayCells instanceof Set) ||
+      [...options.grayCells].some((coordinate) => !/^[A-Z]+[1-9]\d*$/u.test(String(coordinate)))) {
+    return unavailable('月总表参数、来源结构或灰格核验不可用。');
+  }
+  const [year, monthNumber] = month.split('-').map(Number);
+  const expectedDates = Array.from({ length: new Date(Date.UTC(year, monthNumber, 0)).getUTCDate() },
+    (_, index) => `${month}-${String(index + 1).padStart(2, '0')}`);
+  const headers = rows.map((row, rowIndex) => ({ row, rowIndex })).filter(({ row }) =>
+    Array.isArray(row) && ['UID', '部门', '工号'].every((label, index) => cellText(row[index]) === label));
+  if (headers.length !== 1) return unavailable('月总表 UID、部门、工号表头缺失或重复。');
+  const { row: header, rowIndex: headerIndex } = headers[0];
+  const dateColumns = header.map((cell, columnIndex) => ({ date: scheduleDateKey(cell, String(year)), columnIndex }))
+    .filter((item) => item.date.startsWith(month));
+  if (dateColumns.length !== expectedDates.length ||
+      new Set(dateColumns.map((item) => item.date)).size !== expectedDates.length ||
+      expectedDates.some((date) => !dateColumns.some((item) => item.date === date))) {
+    return unavailable('月总表日期列缺失、重复或不是完整自然月。');
+  }
+  const dateOrder = dateColumns.sort((a, b) => a.date.localeCompare(b.date));
+  const centerPrefix = '凡岛-品牌营销部-直播中心';
+  const members = rows.slice(headerIndex + 1).map((row, offset) => ({ row, sourceRow: headerIndex + offset + 2 }))
+    .filter(({ row }) => Array.isArray(row) && cellText(row[1]).replace(/\s+/gu, '').startsWith(centerPrefix));
+  if (members.length !== expectedPeople) return unavailable(`月总表直播中心身份行不是已核验的 ${expectedPeople} 行。`);
+  const uids = new Set(); const employeeNumbers = new Set(); const people = [];
+  for (const { row, sourceRow } of members) {
+    const uid = cellText(row[0]); const employeeNo = cellText(row[2]); const name = cellText(row[3]);
+    const department = cellText(row[1]).replace(/\s+/gu, '');
+    if (!uid || !employeeNo || !name || !/^[\p{Script=Han}·]{2,12}$/u.test(name) ||
+        uids.has(uid) || employeeNumbers.has(employeeNo) ||
+        (department !== centerPrefix && !department.startsWith(`${centerPrefix}-`))) {
+      return unavailable('月总表人员 UID、工号、姓名或部门缺失、重复、异常。');
+    }
+    uids.add(uid); employeeNumbers.add(employeeNo);
+    const days = dateOrder.map(({ date, columnIndex }) => ({
+      date,
+      status: options.grayCells.has(`${spreadsheetColumn(columnIndex)}${sourceRow}`)
+        ? 'unverified' : monthlyRestDayStatus(row[columnIndex]),
+    }));
+    const explicitRestDays = days.filter((day) => day.status === 'rest').length;
+    const explicitWorkDays = days.filter((day) => day.status === 'work').length;
+    const pendingDays = days.length - explicitRestDays - explicitWorkDays;
+    people.push({ name, department, sourceRow, explicitRestDays, explicitWorkDays, pendingDays });
+  }
+  const totals = people.reduce((result, person) => ({
+    explicitRestDays: result.explicitRestDays + person.explicitRestDays,
+    explicitWorkDays: result.explicitWorkDays + person.explicitWorkDays,
+    pendingDays: result.pendingDays + person.pendingDays,
+  }), { explicitRestDays: 0, explicitWorkDays: 0, pendingDays: 0 });
+  return { available: true, month, personCount: people.length, dateCount: dateOrder.length,
+    people, totals, readOnly: true, writeBackAllowed: false,
+    scopeNote: '仅统计总表中明确的休息和合法班次；空白、灰格、请假及未知标记一律待核验，不计算剩余月休。' };
 }
 
 function parseRestSource(rows, month, profiles = {}, verifiedAnchorRooms = VERIFIED_ANCHOR_ROOMS) {
@@ -356,7 +454,7 @@ function parseRestSources(sources, month, profiles = {}, verifiedAnchorRooms = V
   }).sort((a, b) => Number(Boolean(b.alert)) - Number(Boolean(a.alert)) || a.roomName.localeCompare(b.roomName, 'zh-CN') || a.name.localeCompare(b.name, 'zh-CN'));
 }
 
-module.exports = { ROOM_PLANNING, SHIFT_TIMES, VERIFIED_ANCHOR_ROOMS, dateKeys, formatShiftCell, generateDraft, generateMakeupDraft, normalizeRoster, parseRestSource, parseRestSources, restAdjustmentFromNote, scheduleDateKey, summarizeAnchorResources, summarizeAttendance, summarizeResourceAverages, transitionAllowed };
+module.exports = { ROOM_PLANNING, SHIFT_TIMES, VERIFIED_ANCHOR_ROOMS, dateKeys, formatShiftCell, generateDraft, generateMakeupDraft, normalizeRoster, parseMonthlyRestStatistics, parseRestSource, parseRestSources, restAdjustmentFromNote, scheduleDateKey, summarizeAnchorResources, summarizeAttendance, summarizeResourceAverages, transitionAllowed };
 
 /** Only rest dates changed by the user are patched; other assignments are untouched. */
 function syncDraftRestDays(draft, roster) {
