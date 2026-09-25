@@ -49,6 +49,51 @@
     return payload;
   }
 
+  function renderPlanningSourceDiagnostic(data) {
+    const root = $('#planningSourceDiagnosticResult');
+    const showCells = (cells) => (cells || []).map((item) => `<li><code>${pEsc(item.ref)}</code> = ${pEsc(item.value || '（空白）')}</li>`).join('');
+    const showIssues = (issues) => (issues || []).map((item) => `<li><b>${pEsc(item.reason)}</b>${item.cells?.length ? `<details><summary>查看最多 ${item.cells.length} 个争议单元格；原始自由文本已遮罩</summary><ul>${showCells(item.cells)}</ul></details>` : ''}</li>`).join('');
+    const days = data.dates || [];
+    const unresolved = new Set(data.summary?.unresolvedRoomSourceDates || []);
+    root.innerHTML = `<p>四房班表版本 ${pEsc(Object.values(data.source?.roomRevisions || {}).join(' / '))}；正式总表版本 ${pEsc(data.source?.totalRevision)}；读取 ${pEsc(data.checkedAt)}。${data.sourceMode === 'verified_backup' ? '当前为只读备份，不代表现行原表。' : '来源为飞书正式原表。'}无论诊断结果如何，此入口均不可写回。</p><p><b>严格四房来源完整 ${data.summary?.strictRoomSourceCompleteDates?.length || 0}/${data.summary?.checkedDays || 0} 日；待核 ${unresolved.size} 日。</b>待核日期：${pEsc([...unresolved].map((date) => `9/${Number(date.slice(-2))}`).join('、') || '无')}。整月概览不含姓名和原值；点选某一天才读取该日的遮罩后争议单元格。“来源完整”也不表示个人跨房规则或写回已经获准。</p><nav class="planning-diagnostic-days" aria-label="选择排班诊断日期">${days.map((day) => `<button type="button" data-diagnostic-date="${pEsc(day.date)}" class="${unresolved.has(day.date) ? 'unresolved' : ''}" aria-label="${pEsc(day.date)} ${unresolved.has(day.date) ? '四房来源待核' : '四房来源完整'}">${pEsc(day.date.slice(-2))}</button>`).join('')}</nav><div id="planningDiagnosticDay"></div>`;
+    let requestSequence = 0;
+    const loadDay = async (date) => {
+      if (!days.some((item)=>item.date===date)) return;
+      const sequence = ++requestSequence;
+      root.querySelectorAll('[data-diagnostic-date]').forEach((button) => button.classList.toggle('selected',button.dataset.diagnosticDate === date));
+      const detail = root.querySelector('#planningDiagnosticDay');
+      detail.textContent = `${date} 正在读取当日争议证据…`;
+      try {
+        const payload = await requestPlanning(`/api/planning/source-diagnostic?date=${encodeURIComponent(date)}`);
+        if (sequence !== requestSequence) return;
+        const day = payload.data?.dates?.[0];
+        if (!day || day.date !== date || !payload.data.readOnly || payload.data.writeBackAllowed !== false) throw new Error('诊断结果不符合只读约束');
+        detail.innerHTML = `<section><h4>${pEsc(day.date)} · ${day.strictRoomSourceComplete ? '四房严格来源完整' : '四房严格来源待核'} · 不可写回</h4>${day.issues?.length ? `<ul>${showIssues(day.issues)}</ul>` : ''}<div class="planning-diagnostic-rooms">${(day.rooms || []).map((room) => `<article><h5>${pEsc(room.roomName)} · ${pEsc(room.sourceRange || '日期块缺失')}</h5><p>${room.issues.length} 项待核信息；写回：禁止</p>${room.issues.length ? `<ul>${showIssues(room.issues)}</ul>` : '<p>本日未检出结构歧义；仍需整月岗位及个人跨房规则核验。</p>'}${room.affectedPeople?.length ? `<details><summary>查看争议人员对应总表单元格（${room.affectedPeople.length} 人）</summary>${room.affectedPeople.map((person) => `<p><b>${pEsc(person.name)}</b>：${person.totalCells.map((entry) => `${pEsc(entry.ref)} = ${pEsc(entry.value || '（空白）')}`).join('；') || '未找到唯一姓名行'}</p>`).join('')}</details>` : ''}</article>`).join('')}</div></section>`;
+      } catch (error) {
+        if (sequence === requestSequence) detail.textContent = `${date} 详情无法核验：${error.message}；保持不可写回。`;
+      }
+    };
+    root.onclick = (event) => { const button = event.target.closest('[data-diagnostic-date]'); if (button) void loadDay(button.dataset.diagnosticDate); };
+    root.querySelector('#planningDiagnosticDay').textContent = '请选择日期查看该日经遮罩的争议证据。';
+    root.hidden = false;
+    $('#planningSourceDiagnosticStatus').textContent = `已读取 ${days.length} 天；严格四房来源待核 ${unresolved.size} 天。诊断只读，未作任何写回。`;
+  }
+
+  async function loadPlanningSourceDiagnostic() {
+    const button = $('#loadPlanningSourceDiagnostic');
+    const status = $('#planningSourceDiagnosticStatus');
+    button.disabled = true;
+    $('#planningSourceDiagnosticResult').hidden = true;
+    status.textContent = '正在只读核对正式班表和总表，请勿据旧快照写回…';
+    try {
+      const payload = await requestPlanning('/api/planning/source-diagnostic');
+      renderPlanningSourceDiagnostic(payload.data);
+    } catch (error) {
+      $('#planningSourceDiagnosticResult').hidden = true;
+      status.textContent = `来源诊断不可用：${error.message}；保持不可写回。`;
+    } finally { button.disabled = false; }
+  }
+
   function defaultRange(roomCode, role) {
     const now = new Date(); now.setHours(0, 0, 0, 0);
     if (role === 'anchor' && (roomCode === 'youxuan' || roomCode === 'wangou')) {
@@ -313,6 +358,7 @@
   document.querySelectorAll('[data-planning-room]').forEach((button) => button.addEventListener('click', () => openPlanning(button.dataset.planningRoom, button.dataset.planningRole)));
   $('#closePlanningDialog').addEventListener('click', () => dialog.close()); generateButton.addEventListener('click', generateDraft); saveButton.addEventListener('click', saveDraft); previewButton.addEventListener('click', previewImport);
   $('#loadPriorPlanning').addEventListener('click', loadPriorPlanning);
+  $('#loadPlanningSourceDiagnostic').addEventListener('click', loadPlanningSourceDiagnostic);
   $('#refreshRestBoard').addEventListener('click', loadRestBoard); $('#restMonth').addEventListener('change', loadRestBoard);
   $('#makeupRosterEditor').addEventListener('click', (event) => { if (handleRestDateClick(event)) return; const row = event.target.closest('[data-makeup-row]'); if (!row || !event.target.closest('[data-remove-makeup]')) return; readMakeupRoster(); state.makeupRoster.splice(Number(row.dataset.makeupRow), 1); renderMakeupRoster(); });
   $('#makeupRosterEditor').addEventListener('input', (event) => { if (event.target.matches('[data-roster-entitlement]')) syncRestDateField(event.target.closest('[data-makeup-row]')); });

@@ -138,6 +138,17 @@ test('read-only new baseline reads current total schedule revision, rest days an
   const schedule=await (await fetch(base+'/api/schedule?date=2026-09-25')).json();
   assert.equal(schedule.rooms.length,4);
   assert.deepEqual(schedule.rooms.map(room=>room.code).sort(),['brand_selection','guanqi','wangou','youxuan']);
+  const overviewResponse=await fetch(base+'/api/planning/source-diagnostic');
+  assert.equal(overviewResponse.status,200);
+  const overview=await overviewResponse.json();
+  assert.equal(overview.data.readOnly,true);assert.equal(overview.data.writeBackAllowed,false);
+  assert.equal(overview.data.dates.length,30);
+  assert.equal(JSON.stringify(overview).includes('潘小慧'),false,'whole-month overview must not expose a staff name');
+  const detailResponse=await fetch(base+'/api/planning/source-diagnostic?date=2026-09-25');
+  assert.equal(detailResponse.status,200);
+  const detail=await detailResponse.json();
+  assert.equal(detail.data.dates.length,1);assert.equal(detail.data.writeBackAllowed,false);
+  assert.equal(fs.existsSync(path.join(dir,'schedule-writeback-audit.ndjson')),false,'diagnostic GET must not write an audit');
   assert.equal(fs.existsSync(path.join(dir,'planning-workbench.json')),false,'read-only GET must not create empty history');
 });
 
@@ -194,6 +205,11 @@ test('ordinary live-module member sees disabled capabilities and cannot persist 
   const view=await planning.json();
   assert.equal(view.draftCapability.enabled,false);assert.equal(view.draftCapability.code,'planning_admin_required');
   assert.equal(view.totalImportCapability.enabled,false);assert.equal(view.totalImportCapability.code,'planning_admin_required');
+  const diagnostic=await fetch(base+'/api/planning/source-diagnostic');
+  assert.equal(diagnostic.status,403,'source cells with staff names require a planning manager');
+  const deniedDiagnostic=await diagnostic.json();
+  assert.equal(deniedDiagnostic.code,'PLANNING_ADMIN_REQUIRED');
+  assert.equal(deniedDiagnostic.error,'仅排班管理员可查看原表来源诊断。');
   const before=fs.readFileSync(paths.storePath,'utf8');
   for(const route of ['/api/planning/draft','/api/planning/rest-setting','/api/planning/rest-profile','/api/planning/makeup/draft','/api/planning/import']){
     const response=await fetch(base+route,{method:'POST',headers:{origin:'https://hub.fandow.com','x-requested-with':'XMLHttpRequest','content-type':'application/json'},body:'{}'});

@@ -796,6 +796,213 @@ function columnName(index) {
   return result;
 }
 
+// This report is deliberately not an import preview. It exposes the cells
+// behind a disputed date so that a human can resolve the source, but never
+// derives a writable value or treats an absent person as resting.
+function buildPlanningSourceDiagnostic({ dates, sheets, totalRows, totalRevision, totalTarget, roomReadbackRevision }) {
+  const requestedDates = [...new Set(dates || [])];
+  if (!requestedDates.length || requestedDates.length > 30 || requestedDates.some((date) => !/^2026-09-(0[1-9]|[12]\d|30)$/u.test(date))) {
+    throw Object.assign(new Error('当前只支持核查 2026 年 9 月的有效日期。'), { status: 422, code: 'PLANNING_DIAGNOSTIC_DATE_INVALID' });
+  }
+  const cell = (sheetId, row, column, value) => ({ ref: `${sheetId}!${columnName(column)}${row}`, value: flattenCell(value) });
+  const issue = (code, reason, cells = []) => ({ code, reason, cells });
+  const revisions = Object.fromEntries(ROOMS.map((room) => [room.code, sheetRevision(sheets?.[room.code])]));
+  const revisionValues = Object.values(revisions);
+  const sameRoomRevision = revisionValues.every((value) => Number.isSafeInteger(value) && value > 0 && value === revisionValues[0]);
+  const roomReadbackMatches = Number.isSafeInteger(roomReadbackRevision) && roomReadbackRevision > 0 && roomReadbackRevision === revisionValues[0];
+  const totalHeaderRows = (totalRows || []).flatMap((row, index) =>
+    flattenCell(row?.[0]) === 'UID' && flattenCell(row?.[1]) === '部门' && flattenCell(row?.[2]) === '工号' ? [index] : []);
+  const headerRow = totalHeaderRows.length === 1 ? totalHeaderRows[0] : -1;
+  const nameRows = new Map();
+  if (headerRow >= 0) (totalRows || []).slice(headerRow + 1).forEach((row, offset) => {
+    const name = flattenCell(row?.[3]).replace(/\s+/gu, '').trim();
+    if (!name) return;
+    const matches = nameRows.get(name) || [];
+    matches.push({ row: headerRow + offset + 2, data: row });
+    nameRows.set(name, matches);
+  });
+  const knownNames = [...nameRows.keys()].filter((name) => /^[\p{Script=Han}·]{2,12}$/u.test(name));
+  const dateSet = new Set(requestedDates);
+  const datedRowsByRoom = Object.fromEntries(ROOMS.map((room) => {
+    const index = new Map();
+    sheetRows(sheets?.[room.code]).forEach((row, rowIndex) => {
+      const text = row.map(flattenCell).join(' ');
+      if (!knownNames.some((name) => text.replace(/\s+/gu, '').includes(name))) return;
+      for (const date of planningNoteDates(text, '2026')) {
+        if (!dateSet.has(date)) continue;
+        index.set(date, [...(index.get(date) || []), {row, rowNumber:rowIndex + 1}]);
+      }
+    });
+    return [room.code, index];
+  }));
+  const reports = requestedDates.map((date) => {
+    const dateColumns = headerRow < 0 ? [] : (totalRows[headerRow] || []).flatMap((value, column) =>
+      column >= 4 && headerDateKey(value, '2026') === date ? [column] : []);
+    const dateIssues = [];
+    if (!sameRoomRevision) dateIssues.push(issue('room_revision_unverified', '四房班表版本不一致或缺失，不能作为同一时点来源。'));
+    if (!roomReadbackMatches) dateIssues.push(issue('room_revision_changed_during_read', '四房原表读取前后版本不一致或未返回版本，不能作为同一时点来源。'));
+    if (!Number.isSafeInteger(totalRevision) || totalRevision < 1) dateIssues.push(issue('total_revision_unverified', '正式总表版本缺失。'));
+    if (headerRow < 0) dateIssues.push(issue('total_header_unverified', '正式总表 UID、部门、工号表头缺失或重复。',
+      totalHeaderRows.map((index) => cell(totalTarget.sheetId, index + 1, 0, totalRows[index]?.[0]))));
+    if (dateColumns.length !== 1) dateIssues.push(issue('total_date_column_unverified', '正式总表日期列缺失或重复。',
+      dateColumns.map((column) => cell(totalTarget.sheetId, headerRow + 1, column, totalRows[headerRow]?.[column]))));
+    const presence = new Map();
+    const rooms = ROOMS.map((room) => {
+      const rows = sheetRows(sheets?.[room.code]);
+      const markerRows = rows.flatMap((row, index) => dateMarkerMatches(row?.[0], date) ? [index + 1] : []);
+      const block = findDateBlockWithMeta(rows, date);
+      const sourceCells = [];
+      let sourceCellCount = 0;
+      block.rows.forEach((row, offset) => row.forEach((value, column) => {
+        if (!flattenCell(value)) return;
+        sourceCellCount += 1;
+        if (sourceCells.length < 500) sourceCells.push(cell(room.sheetId, block.firstRow + offset, column, value));
+      }));
+      const datedNoteCells = [];
+      let datedNoteCellCount = 0;
+      for (const {row,rowNumber} of datedRowsByRoom[room.code].get(date) || []) {
+        if (block.firstRow && rowNumber >= block.firstRow && rowNumber <= block.lastRow) continue;
+        row.forEach((value, column) => {
+          if (!flattenCell(value)) return;
+          datedNoteCellCount += 1;
+          if (datedNoteCells.length < 100) datedNoteCells.push(cell(room.sheetId, rowNumber, column, value));
+        });
+      }
+      const issues = [];
+      if (sourceCellCount > sourceCells.length) issues.push(issue('room_source_too_large', '日期块超过只读诊断展示上限，后续原表内容未解析；不能写回。', sourceCells));
+      if (datedNoteCellCount > datedNoteCells.length) issues.push(issue('dated_note_too_large', '跨日期块的本日人员备注超过展示上限，剩余原表内容待人工核对。', datedNoteCells));
+      if (datedNoteCells.length) issues.push(issue('dated_note_outside_block', '本日人员备注出现在本日期块之外，不能按当前日期块自动归属或写回。', datedNoteCells));
+      if (markerRows.length !== 1) issues.push(issue('room_date_marker_unverified', '该房日期标记缺失或重复，不能确认唯一日期块。',
+        markerRows.map((row) => cell(room.sheetId, row, 0, rows[row - 1]?.[0]))));
+      const proof = block.rows.length > 100 ? {valid:false,claims:[],roster:[]} : planningRoomEvidence(room, rows, date, new Set(knownNames));
+      const parsedSource = parseRoomSchedule(room, rows, date).source;
+      if (!proof.valid) issues.push(issue('room_timeline_unverified', '该房主播/助理时间轴或考勤结构不能严格解析；空白不能当休息。', sourceCells));
+      const annotated = sourceCells.filter((entry) => /支援|借调|兼职|共播|待定|待排|未定|TBD/u.test(entry.value));
+      if (annotated.length) issues.push(issue('room_annotation_unverified', '来源有支援、借调、兼职或待定备注，不能自动推断个人所属直播间或休息。', annotated));
+      const relevantCells = [...sourceCells, ...datedNoteCells];
+      const people = [];
+      const observedNames = new Set([...knownNames.filter((name) => relevantCells.some((entry) => entry.value.replace(/\s+/gu, '').includes(name))),
+        ...proof.claims.map((entry) => entry.name), ...proof.roster.map((entry) => entry.name)]);
+      for (const name of observedNames) {
+        const mentions = relevantCells.filter((entry) => entry.value.replace(/\s+/gu, '').includes(name));
+        if (!mentions.length) continue;
+        presence.set(name, [...(presence.get(name) || []), { roomCode: room.code, cells: mentions }]);
+        const matches = nameRows.get(name) || [];
+        const totalCells = matches.flatMap(({ row, data }) => [
+          cell(totalTarget.sheetId, row, 1, data?.[1]),
+          cell(totalTarget.sheetId, row, 3, data?.[3]),
+          ...(dateColumns.length === 1 ? [cell(totalTarget.sheetId, row, dateColumns[0], data?.[dateColumns[0]])] : []),
+        ]);
+        people.push({ name, roomCells: mentions, totalCells });
+        if (matches.length !== 1) issues.push(issue('total_identity_unverified', `${name}在总表不是唯一姓名行，不能据同名文本写回。`, totalCells));
+        if (matches.length === 1) {
+          const department = flattenCell(matches[0].data?.[1]).replace(/\s+/gu, '');
+          const center = '凡岛-品牌营销部-直播中心';
+          const expected = `${center}-${room.name}`;
+          if (department.startsWith(`${center}-`) && department !== expected && !department.startsWith(`${expected}-`)) {
+            issues.push(issue('total_department_room_conflict', `${name}的总表归属部门与此房原表出现位置不同；借调/跨房规则待确认。`, [totalCells[0], ...mentions]));
+          }
+        }
+      }
+      return { roomCode: room.code, roomName: room.name, sheetId: room.sheetId,
+        markerRows, sourceRange: block.firstRow ? `${room.sheetId}!A${block.firstRow}:${room.maxColumn}${block.lastRow}` : null,
+        issues, people, sourceCells, strictSourceValid:markerRows.length === 1 && proof.valid && parsedSource.found === true,
+        writeBackAllowed: false };
+    });
+    for (const [name, entries] of presence) {
+      if (new Set(entries.map((entry) => entry.roomCode)).size < 2) continue;
+      const evidence = entries.flatMap((entry) => entry.cells);
+      for (const entry of entries) rooms.find((room) => room.roomCode === entry.roomCode).issues.push(
+        issue('cross_room_source_mention', `${name}在同一天多个直播间的原表出现；个人跨房/休息规则待业务确认。`, evidence));
+    }
+    return { date, issues: dateIssues, rooms,
+      strictRoomSourceComplete:sameRoomRevision && roomReadbackMatches && rooms.every((room) => room.strictSourceValid),
+      writeBackAllowed: false,
+      decision: '只读来源诊断；未核实的日期块、姓名备注、跨房规则或总表身份不能作为写回依据。' };
+  });
+  return { readOnly: true, writeBackAllowed: false, source: {
+    roomWorkbook: SCHEDULE_SPREADSHEET_TOKEN, roomRevisions: revisions, roomReadbackRevision,
+    totalWorkbook: totalTarget.spreadsheetToken, totalSheetId: totalTarget.sheetId, totalRevision,
+  }, summary: {checkedDays:reports.length,
+    strictRoomSourceCompleteDates:reports.filter((report) => report.strictRoomSourceComplete).map((report) => report.date),
+    unresolvedRoomSourceDates:reports.filter((report) => !report.strictRoomSourceComplete).map((report) => report.date)},
+  dates: reports };
+}
+
+const PUBLIC_DIAGNOSTIC_REASONS = Object.freeze({
+  room_revision_unverified:'四房原表版本不一致或缺失',
+  room_revision_changed_during_read:'四房原表读取前后版本不一致',
+  total_revision_unverified:'正式总表版本缺失',
+  total_header_unverified:'正式总表表头缺失或重复',
+  total_date_column_unverified:'正式总表日期列缺失或重复',
+  room_source_too_large:'日期块超出诊断上限',
+  dated_note_too_large:'跨日期备注超出诊断上限',
+  dated_note_outside_block:'本日人员备注出现在其他日期块',
+  room_date_marker_unverified:'直播间日期标记缺失或重复',
+  room_timeline_unverified:'时间轴或考勤结构不能严格解析',
+  room_annotation_unverified:'存在待核验的支援、借调、兼职或待定标注',
+  total_identity_unverified:'总表姓名行不唯一或缺失',
+  total_department_room_conflict:'总表部门与出现的直播间不同',
+  cross_room_source_mention:'同一姓名在多间直播间来源出现',
+});
+
+function safeDiagnosticCellValue(raw, allowedNames = new Set()) {
+  const text = flattenCell(raw).trim();
+  if (!text) return '（空白）';
+  const compact = text.replace(/\s+/gu, '');
+  // Only a narrow set of schedule primitives is displayed verbatim. Arbitrary
+  // notes, identifiers, contact details and department suffixes stay masked.
+  if (compact.length > 60 || /(?:1[3-9]\d{9}|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\bou_[A-Za-z0-9_-]+\b|\bFD[-_]?\d{3,}\b)/iu.test(compact)) return '（原值已遮罩）';
+  const annotation = compact.match(/^([\p{Script=Han}·]{2,12})[（(](支援|借调|兼职|金牌导购)[）)]$/u);
+  if (/^(?:20\d{2}年)?\d{1,2}月\d{1,2}日(?:星期[日天一二三四五六0-7])?$/u.test(compact) ||
+      /^(?:时间|主播|助理|休息|OFF|24小时|本月汇总)$/iu.test(compact) ||
+      /^\d{1,2}[:：]\d{1,2}[-~～—至]\d{1,2}[:：]\d{1,2}$/u.test(compact) ||
+      /^[A-Za-z][A-Za-z0-9]{0,5}[（(]\d{1,2}[:：]\d{1,2}[-~～—至](?:次日)?\d{1,2}[:：]\d{1,2}[）)]$/u.test(compact) ||
+      (allowedNames.has(compact) && /^[\p{Script=Han}·]{2,12}$/u.test(compact)) ||
+      (annotation && allowedNames.has(annotation[1])) ||
+      /^凡岛-品牌营销部-直播中心(?:-(?:官旗|品牌精选|优选|王鸥美肤))?$/u.test(compact)) return text;
+  return '（原值已遮罩）';
+}
+
+function projectPlanningSourceDiagnostic(report, detail = false) {
+  const base = { readOnly:true, writeBackAllowed:false, checkedAt:report.checkedAt || null,
+    sourceMode:report.sourceMode || 'official_live',
+    source:{roomRevisions:report.source.roomRevisions,roomReadbackRevision:report.source.roomReadbackRevision,totalRevision:report.source.totalRevision},
+    summary:report.summary };
+  if (!detail) return { ...base, dates:report.dates.map((day) => ({
+    date:day.date, strictRoomSourceComplete:day.strictRoomSourceComplete, writeBackAllowed:false,
+    issueCodes:day.issues.map((item) => item.code), issueCount:day.issues.length,
+    rooms:day.rooms.map((room) => ({roomCode:room.roomCode,roomName:room.roomName,
+      strictSourceValid:room.strictSourceValid,issueCodes:room.issues.map((item)=>item.code),issueCount:room.issues.length,
+      writeBackAllowed:false})),
+  })) };
+  const issueDetail = (item, allowedNames = new Set()) => {
+    const prioritized = item.code === 'room_timeline_unverified'
+      ? item.cells.filter((entry) => /待定|待排|未定|TBD|支援|借调|兼职|共播/iu.test(entry.value)) : [];
+    const cells = prioritized.length ? prioritized : item.cells;
+    return {code:item.code,reason:PUBLIC_DIAGNOSTIC_REASONS[item.code] || '来源待人工核验',
+      cellCount:item.cells.length,cells:cells.slice(0,12).map((entry)=>({ref:entry.ref,value:safeDiagnosticCellValue(entry.value,allowedNames)})),
+      truncated:item.cells.length > Math.min(cells.length,12)};
+  };
+  return { ...base, dates:report.dates.map((day) => ({date:day.date,
+    strictRoomSourceComplete:day.strictRoomSourceComplete,writeBackAllowed:false,
+    issues:day.issues.map(issueDetail),
+    rooms:day.rooms.map((room) => {
+      const allowedNames = new Set(room.people.map((person)=>person.name));
+      const namedIssues = room.issues.filter((item) => ['total_identity_unverified','total_department_room_conflict','cross_room_source_mention'].includes(item.code));
+      const annotatedRefs = new Set(room.issues.filter((item)=>item.code==='room_annotation_unverified').flatMap((item)=>item.cells.map((entry)=>entry.ref)));
+      const affectedPeople = room.people.filter((person) => namedIssues.some((item) => item.reason.includes(person.name)) ||
+        person.roomCells.some((entry) => annotatedRefs.has(entry.ref))).slice(0,20);
+      return {roomCode:room.roomCode,roomName:room.roomName,sourceRange:room.sourceRange,
+        strictSourceValid:room.strictSourceValid,writeBackAllowed:false,
+        issues:room.issues.map((item)=>issueDetail(item,allowedNames)),
+        affectedPeople:affectedPeople.map((person) => ({name:person.name,
+          totalCells:person.totalCells.map((entry)=>({ref:entry.ref,value:safeDiagnosticCellValue(entry.value,allowedNames)}))})),
+      };
+    }),
+  })) };
+}
+
 function roleMetadata(room, rows, date) {
   const match = findDateBlockWithMeta(rows, date);
   if (!match.rows.length) return {};
@@ -1780,6 +1987,27 @@ async function readVerifiedTotalScheduleSource(baseline) {
   }
   return { ...target, revision:source.revision, readAt:new Date().toISOString(), sourceMode:sourceSnapshot?'verified_backup':'official_live', permissionStatus:'已读取' };
 }
+
+async function readPlanningSourceDiagnostic(date = '') {
+  if (date && !/^2026-09-(0[1-9]|[12]\d|30)$/u.test(date)) {
+    throw Object.assign(new Error('当前只支持核查 2026 年 9 月的有效日期。'), {status:422,code:'PLANNING_DIAGNOSTIC_DATE_INVALID'});
+  }
+  const target = await resolveTotalScheduleTarget();
+  const sheets = await readScheduleSheets(true);
+  const total = await readSpreadsheetRange(target.spreadsheetToken, fullScheduleRange(target));
+  const roomReadbackRevision = sourceSnapshot
+    ? sheetRevision(sheets[ROOMS[0].code])
+    : await readWorkbookRevision(await getTenantToken());
+  if (!String(total.actualRange || '').startsWith(`${target.sheetId}!A1:`)) {
+    throw Object.assign(new Error('正式总表回读坐标不是目标工作表 A1 起始范围。'), {status:502,code:'SHEET_READBACK_UNVERIFIED'});
+  }
+  const report = { ...buildPlanningSourceDiagnostic({
+    dates:date ? [date] : Array.from({length:30}, (_, day) => `2026-09-${String(day + 1).padStart(2,'0')}`),
+    sheets, totalRows:total.rows,
+    totalRevision:total.revision, totalTarget:target, roomReadbackRevision,
+  }), checkedAt:new Date().toISOString(), sourceMode:sourceSnapshot?'verified_backup':'official_live' };
+  return projectPlanningSourceDiagnostic(report, Boolean(date));
+}
 async function commitMakeupImport() {
   throw Object.assign(new Error('化妆师源表尚无独立核验的新基线，不能提交或记为无变化。'), {status:423,code:'planning_source_unbaselined'});
 }
@@ -1889,6 +2117,10 @@ async function serializePlanningMutation(operation) {
 async function planningApi(request, response, requestUrl, auth) {
   try {
     const route = requestUrl.pathname;
+    if (request.method === 'GET' && route === '/api/planning/source-diagnostic') {
+      if (!canManagePlanning(auth)) throw Object.assign(new Error('仅排班管理员可查看含人员姓名的原表来源诊断。'), {status:403,code:'PLANNING_ADMIN_REQUIRED'});
+      return json(response, {ok:true,data:await readPlanningSourceDiagnostic(requestUrl.searchParams.get('date') || '')});
+    }
     if (request.method === 'GET' && route === '/api/planning') {
       let store;
       try { store = await readPlanningStore(); } catch(error) {
@@ -2068,6 +2300,7 @@ function accessDenied(response, auth) {
 
 function userFacingErrorMessage(error, fallback = '请求处理失败。') {
   const message = String(error?.message || '');
+  if (error?.code === 'PLANNING_ADMIN_REQUIRED' && message.includes('来源诊断')) return '仅排班管理员可查看原表来源诊断。';
   if (['EACCES', 'EPERM', 'EROFS'].includes(String(error?.code || '')) || /(?:[A-Z]:\\|\/app\/|\/data\/)/iu.test(message)) {
     return '排班草稿存储暂不可用，请检查持久化目录权限后重试；现有飞书排班未被修改。';
   }
@@ -2210,6 +2443,8 @@ module.exports = {
   REST_SCHEDULE_SOURCES,
   TOTAL_SCHEDULE_WIKI_URL,
   buildPlanningRoleEvidence,
+  buildPlanningSourceDiagnostic,
+  projectPlanningSourceDiagnostic,
   buildPlanningImportPlan,
   alignPlanningRangeRow,
   assertPlanningFormulaRow,

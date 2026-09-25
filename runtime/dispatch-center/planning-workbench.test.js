@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { ROOM_PLANNING, SHIFT_TIMES, formatShiftCell, generateDraft, generateMakeupDraft, parseRestSource, parseRestSources, restAdjustmentFromNote, transitionAllowed } = require('./planning-engine');
 const SHIFT_LEGEND = '班次信息: L（05:30-14:30）: 05:30 ~ 14:30; R（06:30-15:30）: 06:30 ~ 15:30; M（21:30-05:00）: 21:30 ~ 次日 05:00; P（16:30-01:00）: 16:30 ~ 次日 01:00; J2（14:30-23:00）: 14:30 ~ 23:00';
-const { alignPlanningRangeRow, assertPlanningFormulaRow, buildMakeupImportPlan, buildPlanningImportPlan, buildPlanningRoleEvidence, changedRowRanges, dateMarkerMatches, fullScheduleRange, headerDateKey, parseMakeupScheduleRows, planningReadbackState, spreadsheetValueRows, validateWriteOrigin } = require('./schedule-api-server');
+const { alignPlanningRangeRow, assertPlanningFormulaRow, buildMakeupImportPlan, buildPlanningImportPlan, buildPlanningRoleEvidence, buildPlanningSourceDiagnostic, projectPlanningSourceDiagnostic, changedRowRanges, dateMarkerMatches, fullScheduleRange, headerDateKey, parseMakeupScheduleRows, planningReadbackState, spreadsheetValueRows, validateWriteOrigin } = require('./schedule-api-server');
 
 function provenRole(draft) {
   const claims = {}, monthlyClaims = {}, timelineShifts = {}, roster = {};
@@ -379,6 +379,95 @@ function liveRoleSheets(people={}) {
   };
   return Object.fromEntries(['guanqi','brand_selection','youxuan','wangou'].map(roomCode=>[roomCode,{rows:Array.from({length:30},(_,index)=>block(roomCode,index+1,people[roomCode]?.anchor,people[roomCode]?.assistant)).flat(),revision:189107}]));
 }
+
+function sourceDiagnosticFixture(sheets = liveRoleSheets({guanqi:{anchor:'赵媛'}})) {
+  const header = Array(34).fill('');
+  header[0]='UID';header[1]='部门';header[2]='工号';
+  for (let day=1;day<=30;day++) header[day+3]=`2026/9/${day}`;
+  const person = Array(34).fill('');
+  person[0]='u-1';person[1]='凡岛-品牌营销部-直播中心-官旗';person[2]='FD-1';person[3]='赵媛';person[19]='L（05:30-14:30）';person[33]='休息';
+  return {dates:['2026-09-16','2026-09-30'],sheets,totalRows:[[],[],[],header,person],totalRevision:505,
+    totalTarget:{spreadsheetToken:'Wj4zs3oDfhGUfetlTXicxblmnHe',sheetId:'0jFdXf'},roomReadbackRevision:189107};
+}
+
+test('read-only September 16 and 30 examples show four rooms and exact room/total coordinates without an import plan', () => {
+  const fixture = sourceDiagnosticFixture();
+  fixture.sheets.brand_selection.rows[63][3]='赵媛';
+  fixture.sheets.wangou.rows[117][3]='赵媛（支援）';
+  const report = buildPlanningSourceDiagnostic(fixture);
+  assert.equal(report.readOnly,true);
+  assert.equal(report.writeBackAllowed,false);
+  assert.deepEqual(report.dates.map((item)=>item.date),['2026-09-16','2026-09-30']);
+  for (const day of report.dates) {
+    assert.equal(day.writeBackAllowed,false);
+    assert.equal(day.rooms.length,4);
+    assert.ok(day.rooms.every((room)=>room.writeBackAllowed===false));
+  }
+  const sixteen = report.dates[0];
+  assert.ok(sixteen.rooms.find((room)=>room.roomCode==='guanqi').sourceCells.some((item)=>item.ref==='NYB2iu!D62'&&item.value==='赵媛'));
+  assert.ok(sixteen.rooms.find((room)=>room.roomCode==='guanqi').people[0].totalCells.some((item)=>item.ref==='0jFdXf!T5'&&item.value==='L（05:30-14:30）'));
+  assert.ok(sixteen.rooms.find((room)=>room.roomCode==='brand_selection').issues.some((item)=>item.code==='cross_room_source_mention'));
+  assert.ok(sixteen.rooms.find((room)=>room.roomCode==='brand_selection').issues.some((item)=>item.code==='total_department_room_conflict'&&item.cells.some((cell)=>cell.ref==='0jFdXf!B5')));
+  const thirty = report.dates[1];
+  assert.ok(thirty.rooms.find((room)=>room.roomCode==='wangou').issues.some((item)=>item.code==='room_annotation_unverified'&&item.cells.some((cell)=>cell.ref==='PhlV42!D118')));
+  assert.ok(thirty.rooms.find((room)=>room.roomCode==='guanqi').people[0].totalCells.some((item)=>item.ref==='0jFdXf!AH5'&&item.value==='休息'));
+  assert.equal(Object.hasOwn(report,'ranges'),false);
+});
+
+test('whole-month diagnosis reports each of thirty days and the exact sixteen incomplete room-source days', () => {
+  const fixture=sourceDiagnosticFixture();
+  const unresolvedDays=[3,4,5,6,9,11,12,13,20,22,25,26,27,28,29,30];
+  fixture.dates=Array.from({length:30},(_,index)=>`2026-09-${String(index+1).padStart(2,'0')}`);
+  for (const day of unresolvedDays) fixture.sheets.youxuan.rows[(day-1)*4][3]='待定';
+  const report=buildPlanningSourceDiagnostic(fixture);
+  assert.equal(report.summary.checkedDays,30);
+  assert.equal(report.summary.strictRoomSourceCompleteDates.length,14);
+  assert.deepEqual(report.summary.unresolvedRoomSourceDates,unresolvedDays.map((day)=>`2026-09-${String(day).padStart(2,'0')}`));
+  for(const day of report.dates.filter((item)=>!item.strictRoomSourceComplete)) {
+    const issue=day.rooms.find((room)=>room.roomCode==='youxuan').issues.find((item)=>item.code==='room_timeline_unverified');
+    assert.ok(issue?.cells.some((item)=>item.ref.startsWith('LRAvIU!D')));
+    assert.equal(day.writeBackAllowed,false);
+  }
+  assert.throws(()=>buildPlanningSourceDiagnostic({...fixture,dates:['2026-09-31']}),/有效日期/u);
+});
+
+test('monthly projection has only dates and problem codes; daily projection masks unrelated notes and contact identifiers', () => {
+  const fixture=sourceDiagnosticFixture();
+  fixture.sheets.brand_selection.rows[62][4]='赵媛支援 联系13812345678 secret@example.com FD-12345 ou_private';
+  const raw=buildPlanningSourceDiagnostic(fixture);
+  const overview=projectPlanningSourceDiagnostic(raw,false);
+  const overviewText=JSON.stringify(overview);
+  for(const sensitive of ['赵媛','13812345678','secret@example.com','FD-12345','ou_private','L（05:30-14:30）']) {
+    assert.equal(overviewText.includes(sensitive),false,`overview leaked ${sensitive}`);
+  }
+  assert.equal(overview.writeBackAllowed,false);
+  assert.ok(overview.dates.every((day)=>day.rooms.length===4 && day.rooms.every((room)=>
+    Object.keys(room).every((key)=>!['sourceCells','people','issues','affectedPeople'].includes(key)) && room.writeBackAllowed===false)));
+  const detail=projectPlanningSourceDiagnostic(raw,true);
+  const detailText=JSON.stringify(detail);
+  for(const sensitive of ['13812345678','secret@example.com','FD-12345','ou_private','u-1','FD-1']) {
+    assert.equal(detailText.includes(sensitive),false,`daily detail leaked ${sensitive}`);
+  }
+  assert.ok(detail.dates[0].rooms.find((room)=>room.roomCode==='brand_selection').issues.some((item)=>
+    item.code==='room_annotation_unverified' && item.cells.some((entry)=>entry.value==='（原值已遮罩）')));
+  assert.ok(detail.dates.every((day)=>day.writeBackAllowed===false && day.rooms.every((room)=>room.writeBackAllowed===false)));
+});
+
+test('source diagnosis fails closed on duplicate date, drifted revision and missing total identity', () => {
+  const fixture = sourceDiagnosticFixture(liveRoleSheets({guanqi:{anchor:'未入总表'}}));
+  fixture.sheets.youxuan.rows.push(...fixture.sheets.youxuan.rows.slice(60,64));
+  fixture.sheets.wangou.revision=189108;
+  fixture.sheets.brand_selection.rows.push(['','','','9月16日 赵媛支援']);
+  fixture.totalRows[3][20]='2026/9/16';
+  const report = buildPlanningSourceDiagnostic(fixture);
+  const sixteen=report.dates[0];
+  assert.ok(sixteen.issues.some((item)=>item.code==='room_revision_unverified'));
+  assert.ok(sixteen.issues.some((item)=>item.code==='total_date_column_unverified'&&item.cells.some((cell)=>cell.ref==='0jFdXf!U4')));
+  assert.ok(sixteen.rooms.find((room)=>room.roomCode==='youxuan').issues.some((item)=>item.code==='room_date_marker_unverified'));
+  assert.ok(sixteen.rooms.find((room)=>room.roomCode==='brand_selection').issues.some((item)=>item.code==='dated_note_outside_block'&&item.cells.some((cell)=>cell.ref==='MVpDv0!D121')));
+  assert.ok(sixteen.rooms.find((room)=>room.roomCode==='guanqi').issues.some((item)=>item.code==='total_identity_unverified'));
+  assert.equal(report.writeBackAllowed,false);
+});
 
 test('numbered Sunday in historical source cannot masquerade as current Monday', () => {
   assert.equal(dateMarkerMatches('9月6日\n星期7', '2026-09-06'), true);
