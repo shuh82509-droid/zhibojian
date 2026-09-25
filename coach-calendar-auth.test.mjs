@@ -15,7 +15,7 @@ const openIds={'官旗':'ou_guanqi','优选':'ou_youxuan'};
 function response(){
   return {headers:{},status:0,body:null,setHeader(k,v){this.headers[k]=v;},writeHead(status,headers){this.status=status;Object.assign(this.headers,headers);},end(body){this.body=body;}};
 }
-function fixture({enabled=true,readOnly=false}={}){
+function fixture({enabled=true,readOnly=false,contactVerified=true}={}){
   const calls=[],readers={};let sequence=0;
   for(const room of Object.keys(names))readers[room]={
     status:async()=>({configured:true,authorized:false,reason:`等待${names[room]}授权`}),
@@ -24,7 +24,7 @@ function fixture({enabled=true,readOnly=false}={}){
   };
   const json=(res,status,value)=>{res.status=status;res.body=value;};
   const auth=createCoachCalendarAuth({readers,coachNames:names,employeeNos:numbers,openIds,basePath:'/modules/live-room-management',enabled,readOnly,json,
-    verifyActor:async(room,openId,name,number)=>{assert.equal(openId,openIds[room]);assert.equal(name,names[room]);assert.equal(number,numbers[room]);},clock:()=>1000});
+    verifyActor:async(room,openId,name,number)=>{assert.equal(openId,openIds[room]);assert.equal(name,names[room]);assert.equal(number,numbers[room]);if(!contactVerified)throw Error('contact identity unverified');},clock:()=>1000});
   const person=room=>({ok:true,mode:'central',user:{number:numbers[room],name:names[room]},permissions:{allowed_modules:['live-room-management']}});
   const req=(room,method='POST')=>({method,headers:{'x-requested-with':'XMLHttpRequest',origin:'https://hub.fandow.com',host:'hub.fandow.com'},auth:person(room)});
   return {auth,calls,person,req};
@@ -44,6 +44,27 @@ test('本人 OA 工号与实时 contact 双重校验后才能独立发起只读�
   }
   const status=response();await f.auth.handleApi(f.req('优选','GET'),status,'/api/lifecycle/coach-calendar-auth/status',f.person('优选'));
   assert.equal(status.body.room,'优选');assert.equal(status.body.calendar.authorized,false);
+});
+test('只返回 realName 的真实 OA 身份可授权；缺失、冲突、错工号或实时联系人不符均拒绝',async()=>{
+  const f=fixture();
+  const valid={...f.person('官旗'),user:{number:numbers['官旗'],realName:names['官旗'],open_id:openIds['官旗']}};
+  const started=response();await f.auth.handleApi(f.req('官旗'),started,'/api/lifecycle/coach-calendar-auth/start',valid);
+  assert.equal(started.status,200);
+  for(const user of [
+    {number:numbers['官旗']},
+    {number:numbers['官旗'],realName:'其他人'},
+    {number:numbers['官旗'],realName:names['官旗'],name:'其他人'},
+    {number:numbers['官旗'],realName:'其他人',name:names['官旗']},
+    {number:numbers['官旗'],realName:names['官旗'],open_id:'ou_other'},
+    {number:'FD-OTHER',realName:names['官旗']},
+  ]){
+    const denied=response();await f.auth.handleApi(f.req('官旗'),denied,'/api/lifecycle/coach-calendar-auth/start',{...valid,user});
+    assert.equal(denied.status,403);
+    assert.equal(denied.body.authorizeUrl,undefined);
+  }
+  const unverified=fixture({contactVerified:false}),denied=response();
+  await unverified.auth.handleApi(unverified.req('官旗'),denied,'/api/lifecycle/coach-calendar-auth/start',valid);
+  assert.equal(denied.status,403);assert.equal(denied.body.authorizeUrl,undefined);
 });
 test('共享回调仅消费自身 state 和 HttpOnly cookie，未匹配状态留给原面试授权',async()=>{
   const f=fixture(),started=response();

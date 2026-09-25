@@ -10,8 +10,13 @@ const escapeHtml = value => String(value).replace(/[&<>"']/gu, character => ({'&
 export function createCoachCalendarAuth({readers,coachNames,employeeNos,openIds,basePath,enabled,readOnly,json,verifyActor,clock=Date.now}) {
   const pending = new Map();
   const cookie = (state, age) => `${cookieName}=${state}; Max-Age=${age}; Path=${basePath}${callbackPath}; HttpOnly; Secure; SameSite=Lax`;
+  const coachNameMatches = (user, expected) => {
+    if (!user || typeof user !== 'object') return false;
+    const supplied = [user.realName, user.name].filter(value => value !== undefined && value !== null && value !== '');
+    return supplied.length > 0 && supplied.every(value => typeof value === 'string' && value.trim() === expected);
+  };
   const roomFor = auth => Object.keys(employeeNos).find(room => auth?.ok && auth.mode === 'central' && !auth.degraded && auth.user?.number === employeeNos[room]
-    && (!auth.user.open_id || auth.user.open_id === openIds[room]) && auth.user.name === coachNames[room]);
+    && (!auth.user.open_id || auth.user.open_id === openIds[room]) && coachNameMatches(auth.user, coachNames[room]));
   function page(res, status, title, detail) {
     const back = `${basePath}/#coach-calendar`;
     res.writeHead(status, {'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff',
