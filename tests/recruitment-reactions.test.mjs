@@ -212,12 +212,14 @@ test('background recruitment snapshot reads the full current cycle for both sour
   await refresh('2026-09-24');
   const september=recruitmentCycleRange('2026-09');
   assert.deepEqual(calls.map(call=>call.key),['recruitment','coaching','calendar']);
-  assert.ok(calls.every(call=>{const {fresh,...window}=call.window;return JSON.stringify(window)===JSON.stringify(september)}));
+  assert.ok(calls.every(call=>{const {fresh,includeReviewText,...window}=call.window;
+    return JSON.stringify(window)===JSON.stringify(september)&&(!includeReviewText||call.key==='recruitment')}));
   assert.deepEqual(calls.slice(0,2).map(call=>call.limit),[1000,1000]);
   calls.length=0;
   await refresh('2026-09-25');
   const october=recruitmentCycleRange('2026-10');
-  assert.ok(calls.every(call=>{const {fresh,...window}=call.window;return JSON.stringify(window)===JSON.stringify(october)}));
+  assert.ok(calls.every(call=>{const {fresh,includeReviewText,...window}=call.window;
+    return JSON.stringify(window)===JSON.stringify(october)&&(!includeReviewText||call.key==='recruitment')}));
 });
 
 test('service reads the exact previous full cycle only for a first-day formal interview and rejects degraded source shapes',async()=>{
@@ -236,6 +238,7 @@ test('service reads the exact previous full cycle only for a first-day formal in
   const context={feishuChats:{recruitment:{chatId:'oc_recruitment'}},recruitmentBoundaryCycleRange,
     getChatMessages:async(key,limit,window)=>{calls.push({key,limit,window});return prior;},
     parseRecruitmentMessages:()=>priorParsed,recruitmentReviewerOpenId:'ou_reviewer',
+    interviewBindingEnabled:false,
     linkRecruitmentCalendarAcrossBoundary};
   const link=vm.runInNewContext(`${serverSource.slice(start,end)}\nlinkRecruitmentCalendarWithBoundary`,context);
   const options={fresh:true,advanceStage:true};
@@ -453,10 +456,17 @@ test('first-day current-cycle report for a prior-cycle candidate does not duplic
     {'2026-09-25':[calendarEvent('周小雨面试','cal_one')]},current.submissionMessageCounts,
     {boundaryDate:range.date,previousCycle:range.previous,currentSourceReady:true,
       previousSourceReady:true,advanceStage:true});
-  assert.equal(result.boundary.status,'pending');
-  assert.equal(result.carryCandidates.length,0);
+  assert.equal(result.boundary.status,'verified');
+  assert.equal(result.carryCandidates.length,1);
   assert.equal(result.candidates.filter(item=>item.name==='周小雨').length,1);
-  assert.equal(result.candidates[0].stage,'interview_pass');
+  assert.equal(result.candidates[0].stage,'pending_feedback');
+  assert.equal(result.candidates[0].evaluationEvidence.sourceId,'om_current_review');
+  const preview=buildInterviewReminderPreview({candidates:result.candidates,boundaryCarryover:result.boundary,
+    calendarStatus:'已连接：正式面试日历',coverage:{capped:false,reactionStatus:'已核验',chatMessages:1},
+    submissionMessageCounts:current.submissionMessageCounts,
+    interviewEvents:{'2026-09-25':[calendarEvent('周小雨面试','cal_one')]}},'2026-09-25');
+  assert.equal(preview.status,'pending');
+  assert.equal(preview.readyForSend,false);
 });
 
 test('unverified previous cycle blocks first day but not independently verified later dates',()=>{

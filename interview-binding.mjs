@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {parseRecruitmentMessages, recruitmentBoundaryCycleRange} from './lifecycle-engine.mjs';
 
 const messageId = value => /^om_[A-Za-z0-9_]+$/u.test(String(value || ''));
 const eventId = value => typeof value === 'string' && value.length > 0 && value.length <= 300 && !/[\s\u0000-\u001f]/u.test(value);
@@ -11,12 +12,22 @@ const sourceDate = value => {
   if (Number.isNaN(date.getTime())) return '';
   return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(date);
 };
+const completeRecruitmentChat = (chat, recruitmentChatId, cycle) =>
+  chat?.key==='recruitment' && chat?.chatId===recruitmentChatId && !chat?.truncated
+  && !chat?.paginationIssue && chat?.reactionStatus==='已核验' && Array.isArray(chat?.messages)
+  && Number.isSafeInteger(chat?.sourceMessageCount) && Number.isSafeInteger(chat?.deletedMessageCount)
+  && chat.sourceMessageCount===chat.messages.length+chat.deletedMessageCount
+  && Number.isSafeInteger(cycle?.startTime) && Number.isSafeInteger(cycle?.endTime)
+  && chat.messages.every(item=>item?.chatId===recruitmentChatId && messageId(item?.messageId)
+    && Number.isFinite(Date.parse(item?.createdAt||''))
+    && Date.parse(item.createdAt)/1000>=cycle.startTime
+    && Date.parse(item.createdAt)/1000<cycle.endTime+1);
 
 /** A signed binding may inspect only the explicit heading and final conclusion.
  * Free-form bullets are intentionally never interpreted as a decision.
  */
 export function inspectInterviewPost(message, candidateName, knownNames = []) {
-  const text = String(message?.text || '').replace(/\r/gu,'');
+  const text = String(message?.reviewText ?? message?.text ?? '').replace(/\r/gu,'');
   if (message?.type !== 'post' || !text || text.length > 8000
     || message?.textTruncated || message?.reviewTextTruncated
     || message?.hasMediaOrResource || message?.resources?.length)
@@ -78,9 +89,10 @@ export function inspectInterviewPost(message, candidateName, knownNames = []) {
  * and on every later read. IDs, not names or card payloads, are authoritative.
  */
 export function verifyInterviewBindingSources(snapshot, chat, payload, {
-  reviewerOpenId, recruitmentChatId, calendarId, today, now=new Date().toISOString()
+  reviewerOpenId, recruitmentChatId, calendarId, today, now=new Date().toISOString(), previousChat=null
 }={}) {
   const cycleMonth=String(payload?.cycleMonth||''),name=String(payload?.candidateName||'');
+  const requestedSourceCycleMonth=String(payload?.sourceCycleMonth||cycleMonth);
   const submissionId=String(payload?.submissionMessageId||''),calendarEventId=String(payload?.calendarEventId||'');
   const postId=String(payload?.postMessageId||''),outcome=String(payload?.outcome||'');
   if(!/^20\d{2}-(?:0[1-9]|1[0-2])$/u.test(cycleMonth)||!name||!messageId(submissionId)
@@ -91,26 +103,69 @@ export function verifyInterviewBindingSources(snapshot, chat, payload, {
     || snapshot?.coverage?.capped || snapshot?.coverage?.reactionStatus!=='已核验')
     return pending('招聘周期、表情或正式日历来源尚未完整核验');
   const cycle=snapshot.cycle;
-  if(chat?.key!=='recruitment'||chat?.chatId!==recruitmentChatId||chat?.truncated||chat?.paginationIssue
-    ||chat?.reactionStatus!=='已核验'||!Array.isArray(chat?.messages)
-    ||chat?.sourceMessageCount!==chat.messages.length+(chat.deletedMessageCount||0))
+  if(!completeRecruitmentChat(chat,recruitmentChatId,cycle))
     return pending('招聘群当前周期消息不完整');
-  if(chat.messages.some(item=>item?.chatId!==recruitmentChatId||!messageId(item?.messageId)
-    ||!Number.isFinite(new Date(item?.createdAt||'').getTime())
-    ||new Date(item.createdAt).getTime()/1000<cycle.startTime
-    ||new Date(item.createdAt).getTime()/1000>=cycle.endTime+1))
-    return pending('招聘群消息的来源、日期或编号无法核验');
-  const matches=(snapshot.candidates||[]).filter(item=>item?.inSubmissionCohort&&item.name===name);
-  if(matches.length!==1||snapshot.submissionMessageCounts?.[name]!==1
-    ||matches[0].submissionIdentityStatus==='ambiguous'||matches[0].boundaryCarryover)
+  const matches=(snapshot.candidates||[]).filter(item=>
+    (item?.inSubmissionCohort||item?.boundaryCarryover)&&item.name===name);
+  if(matches.length!==1)
+    return pending('该姓名在当前周期或跨周期首日不能对应唯一送审候选人');
+  const candidate=matches[0],carry=candidate.boundaryCarryover===true;
+  const expectedSourceCycleMonth=carry?candidate.boundarySourceCycle:cycleMonth;
+  if(requestedSourceCycleMonth!==expectedSourceCycleMonth)
+    return pending('送审来源周期与日历面试周期不一致');
+  let submissionChat=chat,submissionCounts=snapshot.submissionMessageCounts;
+  if(carry){
+    const previousCycle=recruitmentBoundaryCycleRange(cycleMonth).previous;
+    if(snapshot.boundaryCarryover?.status!=='verified'
+      || expectedSourceCycleMonth!==previousCycle.month
+      || snapshot.boundaryCarryover?.date!==cycle.startDate
+      || snapshot.boundaryCarryover?.sourceCycle!==previousCycle.month
+      || candidate.boundaryCarryoverDate!==cycle.startDate
+      || candidate.calendarEvidence?.date!==cycle.startDate
+      || !completeRecruitmentChat(previousChat,recruitmentChatId,previousCycle))
+      return pending('跨周期首日的上周期招聘群、正式日历或本人身份来源不完整');
+    const prior=parseRecruitmentMessages(previousChat.messages.map(item=>
+      ({...item,text:item.reviewText??item.text})),{reviewerOpenId});
+    const priorMatches=(prior.candidates||[]).filter(item=>item?.inSubmissionCohort&&item.name===name);
+    if(priorMatches.length!==1||prior.submissionMessageCounts?.[name]!==1
+      ||priorMatches[0].submissionIdentityStatus==='ambiguous'
+      ||priorMatches[0].submissionEvidence?.sourceId!==submissionId
+      ||priorMatches[0].submissionEvidence?.initialReview!=='OK'
+      ||priorMatches[0].evaluationEvidence||priorMatches[0].calendarEvidence
+      ||priorMatches[0].interviewBinding||priorMatches[0].startDate||priorMatches[0].actualStartDate)
+      return pending('上周期同名、重复送审或已有面评/入职证据，不能跨周期绑定');
+    submissionChat=previousChat;
+    submissionCounts=snapshot.boundaryCarryover.submissionMessageCounts;
+  }
+  if(submissionCounts?.[name]!==1
+    ||candidate.submissionIdentityStatus==='ambiguous')
     return pending('该姓名在当前周期不能对应唯一送审候选人');
-  const candidate=matches[0],submission=candidate.submissionEvidence;
-  const rawSubmissions=chat.messages.filter(item=>item.messageId===submissionId);
+  const submission=candidate.submissionEvidence;
+  const rawSubmissions=submissionChat.messages.filter(item=>item.messageId===submissionId);
   if(submission?.sourceId!==submissionId||submission?.name!==name||submission?.initialReview!=='OK'
     ||!dateOnly(submission?.date)||rawSubmissions.length!==1||sourceDate(rawSubmissions[0].createdAt)!==submission.date)
     return pending('送审消息、初审通过记录或候选人身份无法一一对应');
-  if((snapshot.candidates||[]).filter(item=>item?.inSubmissionCohort&&item.submissionEvidence?.sourceId===submissionId).length!==1)
+  if((snapshot.candidates||[]).filter(item=>(item?.inSubmissionCohort||item?.boundaryCarryover)
+    &&item.submissionEvidence?.sourceId===submissionId).length!==1)
     return pending('同一送审消息对应多个候选人');
+  if(carry){
+    const selected=rawSubmissions[0];
+    if(!['text','post'].includes(selected?.type)||selected?.textTruncated
+      ||selected?.reviewTextTruncated||selected?.hasMediaOrResource
+      ||selected?.resources?.length||!String(selected?.text||'').trim()
+      ||!String(selected?.reviewText??selected?.text??'').trim())
+      return pending('上周期送审原文含截断或不可核验内容，跨周期绑定待人工核验');
+    // Any unreadable group message could conceal a second submission, even
+    // when it was sent by a recruiter other than the reviewer.
+    const opaque=item=>!['text','post'].includes(item?.type)
+      ||item?.textTruncated||item?.reviewTextTruncated||item?.hasMediaOrResource
+      ||item?.resources?.length||!String(item?.reviewText??item?.text??'').trim();
+    const otherPriorMentions=submissionChat.messages.filter(item=>item?.messageId!==submissionId
+      &&!['system','notice','reaction'].includes(item?.type)
+      &&(opaque(item)||String(item?.text||'').includes(name)
+        ||String(item?.reviewText||'').includes(name)));
+    if(otherPriorMentions.length)return pending('上周期还有同名或不完整消息，跨周期归属须人工核验');
+  }
   const calendarEvents=Object.entries(snapshot.interviewEvents||{}).flatMap(([date,items])=>
     (Array.isArray(items)?items:[]).filter(item=>item?.status==='calendar'&&item.eventId===calendarEventId)
       .map(item=>({date,...item})));
@@ -130,6 +185,13 @@ export function verifyInterviewBindingSources(snapshot, chat, payload, {
     return pending('面评帖并非倪梦萍本人在面试后发布于指定招聘群');
   const post=inspectInterviewPost(posts[0],name,(snapshot.candidates||[]).map(item=>item.name));
   if(post.status!=='ready')return post;
+  if(carry&&chat.messages.some(item=>item?.messageId!==postId
+    && !['system','notice','reaction'].includes(item?.type)
+    &&(String(item?.text||'').includes(name)||String(item?.reviewText||'').includes(name)
+      ||!['text','post'].includes(item?.type)||item?.textTruncated||item?.reviewTextTruncated
+      ||item?.hasMediaOrResource||item?.resources?.length
+      ||!String(item?.reviewText??item?.text??'').trim())))
+    return pending('跨周期首日还有另一条同名或不完整群消息，须人工核验');
   const systemMessageTypes=new Set(['system','notice','reaction']);
   const relatedOpinions=chat.messages.filter(item=>item?.messageId!==postId
     && item.sender?.id===reviewerOpenId && !systemMessageTypes.has(item?.type)
@@ -153,6 +215,9 @@ export function verifyInterviewBindingSources(snapshot, chat, payload, {
     && candidate.evaluationEvidence.passed!==(outcome==='pass'))
     return pending('现有群面评结论与本人选择的结论冲突');
   if(payload.postDate&&payload.postDate!==sourceDate(posts[0].createdAt))return pending('面评帖发表日期与签署记录不一致');
+  // Preserve the exact original same-cycle digest for already signed records.
+  // A carry binding adds the preceding cycle and its independent reaction
+  // evidence, so it cannot be replayed as an ordinary current-cycle record.
   const sourceFingerprint=hash({cycleMonth,calendarId,recruitmentChatId,submissionId,name,
     submissionDate:submission.date,initialReview:submission.initialReview,
     submissionText:rawSubmissions[0].text,submissionUpdatedAt:rawSubmissions[0].updatedAt||'',
@@ -164,8 +229,12 @@ export function verifyInterviewBindingSources(snapshot, chat, payload, {
     postId,postText:posts[0].text,postUpdatedAt:posts[0].updatedAt||'',postCreatedAt:posts[0].createdAt,
     postContentFingerprint:posts[0].contentFingerprint||'',
     postResources:posts[0].resources||[],
-    postSender:posts[0].sender?.id,outcome});
-  return {status:'ready',cycleMonth,candidateName:name,submissionMessageId:submissionId,
+    postSender:posts[0].sender?.id,outcome,
+    ...(carry?{sourceCycleMonth:expectedSourceCycleMonth,
+      submissionCycleStart:recruitmentBoundaryCycleRange(cycleMonth).previous.startTime,
+      submissionCycleEnd:recruitmentBoundaryCycleRange(cycleMonth).previous.endTime,
+      submissionReactions:rawSubmissions[0].reactions||null}:{})});
+  return {status:'ready',cycleMonth,sourceCycleMonth:expectedSourceCycleMonth,candidateName:name,submissionMessageId:submissionId,
     calendarId,calendarEventId,postMessageId:postId,outcome,sourceFingerprint,
     calendarDate:calendarEvents[0].date,postDate:sourceDate(posts[0].createdAt)};
 }
@@ -181,6 +250,11 @@ export function projectInterviewBindings(snapshot,chat,entries,options={}) {
   const candidates=(snapshot.candidates||[]).map(candidate=>{
     const records=bySubmission.get(candidate.submissionEvidence?.sourceId)||[];
     if(!records.length){
+      if(candidate.boundaryCarryover){
+        const reason='跨周期首日面评尚未由本人绑定上周期送审、正式日历和本周期面评帖';
+        statuses.push({submissionMessageId:candidate.submissionEvidence?.sourceId,status:'pending',reason});
+        return {...candidate,interviewBinding:{status:'pending',reason}};
+      }
       if(!candidate.inSubmissionCohort||!['interview_pass','interview_fail','hired'].includes(candidate.stage))return candidate;
       const reason='群帖自动识别仅作线索；面试阶段须倪梦萍本人绑定送审、日历和面评帖';
       statuses.push({submissionMessageId:candidate.submissionEvidence?.sourceId,status:'pending',reason});
@@ -198,7 +272,8 @@ export function projectInterviewBindings(snapshot,chat,entries,options={}) {
       const reason=records.length!==1?'同一送审消息有重复面评绑定'
         :valid.length!==1?'已签面评所依赖的群帖、日历或送审来源已变化'
         :'群帖自动结论与本人绑定结论冲突';
-      statuses.push({submissionMessageId:candidate.submissionEvidence?.sourceId,status:'pending',reason});
+      statuses.push({submissionMessageId:candidate.submissionEvidence?.sourceId,status:'pending',
+        recordId:records[0]?.id,reason});
       return {...candidate,interviewBinding:{status:'pending',reason},
         ...(['interview_pass','interview_fail','hired'].includes(candidate.stage)
           ?{stage:'pending_feedback',status:'面评来源冲突待核验'}:{})};

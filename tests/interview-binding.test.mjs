@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import {inspectInterviewPost,verifyInterviewBindingSources,projectInterviewBindings} from '../interview-binding.mjs';
-import {centralFeishuOpenId,recruitmentCycleRange} from '../lifecycle-engine.mjs';
+import {centralFeishuOpenId,recruitmentCycleRange,recruitmentBoundaryCycleRange,
+  parseRecruitmentMessages,linkRecruitmentCalendarAcrossBoundary} from '../lifecycle-engine.mjs';
 
 const reviewer='ou_0e5926902d4d6051d0ea14f042bb56f4';
 const chatId='oc_b66a4cb78495045fce0caed731d7870e';
@@ -31,6 +32,197 @@ function fixture(){
     calendarEventId:'evt_one',postMessageId:'om_post',outcome:'fail'};
   return {snapshot,chat,payload};
 }
+
+function crossFixture(){
+  const cycle=recruitmentCycleRange('2026-10');
+  const previous=recruitmentBoundaryCycleRange('2026-10').previous;
+  const submission={messageId:'om_previous_submission',chatId,type:'text',
+    text:'候选人：求职者【周小雨】是否符合【主播】的邀约标准',
+    sender:{id:'ou_recruiter'},createdAt:'2026-09-24T03:00:00.000Z',updatedAt:null,
+    reactions:{details:[{emojiType:'OK',operatorId:reviewer}]}};
+  const post={messageId:'om_current_post',chatId,type:'post',
+    text:'面试结果\n**周小雨**\n颜值4 表现力4\n- 镜头状态稳定，互动自然；\n- **不通过**@倪梦萍',
+    sender:{id:reviewer},createdAt:'2026-09-25T09:00:00.000Z',updatedAt:null};
+  const previousChat={key:'recruitment',chatId,truncated:false,paginationIssue:'',reactionStatus:'已核验',
+    sourceMessageCount:1,deletedMessageCount:0,messages:[submission]};
+  const chat={key:'recruitment',chatId,truncated:false,paginationIssue:'',reactionStatus:'已核验',
+    sourceMessageCount:1,deletedMessageCount:0,messages:[post]};
+  const prior=parseRecruitmentMessages(previousChat.messages,{reviewerOpenId:reviewer});
+  const current=parseRecruitmentMessages(chat.messages,{reviewerOpenId:reviewer});
+  const event={eventId:'evt_cross',name:'周小雨正式面试 · 16:00',status:'calendar',
+    summaryFingerprint:'c'.repeat(64),startAt:'2026-09-25T07:30:00.000Z',
+    endAt:'2026-09-25T08:30:00.000Z'};
+  const interviewEvents={'2026-09-25':[event]};
+  const linked=linkRecruitmentCalendarAcrossBoundary(current.candidates,prior,interviewEvents,
+    current.submissionMessageCounts,{boundaryDate:'2026-09-25',previousCycle:previous,
+      currentSourceReady:true,previousSourceReady:true,advanceStage:true});
+  const snapshot={cycle,calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',
+    coverage:{capped:false,reactionStatus:'已核验'},candidates:linked.candidates,
+    submissionMessageCounts:current.submissionMessageCounts,boundaryCarryover:linked.boundary,
+    interviewEvents,funnel:{groupEvaluatedCount:0,groupPassedCount:0}};
+  const payload={cycleMonth:'2026-10',sourceCycleMonth:'2026-09',candidateName:'周小雨',
+    submissionMessageId:submission.messageId,calendarEventId:event.eventId,
+    postMessageId:post.messageId,outcome:'fail'};
+  return {snapshot,chat,previousChat,payload,prior,current,linked,previous,event};
+}
+
+test('跨周期首日本期仅有面评时合并成唯一待签候选，并以双周期源签署读回',()=>{
+  const {snapshot,chat,previousChat,payload,current,linked}=crossFixture();
+  assert.equal(current.candidates.length,1,JSON.stringify(current));
+  assert.equal(current.candidates[0].inSubmissionCohort,false);
+  assert.equal(linked.boundary.status,'verified');
+  assert.equal(snapshot.candidates.length,1);
+  assert.equal(snapshot.candidates[0].boundaryCarryover,true);
+  assert.equal(snapshot.candidates[0].stage,'pending_feedback');
+  const crossOptions={...options,today:'2026-09-25',now:'2026-09-25T10:00:00.000Z',previousChat};
+  assert.equal(projectInterviewBindings(snapshot,chat,[],crossOptions).candidates[0].interviewBinding.status,'pending');
+  const verified=verifyInterviewBindingSources(snapshot,chat,payload,crossOptions);
+  assert.equal(verified.status,'ready',verified.reason);
+  assert.equal(verified.sourceCycleMonth,'2026-09');
+  const entry={...verified,id:'2a3b6e38-8090-425c-bb0a-57e95fb316a5',actorOpenId:reviewer,
+    source:'structured_self_interview_binding',createdAt:'2026-09-25T10:00:00.000Z'};
+  const readback=projectInterviewBindings(snapshot,chat,[entry],crossOptions);
+  assert.equal(readback.candidates[0].interviewBinding.status,'verified');
+  assert.equal(readback.candidates[0].stage,'interview_fail');
+  const editedPrior={...previousChat,messages:[{...previousChat.messages[0],updatedAt:'2026-09-25T10:30:00.000Z'}]};
+  assert.equal(projectInterviewBindings(snapshot,chat,[entry],{...crossOptions,previousChat:editedPrior})
+    .candidates[0].interviewBinding.status,'pending');
+  const editedPost={...chat,messages:[{...chat.messages[0],updatedAt:'2026-09-25T10:30:00.000Z'}]};
+  assert.equal(projectInterviewBindings(snapshot,editedPost,[entry],crossOptions)
+    .candidates[0].interviewBinding.status,'pending');
+  const hiddenRepeat={...chat,messages:[{...chat.messages[0],
+    reviewText:`${chat.messages[0].text}\n**周小雨**\n颜值4 表现力4\n- **通过**@倪梦萍`}]};
+  assert.equal(projectInterviewBindings(snapshot,hiddenRepeat,[entry],crossOptions)
+    .candidates[0].interviewBinding.status,'pending');
+});
+
+test('跨周期同名、重复、撤回、来源不完整及改判均保持待核验',()=>{
+  const {snapshot,chat,previousChat,payload,prior,current,previous,event}=crossFixture();
+  const crossOptions={...options,today:'2026-09-25',now:'2026-09-25T10:00:00.000Z',previousChat};
+  const check=(changedSnapshot=snapshot,changedChat=chat,changedPayload=payload,changedOptions=crossOptions)=>
+    verifyInterviewBindingSources(changedSnapshot,changedChat,changedPayload,changedOptions).status;
+  assert.equal(check(snapshot,chat,{...payload,sourceCycleMonth:'2026-10'}),'pending');
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:null}),'pending');
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,truncated:true}}),'pending');
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,sourceMessageCount:2}}),'pending');
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,reactionStatus:'待核验'}}),'pending');
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,messages:[
+    {...previousChat.messages[0],reactions:{details:[{emojiType:'No',operatorId:reviewer}]}}]}}),'pending');
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,
+    sourceMessageCount:1,deletedMessageCount:1,messages:[]}}),'pending');
+  const second={...previousChat.messages[0],messageId:'om_same_name_again',createdAt:'2026-09-24T04:00:00.000Z'};
+  const repeated={...previousChat,sourceMessageCount:2,messages:[...previousChat.messages,second]};
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:repeated}),'pending');
+  const priorMention={messageId:'om_prior_other',chatId,type:'text',text:'周小雨面试情况另议',
+    sender:{id:'ou_recruiter'},createdAt:'2026-09-24T04:00:00.000Z'};
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,
+    sourceMessageCount:2,messages:[...previousChat.messages,priorMention]}}),'pending');
+  const opaquePrior={...priorMention,text:'',type:'image',sender:{id:reviewer}};
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,
+    sourceMessageCount:2,messages:[...previousChat.messages,opaquePrior]}}),'pending');
+  const hiddenPrior={...priorMention,text:'求职者【林小满】是否符合【主播】的邀约标准',
+    reviewTextTruncated:true,sender:{id:'ou_another_recruiter'}};
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,
+    sourceMessageCount:2,messages:[...previousChat.messages,hiddenPrior]}}),'pending');
+  const hiddenPriorMedia={...hiddenPrior,reviewTextTruncated:false,type:'image',
+    hasMediaOrResource:true};
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,
+    sourceMessageCount:2,messages:[...previousChat.messages,hiddenPriorMedia]}}),'pending');
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,
+    messages:[{...previousChat.messages[0],textTruncated:true}]}}),'pending');
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,
+    messages:[{...previousChat.messages[0],hasMediaOrResource:true}]}}),'pending');
+  assert.equal(check(snapshot,chat,payload,{...crossOptions,previousChat:{...previousChat,
+    messages:[{...previousChat.messages[0],reviewText:
+      `${previousChat.messages[0].text}\n求职者【林小满】是否符合【主播】的邀约标准`}]}}),'pending');
+  const newSubmission={messageId:'om_current_submission',chatId,type:'text',
+    text:previousChat.messages[0].text,createdAt:'2026-09-25T02:00:00.000Z',sender:{id:'ou_recruiter'},
+    reactions:{details:[{emojiType:'OK',operatorId:reviewer}]}};
+  const conflicted=parseRecruitmentMessages([newSubmission,chat.messages[0]],{reviewerOpenId:reviewer});
+  const linked=linkRecruitmentCalendarAcrossBoundary(conflicted.candidates,prior,{'2026-09-25':[event]},
+    conflicted.submissionMessageCounts,{boundaryDate:'2026-09-25',previousCycle:previous,
+      currentSourceReady:true,previousSourceReady:true});
+  assert.equal(linked.boundary.status,'pending');
+  assert.equal(check({...snapshot,boundaryCarryover:{status:'pending'}}),'pending');
+  assert.equal(check(snapshot,{...chat,messages:[{...chat.messages[0],text:'面试结果\n**周小雨**\n颜值4 表现力4\n- **通过**@倪梦萍'}]}),'pending');
+  assert.equal(check(snapshot,{...chat,messages:[{...chat.messages[0],hasMediaOrResource:true}]}),'pending');
+  const earlierPost={...chat.messages[0],messageId:'om_earlier_same_name',
+    createdAt:'2026-09-25T07:00:00.000Z'};
+  assert.equal(check(snapshot,{...chat,sourceMessageCount:2,messages:[earlierPost,...chat.messages]}),'pending');
+  const hiddenCurrent={messageId:'om_other_recruiter',chatId,type:'text',
+    text:'求职者【林小满】待确认',textTruncated:true,
+    sender:{id:'ou_another_recruiter'},createdAt:'2026-09-25T06:00:00.000Z'};
+  assert.equal(check(snapshot,{...chat,sourceMessageCount:2,
+    messages:[hiddenCurrent,...chat.messages]}),'pending');
+  assert.equal(current.candidates[0].evaluationEvidence.sourceId,'om_current_post');
+});
+
+test('跨周期本人 GET 仅展示双源完整选项，POST 写入源周期并拒绝重签',async()=>{
+  const {snapshot,chat,previousChat,payload}=crossFixture();
+  const verifiedAt=(snap,current,request,opts)=>verifyInterviewBindingSources(snap,current,request,
+    {...opts,now:'2026-09-25T10:00:00.000Z'});
+  const optionsCode=(await readFile(new URL('../server.js',import.meta.url),'utf8'))
+    .split('function interviewBindingOptions(')[1].split('async function submitInterviewBinding(')[0];
+  const offer=vm.runInNewContext(`function interviewBindingOptions(${optionsCode}\ninterviewBindingOptions`,{
+    verifiedRecruitmentReviewerOpenId:reviewer,inspectInterviewPost,
+    verifyInterviewBindingSources:verifiedAt,
+    recruitmentReviewerOpenId:reviewer,recruitmentCalendarId:calendarId,
+    feishuChats:{recruitment:{chatId}},chinaDateFor:()=> '2026-09-25',
+  })(snapshot,chat,previousChat);
+  assert.equal(offer.length,1);
+  assert.equal(offer[0].sourceCycleMonth,'2026-09');
+  assert.equal(offer[0].submissionMessageId,'om_previous_submission');
+  assert.equal(offer[0].postMessageId,'om_current_post');
+  const submitCode=(await readFile(new URL('../server.js',import.meta.url),'utf8'))
+    .split('async function submitInterviewBinding(')[1].split('async function lifecycleApi(')[0];
+  class FeishuError extends Error {constructor(message,status,code){super(message);this.status=status;this.code=code}}
+  let journal={schemaVersion:1,entries:[]},writes=0;
+  const submit=vm.runInNewContext(`async function submitInterviewBinding(${submitCode}\nsubmitInterviewBinding`,{
+    interviewBindingEnabled:true,verifiedInterviewBindingActor:async()=>reviewer,
+    FeishuError,recruitmentCycleRange,readRequestJson:async req=>req.payload,
+    interviewBindingLock:{run:fn=>fn()},interviewBindingSources:async()=>({snapshot,chat,previousChat}),
+    verifyInterviewBindingSources:verifiedAt,feishuChats:{recruitment:{chatId}},
+    recruitmentCalendarId:calendarId,chinaDateFor:()=> '2026-09-25',
+    readRecruitmentInterviewJournal:async()=>journal,
+    writeDurableJsonAtomic:async(_path,next)=>{journal=structuredClone(next);writes+=1},
+    interviewBindingPath:'/candidate-only',randomUUID:()=> '2a3b6e38-8090-425c-bb0a-57e95fb316a5',URL,
+  });
+  const req={headers:{origin:'https://hub.fandow.com',host:'hub.fandow.com',
+    'sec-fetch-site':'same-origin','x-requested-with':'XMLHttpRequest','content-type':'application/json'},
+    payload:{...payload,expectedSourceFingerprint:offer[0].sourceFingerprint}};
+  const response=await submit(req,{});
+  assert.equal(response.submissionMessageId,'om_previous_submission');
+  assert.equal(writes,1);
+  assert.equal(journal.entries[0].sourceCycleMonth,'2026-09');
+  assert.equal(journal.entries[0].cycleMonth,'2026-10');
+  await assert.rejects(submit(req,{}),error=>error.status===409);
+  assert.equal(writes,1);
+});
+
+test('跨周期实时读取仅取当期、前期各一份招聘群快照与一份正式日历',async()=>{
+  const source=await readFile(new URL('../server.js',import.meta.url),'utf8');
+  const code=source.slice(source.indexOf('async function interviewBindingSources('),
+    source.indexOf('function interviewBindingOptions('));
+  const calls=[];
+  const current={key:'recruitment',period:'2026-10'};
+  const prior={key:'recruitment',period:'2026-09'};
+  const calendar={events:{'2026-09-25':[{status:'calendar',eventId:'evt_cross'}]},status:'已连接：1'};
+  const read=vm.runInNewContext(`${code}\ninterviewBindingSources`,{
+    recruitmentCycleRange:month=>({month,period:'current'}),
+    recruitmentBoundaryCycleRange:()=>({date:'2026-09-25',previous:{period:'previous'}}),
+    getChatMessages:async(_key,_limit,opts)=>{calls.push(['chat',opts.period,opts.includeReviewText]);
+      return opts.period==='previous'?prior:current},
+    readRecruitmentCalendar:async()=>{calls.push(['calendar']);return calendar},
+    recruitmentCycleSnapshot:async(_month,opts)=>{calls.push(['snapshot',opts.previousChatProvided,
+      opts.recruitmentChat===current,opts.previousRecruitmentChat===prior,
+      opts.calendarSource===calendar]);return {cycle:{month:'2026-10'}}},
+  });
+  const result=await read('2026-10');
+  assert.equal(result.chat,current);
+  assert.equal(result.previousChat,prior);
+  assert.deepEqual(calls,[['chat','current',true],['calendar'],['chat','previous',true],
+    ['snapshot',true,true,true,true]]);
+});
 
 test('本人富文本帖允许自由描述，但仅末尾明确结论与唯一标题可用于本人签署',()=>{
   const {chat}=fixture();
@@ -219,7 +411,7 @@ test('本人绑定接口拒绝管理员代办、失效 OA 身份与跨站提交�
   assert.match(source,/const verified=interviewBindingEnabled\s*\?projectInterviewBindings/u);
   assert.match(source,/writeDurableJsonAtomic\(interviewBindingPath,journal\)/u);
   assert.match(source,/interviewBindingLock\.run\(async\(\)=>\{/u);
-  assert.match(source,/recruitmentCycleSnapshot\(month,\{fresh,recruitmentChat:chat\}\)/u);
+  assert.match(source,/recruitmentCycleSnapshot\(month,\{fresh,recruitmentChat:chat,\s*calendarSource,previousRecruitmentChat:previousChat,previousChatProvided:true\}\)/u);
   assert.match(source,/if\(interviewBindingEnabled\|\|stored\?\.recruitmentAttributionSchemaVersion!==1\)\s*return json\(res,200,\{ok:true,data:await readFreshRecruitmentSnapshot\(\)\}\)/u);
   const readerCode=source.slice(source.indexOf('let recruitmentSnapshotReadInFlight=null;'),
     source.indexOf('function completeRecruitmentChatSource('));

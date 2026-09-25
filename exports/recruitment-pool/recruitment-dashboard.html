@@ -396,7 +396,7 @@
       document.querySelector('#interviewBindingSubmit').disabled=!canAct||!selected||!matching||!attest.checked;
       document.querySelector('#interviewBindingGate').textContent=!access.enabled?'待接入':!access.identityVerified?'仅倪梦萍本人':access.lock?.state!=='free'?'记录锁待核验':!options.length?'来源待核验':'本人可办理';
       document.querySelector('#interviewBindingEvidence').textContent=selected
-        ?`候选人 ${selected.candidateName}；送审 ${selected.submissionDate}（${selected.submissionMessageId}）；正式日历 ${selected.calendarDate} ${selected.calendarTitle}（${selected.calendarEventId}）；本人帖 ${selected.postDate}（${selected.postMessageId}）。帖末明确结论：${selected.postOutcome==='pass'?'通过':'未通过'}。请阅读下方两段完整文本。`
+        ?`候选人 ${selected.candidateName}；送审来源周期 ${selected.sourceCycleMonth||interviewBindingAccess.cycleMonth}，日期 ${selected.submissionDate}（${selected.submissionMessageId}）；正式日历 ${selected.calendarDate} ${selected.calendarTitle}（${selected.calendarEventId}）；本人帖 ${selected.postDate}（${selected.postMessageId}）。帖末明确结论：${selected.postOutcome==='pass'?'通过':'未通过'}。请阅读下方两段完整文本。`
         :'仅展示当前招聘周期内唯一送审、初审 OK、正式日历唯一匹配、倪梦萍本人发布且未撤回的面评帖；完整正文及日历其他人名须本人核对。';
       document.querySelector('#interviewBindingSubmissionSource').classList.toggle('hidden',!selected);
       document.querySelector('#interviewBindingPostSource').classList.toggle('hidden',!selected);
@@ -453,7 +453,8 @@
       try{
         const response=await fetch(`${lifecycleBase()}/api/lifecycle/interview-binding`,{method:'POST',credentials:'same-origin',cache:'no-store',
           headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest','Accept':'application/json'},
-          body:JSON.stringify({cycleMonth:interviewBindingAccess.cycleMonth,candidateName:selected.candidateName,
+          body:JSON.stringify({cycleMonth:interviewBindingAccess.cycleMonth,
+            sourceCycleMonth:selected.sourceCycleMonth||interviewBindingAccess.cycleMonth,candidateName:selected.candidateName,
             submissionMessageId:selected.submissionMessageId,calendarEventId:selected.calendarEventId,
             postMessageId:selected.postMessageId,outcome,expectedSourceFingerprint:selected.sourceFingerprint}),
           signal:AbortSignal.timeout(25000)});

@@ -28,7 +28,7 @@ function optionsFor(snapshot,chat){
   return vm.runInNewContext(`${code}\ninterviewBindingOptions`,{
     verifiedRecruitmentReviewerOpenId:reviewer,
     inspectInterviewPost:()=>({status:'ready',outcome:'fail'}),
-    verifyInterviewBindingSources:()=>({status:'ready',submissionMessageId:'om_submission',
+    verifyInterviewBindingSources:()=>({status:'ready',sourceCycleMonth:'2026-09',submissionMessageId:'om_submission',
       calendarEventId:'evt_one',calendarDate:'2026-09-24',postMessageId:'om_post',
       postDate:'2026-09-24',outcome:'fail',sourceFingerprint:'fingerprint'}),
     recruitmentReviewerOpenId:reviewer,recruitmentCalendarId:'cal_one',
@@ -45,7 +45,7 @@ function submitFor(snapshot,chat){
     FeishuError,recruitmentCycleRange:()=>({month:'2026-09'}),
     readRequestJson:async req=>req.payload,
     interviewBindingLock:{run:fn=>fn()},interviewBindingSources:async()=>({snapshot,chat}),
-    verifyInterviewBindingSources:()=>({status:'ready',cycleMonth:'2026-09',candidateName:'周小雨',
+    verifyInterviewBindingSources:()=>({status:'ready',cycleMonth:'2026-09',sourceCycleMonth:'2026-09',candidateName:'周小雨',
       submissionMessageId:'om_submission',calendarId:'cal_one',calendarEventId:'evt_one',
       postMessageId:'om_post',postDate:'2026-09-24',outcome:'fail',sourceFingerprint:'fingerprint'}),
     feishuChats:{recruitment:{chatId}},recruitmentCalendarId:'cal_one',chinaDateFor:()=> '2026-09-25',
@@ -107,7 +107,7 @@ test('飞书富文本中的媒体标签与资源键均标记；非本人 GET 在
   assert.match(source,/textTruncated: extractedText\.length > 8000/u);
   assert.match(source,/reviewTextTruncated:reviewText\.length > 8000/u);
   const anonymousGate=source.indexOf('if(!identityVerified)return json(res,200,{ok:true,enabled:interviewBindingEnabled,identityVerified:false,');
-  const sourceRead=source.indexOf('const {chat,snapshot}=await interviewBindingSources(month);',anonymousGate);
+  const sourceRead=source.indexOf('const {chat,previousChat,snapshot}=await interviewBindingSources(month);',anonymousGate);
   assert.ok(anonymousGate>=0&&sourceRead>anonymousGate);
 });
 

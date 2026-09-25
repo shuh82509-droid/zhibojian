@@ -1709,6 +1709,8 @@ async function readRecruitmentInterviewJournal() {
   const valid=journal?.schemaVersion===1 && Array.isArray(journal.entries) && journal.entries.every(item=>
     typeof item?.id==='string' && /^[0-9a-f-]{36}$/iu.test(item.id)
     && /^20\d{2}-(?:0[1-9]|1[0-2])$/u.test(item.cycleMonth)
+    && (!item.sourceCycleMonth||(/^(?:20\d{2})-(?:0[1-9]|1[0-2])$/u.test(item.sourceCycleMonth)
+      &&[item.cycleMonth,recruitmentBoundaryCycleRange(item.cycleMonth).previous.month].includes(item.sourceCycleMonth)))
     && /^[\p{Script=Han}·]{2,12}$/u.test(item.candidateName)
     && /^om_[A-Za-z0-9_]+$/u.test(item.submissionMessageId)
     && typeof item.calendarId==='string' && item.calendarId.length>0 && item.calendarId.length<=300
@@ -1754,7 +1756,7 @@ async function refreshRecruitmentLifecycle(targetDate,{fresh=false,persist=true}
   const cycle=recruitmentCycleRange(cycleMonth);
   const sourceFresh=fresh||interviewBindingEnabled;
   const [chatResult, coachResult, employmentResult, calendarResult] = await Promise.allSettled([
-    getChatMessages('recruitment', 1000, {...cycle,fresh:sourceFresh}),
+    getChatMessages('recruitment', 1000, {...cycle,fresh:sourceFresh,includeReviewText:interviewBindingEnabled}),
     getDocument('coach'),
     getChatMessages('coaching', 1000, cycle),
     readRecruitmentCalendar(cycle)
@@ -1833,7 +1835,8 @@ async function refreshRecruitmentLifecycle(targetDate,{fresh=false,persist=true}
   };
   const verified=interviewBindingEnabled
     ?projectInterviewBindings(snapshot,chatResult.value,(await readRecruitmentInterviewJournal()).entries,{reviewerOpenId:recruitmentReviewerOpenId,
-      recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor()})
+      recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor(),
+      previousChat:linked.previousChat})
     :snapshot;
   if(persist)await writeJsonAtomic(lifecycleSnapshotPath('recruitment'), verified);
   return verified;
@@ -1859,18 +1862,22 @@ function completeRecruitmentChatSource(chat, cycle) {
         && Number.isFinite(at) && at >= cycle.startTime && at < cycle.endTime + 1;
     });
 }
-async function linkRecruitmentCalendarWithBoundary(candidates, parsed, chat, calendar, cycle, {fresh=false,advanceStage=false}={}) {
+async function linkRecruitmentCalendarWithBoundary(candidates, parsed, chat, calendar, cycle, {
+  fresh=false,advanceStage=false,previousChat=null,previousChatProvided=false
+}={}) {
   const currentSourceReady=calendar.status.startsWith('已连接：') && completeRecruitmentChatSource(chat,cycle);
   const boundaryRange=recruitmentBoundaryCycleRange(cycle.month);
   const boundaryEvents=(calendar.events?.[boundaryRange.date] || []).filter(item=>item?.status==='calendar');
-  let previousParsed=null,previousSourceReady=false,previousMessages=null;
+  let previousParsed=null,previousSourceReady=false,previousMessages=null,priorChat=null;
   if(boundaryEvents.length){
     try {
-      const prior=await getChatMessages('recruitment',1000,{...boundaryRange.previous,fresh});
-      previousSourceReady=completeRecruitmentChatSource(prior,boundaryRange.previous);
+      priorChat=previousChatProvided?previousChat
+        :await getChatMessages('recruitment',1000,{...boundaryRange.previous,fresh,
+          includeReviewText:interviewBindingEnabled});
+      previousSourceReady=completeRecruitmentChatSource(priorChat,boundaryRange.previous);
       if(previousSourceReady){
-        previousParsed=parseRecruitmentMessages(prior.messages,{reviewerOpenId:recruitmentReviewerOpenId});
-        previousMessages=prior.sourceMessageCount ?? prior.messages.length;
+        previousParsed=parseRecruitmentMessages(priorChat.messages,{reviewerOpenId:recruitmentReviewerOpenId});
+        previousMessages=priorChat.sourceMessageCount ?? priorChat.messages.length;
       }
     } catch { previousSourceReady=false; }
   }
@@ -1878,7 +1885,8 @@ async function linkRecruitmentCalendarWithBoundary(candidates, parsed, chat, cal
     boundaryDate:boundaryRange.date,previousCycle:boundaryRange.previous,currentSourceReady,
     previousSourceReady,advanceStage,
   });
-  return {...linked,boundary:{...linked.boundary,chatMessages:previousMessages,
+  return {...linked,previousChat:previousSourceReady?priorChat:null,
+    boundary:{...linked.boundary,chatMessages:previousMessages,
     sourceCycle:boundaryRange.previous.month}};
 }
 async function readRecruitmentCalendar(cycle) {
@@ -1916,13 +1924,16 @@ async function readRecruitmentCalendar(cycle) {
     ?`待核验：${unverifiableTitles} 条正式日历标题超过 500 字或为空，未截断匹配候选人。`
     :`已连接：正式面试日历已读取 ${Object.values(events).flat().length} 条详情事件。`};
 }
-async function recruitmentCycleSnapshot(month,{fresh=false,recruitmentChat=null}={}) {
+async function recruitmentCycleSnapshot(month,{
+  fresh=false,recruitmentChat=null,calendarSource=null,previousRecruitmentChat=null,previousChatProvided=false
+}={}) {
   const cycle = recruitmentCycleRange(month);
   const sourceFresh=fresh||interviewBindingEnabled;
   const [chatResult, employmentResult, calendarResult] = await Promise.allSettled([
-    recruitmentChat ? Promise.resolve(recruitmentChat) : getChatMessages('recruitment', 1000, {...cycle,fresh:sourceFresh}),
+    recruitmentChat ? Promise.resolve(recruitmentChat) : getChatMessages('recruitment', 1000,
+      {...cycle,fresh:sourceFresh,includeReviewText:interviewBindingEnabled}),
     getChatMessages('coaching', 1000, cycle),
-    readRecruitmentCalendar(cycle),
+    calendarSource ? Promise.resolve(calendarSource) : readRecruitmentCalendar(cycle),
   ]);
   if (chatResult.status === 'rejected') throw chatResult.reason;
   const chat = chatResult.value;
@@ -1934,6 +1945,7 @@ async function recruitmentCycleSnapshot(month,{fresh=false,recruitmentChat=null}
   const linked=await linkRecruitmentCalendarWithBoundary(assessment.candidates,parsed,chat,calendar,cycle,{
     fresh:sourceFresh,advanceStage:Boolean(recruitmentReviewerOpenId) && chat.reactionStatus==='已核验'
       && employmentResult.status==='fulfilled' && !employmentResult.value.truncated,
+    previousChat:previousRecruitmentChat,previousChatProvided,
   });
   const candidates=linked.candidates;
   const funnel = {...parsed.funnel,
@@ -1977,7 +1989,8 @@ async function recruitmentCycleSnapshot(month,{fresh=false,recruitmentChat=null}
   };
   return interviewBindingEnabled
     ?projectInterviewBindings(snapshot,chat,(await readRecruitmentInterviewJournal()).entries,{reviewerOpenId:recruitmentReviewerOpenId,
-      recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor()})
+      recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor(),
+      previousChat:linked.previousChat})
     :snapshot;
 }
 
@@ -2539,13 +2552,23 @@ async function verifiedInterviewBindingActor(auth) {
 async function interviewBindingSources(month,{fresh=true}={}) {
   const cycle=recruitmentCycleRange(month);
   const chat=await getChatMessages('recruitment',1000,{...cycle,fresh,includeReviewText:true});
+  let calendarSource;
+  try {calendarSource=await readRecruitmentCalendar(cycle);}
+  catch {calendarSource={events:{},status:'待核验：正式面试日历读取失败，不能办理本人面评绑定。'};}
+  let previousChat=null;
+  const boundary=recruitmentBoundaryCycleRange(month);
+  if((calendarSource.events?.[boundary.date]||[]).some(item=>item?.status==='calendar')){
+    try {previousChat=await getChatMessages('recruitment',1000,{...boundary.previous,fresh,includeReviewText:true});}
+    catch {previousChat=null;}
+  }
   // The candidate projection and signed source verifier must inspect the exact
-  // same fresh group snapshot; a separate cached read could pair an old OK
-  // reaction with an edited or recalled submission.
-  const snapshot=await recruitmentCycleSnapshot(month,{fresh,recruitmentChat:chat});
-  return {chat,snapshot};
+  // same fresh current/previous group and calendar snapshots. If the older
+  // source fails, never silently replace it with another read during linking.
+  const snapshot=await recruitmentCycleSnapshot(month,{fresh,recruitmentChat:chat,
+    calendarSource,previousRecruitmentChat:previousChat,previousChatProvided:true});
+  return {chat,previousChat,snapshot};
 }
-function interviewBindingOptions(snapshot,chat) {
+function interviewBindingOptions(snapshot,chat,previousChat=null) {
   const options=[];
   const knownNames=(snapshot.candidates||[]).map(item=>item.name).filter(Boolean);
   const sourceReviewable=(item,{plainOnly=false}={})=>{
@@ -2556,23 +2579,28 @@ function interviewBindingOptions(snapshot,chat) {
       &&(hasOriginalLink||!(item.hasMediaOrResource||item.resources?.length)));
   };
   for(const candidate of snapshot.candidates||[]) {
-    if(!candidate.inSubmissionCohort||!candidate.submissionEvidence?.sourceId||!candidate.calendarEvidence?.eventId
-      ||(snapshot.interviewBindings||[]).some(item=>item.submissionMessageId===candidate.submissionEvidence.sourceId))continue;
+    if(!(candidate.inSubmissionCohort||candidate.boundaryCarryover)
+      ||!candidate.submissionEvidence?.sourceId||!candidate.calendarEvidence?.eventId
+      ||(snapshot.interviewBindings||[]).some(item=>item.submissionMessageId===candidate.submissionEvidence.sourceId
+        &&(item.status==='verified'||item.recordId)))continue;
+    const sourceCycleMonth=candidate.boundaryCarryover?candidate.boundarySourceCycle:snapshot.cycle.month;
+    const submissionChat=candidate.boundaryCarryover?previousChat:chat;
     for(const post of chat.messages||[]) {
       if(post.type!=='post'||post.sender?.id!==verifiedRecruitmentReviewerOpenId)continue;
       const inspected=inspectInterviewPost(post,candidate.name,knownNames);
       if(inspected.status!=='ready')continue;
       const binding=verifyInterviewBindingSources(snapshot,chat,{
-        cycleMonth:snapshot.cycle.month,candidateName:candidate.name,
+        cycleMonth:snapshot.cycle.month,sourceCycleMonth,candidateName:candidate.name,
         submissionMessageId:candidate.submissionEvidence.sourceId,
         calendarEventId:candidate.calendarEvidence.eventId,
         postMessageId:post.messageId,outcome:inspected.outcome
       },{reviewerOpenId:recruitmentReviewerOpenId,recruitmentChatId:feishuChats.recruitment.chatId,
-        calendarId:recruitmentCalendarId,today:chinaDateFor()});
+        calendarId:recruitmentCalendarId,today:chinaDateFor(),previousChat});
       if(binding.status!=='ready')continue;
-      const submission=chat.messages.find(item=>item.messageId===binding.submissionMessageId);
+      const submission=submissionChat?.messages.find(item=>item.messageId===binding.submissionMessageId);
       if(!sourceReviewable(submission)||!sourceReviewable(post,{plainOnly:true}))continue;
-      options.push({candidateName:candidate.name,submissionMessageId:binding.submissionMessageId,
+      options.push({candidateName:candidate.name,sourceCycleMonth:binding.sourceCycleMonth,
+        submissionMessageId:binding.submissionMessageId,
         submissionDate:candidate.submissionEvidence.date,calendarEventId:binding.calendarEventId,
         calendarDate:binding.calendarDate,calendarTitle:candidate.calendarEvidence.title,
         postMessageId:binding.postMessageId,postDate:binding.postDate,
@@ -2598,9 +2626,10 @@ async function submitInterviewBinding(req,auth) {
   const payload=await readRequestJson(req,4096);
   const cycleMonth=String(payload?.cycleMonth||'');recruitmentCycleRange(cycleMonth);
   return interviewBindingLock.run(async()=>{
-    const {chat,snapshot}=await interviewBindingSources(cycleMonth);
+    const {chat,previousChat,snapshot}=await interviewBindingSources(cycleMonth);
     const binding=verifyInterviewBindingSources(snapshot,chat,payload,{reviewerOpenId:actorOpenId,
-      recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor()});
+      recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor(),
+      previousChat});
     if(binding.status!=='ready')throw new FeishuError(binding.reason,409,'interview_binding_source_unverified');
     const sourceReviewable=(item,{plainOnly=false}={})=>{
       const body=String(item?.reviewText??item?.text??'');
@@ -2609,7 +2638,8 @@ async function submitInterviewBinding(req,auth) {
         &&(!plainOnly||!(item.hasMediaOrResource||item.resources?.length))
         &&(hasOriginalLink||!(item.hasMediaOrResource||item.resources?.length)));
     };
-    const submission=chat.messages.find(item=>item.messageId===binding.submissionMessageId);
+    const submissionChat=binding.sourceCycleMonth===cycleMonth?chat:previousChat;
+    const submission=submissionChat?.messages.find(item=>item.messageId===binding.submissionMessageId);
     const post=chat.messages.find(item=>item.messageId===binding.postMessageId);
     if(!sourceReviewable(submission)||!sourceReviewable(post,{plainOnly:true}))
       throw new FeishuError('送审或面评来源含无法在此页完整核对的内容，请先在飞书原消息核验并重新读取。',409,'interview_binding_source_not_reviewable');
@@ -2620,7 +2650,8 @@ async function submitInterviewBinding(req,auth) {
       ||item.postMessageId===binding.postMessageId
       ||item.calendarId===binding.calendarId&&item.calendarEventId===binding.calendarEventId))
       throw new FeishuError('送审消息、正式日历事件或面评帖已有本人绑定；先读回记录，不自动覆盖。',409,'interview_binding_already_recorded');
-    const record={id:randomUUID(),cycleMonth:binding.cycleMonth,candidateName:binding.candidateName,
+    const record={id:randomUUID(),cycleMonth:binding.cycleMonth,sourceCycleMonth:binding.sourceCycleMonth,
+      candidateName:binding.candidateName,
       submissionMessageId:binding.submissionMessageId,calendarId:binding.calendarId,
       calendarEventId:binding.calendarEventId,postMessageId:binding.postMessageId,
       postDate:binding.postDate,outcome:binding.outcome,sourceFingerprint:binding.sourceFingerprint,
@@ -2654,10 +2685,10 @@ async function lifecycleApi(req, res, url, routePath, auth) {
         if(!identityVerified)return json(res,200,{ok:true,enabled:interviewBindingEnabled,identityVerified:false,
           lock:{state:lock.state,reason:lock.reason},options:[],bindings:[]});
         const month=String(url.searchParams.get('month')||recruitmentCycleMonthForDate(chinaDateFor()));
-        const {chat,snapshot}=await interviewBindingSources(month);
+        const {chat,previousChat,snapshot}=await interviewBindingSources(month);
         return json(res,200,{ok:true,enabled:interviewBindingEnabled,identityVerified:true,actorName:'倪梦萍',
           cycleMonth:month,lock:{state:lock.state,reason:lock.reason},
-          options:interviewBindingOptions(snapshot,chat),bindings:snapshot.interviewBindings||[]});
+          options:interviewBindingOptions(snapshot,chat,previousChat),bindings:snapshot.interviewBindings||[]});
       }
       if(req.method==='POST')return json(res,200,{ok:true,result:await submitInterviewBinding(req,auth)});
       return json(res,405,{ok:false,error:'本人面评绑定仅支持 GET 状态和 POST 本人结论。'});

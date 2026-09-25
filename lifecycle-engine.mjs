@@ -497,17 +497,27 @@ export function linkRecruitmentCalendarAcrossBoundary(currentCandidates = [], pr
     && (item.stage!=='initial_pass'||item.evaluationEvidence||item.calendarEvidence
       ||item.interviewBinding||item.startDate||item.actualStartDate)))
     return pending('上周期已有面评、面试或录用证据，不能自动归属到新周期首日面试');
-  // A new-cycle report for the same person is a separate, unlinked assertion.
-  // Do not render it beside an older submission as two contradictory people or
-  // send a reminder from the older row until the evidence is reconciled.
-  const currentNames = new Set(original.map(item => item?.name).filter(Boolean));
-  if (prior.some(item => currentNames.has(item.name)
-    && firstDayEvents.some(event => calendarTitleNamesPerson(event.name,item.name))))
-    return pending('跨周期同名面评或送审与上周期证据尚未关联');
+  // A reviewer post on the new cycle's first day creates a name-only row even
+  // when there is no new submission. That row must not impersonate a second
+  // applicant, nor can it certify the old submission by itself. Fold only an
+  // evaluation-only row into the carry candidate; the signed source verifier
+  // must still bind its exact post ID after the formal event has ended.
+  const carriedNames = new Set(prior.filter(item=>firstDayEvents.some(event=>
+    calendarTitleNamesPerson(event.name,item.name))).map(item=>item.name));
+  const evaluationOnly = item => carriedNames.has(item?.name)
+    && item?.inSubmissionCohort===false && !item?.submissionEvidence
+    && item?.evaluationEvidence?.sourceId
+    && ['interview_pass','interview_fail','pending_feedback'].includes(item?.stage)
+    && !item?.calendarEvidence && !item?.interviewBinding
+    && !item?.startDate && !item?.actualStartDate;
+  if(original.some(item=>carriedNames.has(item?.name)&&!evaluationOnly(item)))
+    return pending('跨周期同名面评、送审或录用与上周期证据尚未关联');
+  const reports=new Map(original.filter(evaluationOnly).map(item=>[item.name,item]));
+  const currentWithoutReports=original.filter(item=>!evaluationOnly(item));
   const counts = {...currentSubmissionCounts};
   for (const [name,count] of Object.entries(previousParsed.submissionMessageCounts || {}))
     counts[name] = (counts[name] || 0) + count;
-  const linked = linkVerifiedRecruitmentCalendar([...original,...prior],calendarEvents,counts,
+  const linked = linkVerifiedRecruitmentCalendar([...currentWithoutReports,...prior],calendarEvents,counts,
     {sourceReady:true,advanceStage});
   const firstDayLinked = linked.candidates.filter(item => item.calendarEvidence?.date === boundaryDate);
   const eventIds = firstDayEvents.map(item => String(item.eventId || ''));
@@ -515,10 +525,12 @@ export function linkRecruitmentCalendarAcrossBoundary(currentCandidates = [], pr
   if (linked.pendingCount !== 0 || firstDayLinked.length !== firstDayEvents.length
     || eventIds.some(id => !id || linkedIds.filter(value => value === id).length !== 1))
     return pending('跨周期送审与首日正式面试日程无法唯一匹配');
-  const current = linked.candidates.slice(0, original.length);
-  const carryCandidates = linked.candidates.slice(original.length)
+  const current = linked.candidates.slice(0, currentWithoutReports.length);
+  const carryCandidates = linked.candidates.slice(currentWithoutReports.length)
     .filter(item => item.calendarEvidence?.date === boundaryDate)
-    .map(item => ({...item,inSubmissionCohort:false,boundaryCarryover:true}));
+    .map(item => ({...item,inSubmissionCohort:false,boundaryCarryover:true,
+      ...(reports.has(item.name)?{evaluationEvidence:reports.get(item.name).evaluationEvidence,
+        stage:'pending_feedback',status:'首日跨周期面评待本人绑定'}:{})}));
   return {candidates:[...current,...carryCandidates],matchedCount:linked.matchedCount,pendingCount:0,
     boundary:{status:'verified',date:boundaryDate,sourceCycle:previousCycle.month,
       matchedCount:firstDayLinked.length,submissionMessageCounts:previousParsed.submissionMessageCounts || {}},
@@ -640,12 +652,11 @@ export function buildInterviewReminderPreview(snapshot, date) {
       || !/^20\d{2}-\d{2}-\d{2}$/u.test(String(candidate?.submissionEvidence?.date || ''))
       || candidate.submissionEvidence.date > date || candidate.calendarEvidence?.eventId !== event.eventId)
       return pending('面试日程与唯一送审候选人无法一一核对');
-    // A carried submission is read from the previous recruitment cycle, but
-    // the self-binding path still accepts only this cycle's submission cohort.
-    // Do not call the full-day 17:00 roster send-ready until that older source
-    // can be signed and read back through the same exact-ID binding path.
+    // Cross-cycle self-binding is a separate human action after the interview.
+    // This full-day 17:00 roster has not independently verified every prior
+    // source and signed binding; never turn a linked calendar row into a send.
     if (candidate.boundaryCarryover)
-      return pending('跨周期首日候选人的上周期送审与本人面评尚不能完整绑定读回，17:00 提醒待核验');
+      return pending('跨周期首日候选人的提醒尚未完成独立的双周期来源及本人绑定验收，17:00 不发送');
     matches.push({name:candidate.name,eventId:event.eventId || ''});
   }
   const unique = [...new Set(matches.map(item => item.name))];
