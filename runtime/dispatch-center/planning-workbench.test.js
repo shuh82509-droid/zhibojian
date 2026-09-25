@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { ROOM_PLANNING, SHIFT_TIMES, formatShiftCell, generateDraft, generateMakeupDraft, parseRestSource, parseRestSources, restAdjustmentFromNote, transitionAllowed } = require('./planning-engine');
 const SHIFT_LEGEND = '班次信息: L（05:30-14:30）: 05:30 ~ 14:30; R（06:30-15:30）: 06:30 ~ 15:30; M（21:30-05:00）: 21:30 ~ 次日 05:00; P（16:30-01:00）: 16:30 ~ 次日 01:00; J2（14:30-23:00）: 14:30 ~ 23:00';
-const { alignPlanningRangeRow, assertPlanningFormulaRow, buildMakeupImportPlan, buildPlanningImportPlan, buildPlanningRoleEvidence, changedRowRanges, fullScheduleRange, headerDateKey, parseMakeupScheduleRows, planningReadbackState, spreadsheetValueRows, validateWriteOrigin } = require('./schedule-api-server');
+const { alignPlanningRangeRow, assertPlanningFormulaRow, buildMakeupImportPlan, buildPlanningImportPlan, buildPlanningRoleEvidence, changedRowRanges, dateMarkerMatches, fullScheduleRange, headerDateKey, parseMakeupScheduleRows, planningReadbackState, spreadsheetValueRows, validateWriteOrigin } = require('./schedule-api-server');
 
 function provenRole(draft) {
   const claims = {}, monthlyClaims = {}, timelineShifts = {}, roster = {};
@@ -379,6 +379,19 @@ function liveRoleSheets(people={}) {
   };
   return Object.fromEntries(['guanqi','brand_selection','youxuan','wangou'].map(roomCode=>[roomCode,{rows:Array.from({length:30},(_,index)=>block(roomCode,index+1,people[roomCode]?.anchor,people[roomCode]?.assistant)).flat(),revision:189107}]));
 }
+
+test('numbered Sunday in historical source cannot masquerade as current Monday', () => {
+  assert.equal(dateMarkerMatches('9月6日\n星期7', '2026-09-06'), true);
+  assert.equal(dateMarkerMatches('9月7日\n星期7', '2025-09-07'), true);
+  assert.equal(dateMarkerMatches('9月7日\n星期7', '2026-09-07'), false);
+  assert.equal(dateMarkerMatches('9月7日\n星期1', '2026-09-07'), true);
+  for (const day of [7, 14, 21, 28]) {
+    const sheets = liveRoleSheets({guanqi:{anchor:'赵媛'}});
+    sheets.youxuan.rows.unshift([`9月${day}日\n星期7`, '', '时间', '05:30-08:00'], ['', '', '主播', '历史主播']);
+    const draft = {roomCode:'guanqi',role:'anchor',dates:[`2026-09-${String(day).padStart(2,'0')}`],assignments:[{date:`2026-09-${String(day).padStart(2,'0')}`,name:'赵媛',shiftCode:'L'}]};
+    assert.equal(buildPlanningRoleEvidence(draft, sheets).completeDates.includes(draft.dates[0]), true, `day ${day}`);
+  }
+});
 
 test('full-month four-room timelines prove role and rest; missing, conflicting, or stale sources block total import', () => {
   const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛',''],['u-2','凡岛-品牌营销部-直播中心-官旗','FD-2','尹珩瑞','']];

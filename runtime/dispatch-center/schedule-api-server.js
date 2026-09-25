@@ -272,7 +272,9 @@ function shiftFromCell(value) {
 
 const { onShift: isOnShift, businessDate } = require('./schedule-clock');
 
-const WEEKDAY_ALIASES = [/[日天0]/u, /[一1]/u, /[二2]/u, /[三3]/u, /[四4]/u, /[五5]/u, /[六6]/u];
+// The 优选 source writes Sunday as 星期7. If 7 is ignored entirely, an older
+// yearless Sunday marker is incorrectly counted as the current year's Monday.
+const WEEKDAY_ALIASES = [/[日天07]/u, /[一1]/u, /[二2]/u, /[三3]/u, /[四4]/u, /[五5]/u, /[六6]/u];
 
 function isDateMarker(value) {
   return /(20\d{2}[年\-/.])?\d{1,2}月\d{1,2}日/u.test(String(value || ''));
@@ -285,7 +287,7 @@ function dateMarkerMatches(value, requestedDate) {
   const expected = new Date(`${requestedDate}T12:00:00+08:00`);
   if (Number(match[2]) !== expected.getMonth() + 1 || Number(match[3]) !== expected.getDate()) return false;
   if (match[1] && Number(match[1]) !== expected.getFullYear()) return false;
-  const weekday = text.match(/星期\s*([日天一二三四五六0-6])/u);
+  const weekday = text.match(/星期\s*([日天一二三四五六0-7])/u);
   return !weekday || WEEKDAY_ALIASES[expected.getDay()].test(weekday[1]);
 }
 
