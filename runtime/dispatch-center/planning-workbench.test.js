@@ -506,7 +506,275 @@ test('a work shift cannot ignore an unparsed same-day support mention in another
   assert.deepEqual(ambiguous.timelineMentionRooms['2026-09-01|赵媛'],['brand_selection','guanqi']);
   const plan=buildPlanningImportPlan(draft,rows,504,target,ambiguous);
   assert.equal(plan.ranges.length,0);
-  assert.match(plan.unresolved[0].reason,/跨房或未解析的支援标注/u);
+  assert.match(plan.unresolved[0].reason,/整月.*跨房.*核验/u);
+});
+
+test('month-wide room proof cannot ignore another day roster or unresolved support evidence', () => {
+  // Synthetic local candidate data, not a snapshot or verification of the
+  // production workbook revision. Live-source drift is checked before POST.
+  const candidateRevision=505;
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  for (const rest of [false,true]) {
+    const draft={roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode:rest?'休':'L',rest}]};
+    const source=()=>{
+      const sheets=liveRoleSheets({guanqi:{anchor:(day)=>rest&&day===1?'':'赵媛'}});
+      if(rest){sheets.guanqi.rows[0][13]='赵媛';sheets.guanqi.rows[0][14]='休息';}
+      return sheets;
+    };
+    const clean=buildPlanningRoleEvidence(draft,source());
+    assert.equal(buildPlanningImportPlan(draft,rows,candidateRevision,target,clean).ranges.length,1);
+    assert.notEqual(buildPlanningImportPlan(draft,rows,candidateRevision,target,clean).expectedHash,
+      buildPlanningImportPlan(draft,rows,candidateRevision-1,target,clean).expectedHash,
+      'a prior target revision cannot reuse the current candidate preview hash');
+    for (const kind of ['attendance','blank-attendance','annotated-attendance','support-note']) {
+      const sheets=source();
+      if(kind==='support-note') sheets.brand_selection.rows.splice(8,0,['','','','赵媛支援']);
+      else {
+        sheets.brand_selection.rows[4][1]=kind==='annotated-attendance'?'赵媛（支援）':'赵媛';
+        sheets.brand_selection.rows[4][2]=kind==='blank-attendance'?'':'L（05:30-14:30）';
+      }
+      const proof=buildPlanningRoleEvidence(draft,sheets);
+      assert.deepEqual(proof.completeMonths,['2026-09']);
+      assert.deepEqual(proof.monthlyClaims['2026-09|赵媛'],[{roomCode:'guanqi',role:'anchor'}], 'absence of a parsed second role is not proof of a single room');
+      const plan=buildPlanningImportPlan(draft,rows,candidateRevision,target,proof);
+      assert.equal(plan.ranges.length,0,`${rest?'rest':'work'} must not ignore another-day ${kind}`);
+      assert.match(plan.unresolved[0].reason,/整月.*跨房.*核验/u);
+      assert.notEqual(proof.signature,clean.signature);
+    }
+    const unrelated=source();
+    unrelated.brand_selection.rows[4][1]='另一同事';
+    unrelated.brand_selection.rows[4][2]='L（05:30-14:30）';
+    assert.equal(buildPlanningImportPlan(draft,rows,candidateRevision,target,buildPlanningRoleEvidence(draft,unrelated)).ranges.length,1,'unrelated colleagues cannot block this person');
+    const anotherMonth=source();
+    anotherMonth.brand_selection.rows.push(['10月1日','赵媛','L（05:30-14:30）','05:30-08:00'],['','','主播','赵媛']);
+    assert.equal(buildPlanningImportPlan(draft,rows,candidateRevision,target,buildPlanningRoleEvidence(draft,anotherMonth)).ranges.length,1,'a different month cannot be silently merged into this month room evidence');
+  }
+});
+
+test('unselected attendance columns and readable dated notes are negative evidence, never a new duty identity', () => {
+  // Synthetic rev505 candidate cases; no live-source snapshot or write.
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-品牌精选','FD-1','赵媛','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  for (const rest of [false,true]) {
+    const draft={roomCode:'brand_selection',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode:rest?'休':'L',rest}]};
+    const source=()=>{
+      const sheets=liveRoleSheets({brand_selection:{anchor:(day)=>rest&&day===1?'':'赵媛'}});
+      if(rest){sheets.brand_selection.rows[0][1]='赵媛';sheets.brand_selection.rows[0][2]='休息';}
+      return sheets;
+    };
+    const clean=buildPlanningRoleEvidence(draft,source());
+    assert.equal(buildPlanningImportPlan(draft,rows,505,target,clean).ranges.length,1);
+    for (const kind of ['alternate-empty','alternate-pending','dated-note']) {
+      const sheets=source();
+      if(kind==='dated-note') sheets.guanqi.rows[7][0]='赵媛支援';
+      else {
+        sheets.guanqi.rows[4][15]='赵媛（支援）';
+        sheets.guanqi.rows[4][16]=kind==='alternate-empty'?'':'待核验';
+        // Keep the first candidate pair selected even when the secondary shift
+        // text is nonempty. Neither layout selection may erase the other name.
+        if(kind==='alternate-pending'){sheets.guanqi.rows[5][13]='另一同事';sheets.guanqi.rows[5][14]='L（05:30-14:30）';}
+      }
+      const proof=buildPlanningRoleEvidence(draft,sheets);
+      assert.deepEqual(proof.completeMonths,['2026-09']);
+      assert.deepEqual(proof.monthlyClaims['2026-09|赵媛'],[{roomCode:'brand_selection',role:'anchor'}]);
+      assert.deepEqual(proof.claims['2026-09-02|赵媛'],[{roomCode:'brand_selection',role:'anchor'}], 'negative evidence cannot create a Guanqi shift or role');
+      if(kind!=='dated-note') assert.ok(proof.roster['2026-09-02|赵媛'].some((entry)=>entry.roomCode==='guanqi'&&entry.unverifiedName===true),'an unselected candidate column is never positive identity evidence');
+      const plan=buildPlanningImportPlan(draft,rows,505,target,proof);
+      assert.equal(plan.ranges.length,0,`${rest?'rest':'work'} cannot ignore ${kind}`);
+      assert.match(plan.unresolved[0].reason,/整月.*跨房.*核验/u);
+      assert.notEqual(proof.signature,clean.signature);
+    }
+    const undated=source();
+    undated.guanqi.rows.unshift(['赵媛支援']);
+    assert.equal(buildPlanningImportPlan(draft,rows,505,target,buildPlanningRoleEvidence(draft,undated)).ranges.length,1,'undated global text is not silently assigned to the selected month');
+  }
+  const homeDraft={roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode:'L'}]};
+  const homeRows=structuredClone(rows);homeRows[2][1]='凡岛-品牌营销部-直播中心-官旗';
+  const homeSheets=liveRoleSheets({guanqi:{anchor:'赵媛'}});
+  homeSheets.guanqi.rows[0][15]='赵媛（支援）';homeSheets.guanqi.rows[0][16]='';
+  const homePlan=buildPlanningImportPlan(homeDraft,homeRows,505,target,buildPlanningRoleEvidence(homeDraft,homeSheets));
+  assert.equal(homePlan.ranges.length,0,'even in the home room a second unverified attendance identity cannot be silently accepted');
+  assert.match(homePlan.unresolved[0].reason,/姓名带未核验备注/u);
+});
+
+test('only a pure terminal month-end footer can be ignored; dated or ambiguous support remains negative evidence', () => {
+  // Synthetic local rev505 candidate, not a production workbook snapshot.
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-品牌精选','FD-1','赵媛','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  for (const rest of [false,true]) {
+    const draft={roomCode:'brand_selection',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode:rest?'休':'L',rest}]};
+    const source=()=>{
+      const sheets=liveRoleSheets({brand_selection:{anchor:(day)=>rest&&day===1?'':'赵媛'}});
+      if(rest){sheets.brand_selection.rows[0][1]='赵媛';sheets.brand_selection.rows[0][2]='休息';}
+      return sheets;
+    };
+    const clean=buildPlanningRoleEvidence(draft,source());
+    for(const footer of [[['本月汇总']],[['本月汇总'],[],['']]]) {
+      const sheets=source();sheets.guanqi.rows.push(...footer);
+      const proof=buildPlanningRoleEvidence(draft,sheets);
+      assert.deepEqual(proof.monthlySourceRooms['2026-09|赵媛'],['brand_selection']);
+      assert.equal(buildPlanningImportPlan(draft,rows,505,target,proof).ranges.length,1,'a pure terminal heading contains no person evidence');
+      assert.equal(proof.signature,clean.signature,'unbound footer text cannot change dated source evidence');
+    }
+    for(const prefix of [[],[['本月汇总']]]) for(const text of ['10/1赵媛支援','10-01赵媛支援']) {
+      const sheets=source();sheets.guanqi.rows.push(...prefix,[text]);
+      assert.equal(buildPlanningImportPlan(draft,rows,505,target,buildPlanningRoleEvidence(draft,sheets)).ranges.length,1,'an explicitly next-month note is not September room evidence');
+    }
+    for(const kind of ['mid-month-footer','month-end-footer-followed-by-support','ambiguous-monthly-summary','month-end-summary-9/30','month-end-summary-09-30','month-end-summary-9月30','alternate-P5','dated-note-before-footer','footer-label-with-duty-cells','unrecognized-summary-note']) {
+      const sheets=source();
+      if(kind==='mid-month-footer') sheets.guanqi.rows.splice(8,0,['本月汇总'],['','','','赵媛支援']);
+      if(kind==='month-end-footer-followed-by-support') sheets.guanqi.rows.push(['本月汇总'],['','','','赵媛支援']);
+      if(kind==='ambiguous-monthly-summary') sheets.guanqi.rows.push(['本月汇总／赵媛支援']);
+      if(kind.startsWith('month-end-summary-')) sheets.guanqi.rows.push([`本月汇总／${kind.slice('month-end-summary-'.length)}赵媛支援`]);
+      if(kind==='alternate-P5'){sheets.guanqi.rows[4][15]='赵媛（支援）';sheets.guanqi.rows[4][16]='';}
+      if(kind==='dated-note-before-footer') sheets.guanqi.rows[7][0]='赵媛支援';
+      if(kind==='footer-label-with-duty-cells') {const row=['本月汇总'];row[15]='赵媛（支援）';sheets.guanqi.rows.push(row);}
+      if(kind==='unrecognized-summary-note') sheets.guanqi.rows.push(['补充：本月汇总／赵媛支援']);
+      sheets.guanqi.rows.push(['本月汇总']);
+      const proof=buildPlanningRoleEvidence(draft,sheets);
+      const plan=buildPlanningImportPlan(draft,rows,505,target,proof);
+      assert.equal(plan.ranges.length,0,`an explicit later footer cannot hide ${kind}`);
+      assert.match(plan.unresolved[0].reason,/整月.*跨房.*核验/u);
+    }
+  }
+});
+
+test('unexplained same-day person mentions block both rest and work even in the verified home room', () => {
+  // Synthetic local rev505 candidate, not a production workbook snapshot.
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  for(const rest of [false,true]) {
+    const draft={roomCode:'guanqi',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode:rest?'休':'L',rest}]};
+    const source=()=>{
+      const sheets=liveRoleSheets({guanqi:{anchor:(day)=>rest&&day===1?'':'赵媛'}});
+      if(rest){sheets.guanqi.rows[0][13]='赵媛';sheets.guanqi.rows[0][14]='休息';}
+      return sheets;
+    };
+    const clean=buildPlanningRoleEvidence(draft,source());
+    assert.equal(buildPlanningImportPlan(draft,rows,505,target,clean).ranges.length,1,'normal verified attendance and timeline names are explained');
+    for(const note of [['赵媛支援'],['赵媛'],['','','','','','','','','','','','','','','赵媛（支援）']]) {
+      const sheets=source();sheets.guanqi.rows.splice(4,0,note);
+      const proof=buildPlanningRoleEvidence(draft,sheets);
+      const plan=buildPlanningImportPlan(draft,rows,505,target,proof);
+      assert.equal(plan.ranges.length,0,`same-day unresolved source must stop ${rest?'rest':'work'}: ${JSON.stringify(note)}`);
+      assert.match(plan.unresolved[0].reason,/未核验|未解释/u);
+      assert.notEqual(proof.signature,clean.signature,'unexplained same-day person evidence belongs to the source signature');
+    }
+    const later=source();later.guanqi.rows.splice(8,0,['赵媛支援']);
+    assert.equal(buildPlanningImportPlan(draft,rows,505,target,buildPlanningRoleEvidence(draft,later)).ranges.length,1,'another day in the same room is not a same-day conflict');
+  }
+});
+
+test('an explicitly dated person note before the first date block is negative evidence, never an undated header exemption', () => {
+  // Synthetic local rev505 candidate, not a production workbook snapshot.
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/1'],['u-1','凡岛-品牌营销部-直播中心-品牌精选','FD-1','赵媛','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  for(const rest of [false,true]) {
+    const draft={roomCode:'brand_selection',role:'anchor',startDate:'2026-09-01',endDate:'2026-09-01',dates:['2026-09-01'],assignments:[{date:'2026-09-01',name:'赵媛',shiftCode:rest?'休':'L',rest}]};
+    const source=()=>{
+      const sheets=liveRoleSheets({brand_selection:{anchor:(day)=>rest&&day===1?'':'赵媛'}});
+      if(rest){sheets.brand_selection.rows[0][1]='赵媛';sheets.brand_selection.rows[0][2]='休息';}
+      return sheets;
+    };
+    const clean=buildPlanningRoleEvidence(draft,source());
+    for(const header of ['9/2 赵媛支援','09-02 赵媛支援','9月2 赵媛支援','2026/9/2 赵媛支援']) {
+      const sheets=source();sheets.guanqi.rows.unshift([header]);
+      const proof=buildPlanningRoleEvidence(draft,sheets);
+      const plan=buildPlanningImportPlan(draft,rows,505,target,proof);
+      assert.equal(plan.ranges.length,0,`explicit month date must not be treated as an undated header: ${header}`);
+      assert.match(plan.unresolved[0].reason,/跨房.*核验/u);
+      assert.notEqual(proof.signature,clean.signature);
+    }
+    for(const header of ['赵媛支援','10/2 赵媛支援','2025/9/2 赵媛支援']) {
+      const sheets=source();sheets.guanqi.rows.unshift([header]);
+      assert.equal(buildPlanningImportPlan(draft,rows,505,target,buildPlanningRoleEvidence(draft,sheets)).ranges.length,1,'undated and explicitly other-period headers do not prove this month');
+    }
+  }
+});
+
+test('an explicitly dated unresolved note belongs to its own day, not its surrounding date block', () => {
+  // Synthetic local rev505 candidate, not a production workbook snapshot.
+  const rows=[[SHIFT_LEGEND],['UID','部门','工号','','2026/9/2'],['u-1','凡岛-品牌营销部-直播中心-官旗','FD-1','赵媛','']];
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  for(const rest of [false,true]) {
+    const draft={roomCode:'guanqi',role:'anchor',startDate:'2026-09-02',endDate:'2026-09-02',dates:['2026-09-02'],assignments:[{date:'2026-09-02',name:'赵媛',shiftCode:rest?'休':'L',rest}]};
+    const source=()=>{
+      const sheets=liveRoleSheets({guanqi:{anchor:(day)=>rest&&day===2?'':'赵媛'}});
+      if(rest){sheets.guanqi.rows[4][13]='赵媛';sheets.guanqi.rows[4][14]='休息';}
+      return sheets;
+    };
+    assert.equal(buildPlanningImportPlan(draft,rows,505,target,buildPlanningRoleEvidence(draft,source())).ranges.length,1);
+    for(const note of [['9/2赵媛支援'],['09-02赵媛支援'],['9月2赵媛支援'],['9/2','','','赵媛支援']]) {
+      const sheets=source();sheets.guanqi.rows.splice(4,0,note);
+      const proof=buildPlanningRoleEvidence(draft,sheets);
+      const plan=buildPlanningImportPlan(draft,rows,505,target,proof);
+      assert.equal(plan.ranges.length,0,`a 9/2 note inside 9/1 cannot allow ${rest?'rest':'work'} on 9/2`);
+      assert.match(plan.unresolved[0].reason,/未解释.*来源/u);
+      assert.ok(proof.unexplainedSourceMentions['2026-09-02|赵媛']?.length);
+    }
+  }
+});
+
+test('explicit dated notes are scanned across the full source even when their host block is outside the selected month', () => {
+  // Synthetic local rev505 candidate, not a production workbook snapshot.
+  const target={spreadsheetToken:'test-token',sheetId:'0jFdXf'};
+  const total=(date)=>[[SHIFT_LEGEND],['UID','部门','工号','',date.replaceAll('-','/')],['u-1','凡岛-品牌营销部-直播中心-品牌精选','FD-1','赵媛','']];
+  const draft=(date,rest=false)=>({roomCode:'brand_selection',role:'anchor',startDate:date,endDate:date,dates:[date],assignments:[{date,name:'赵媛',shiftCode:rest?'休':'L',rest}]});
+  const source=(octoberRest=false)=>{
+    const sheets=liveRoleSheets({brand_selection:{anchor:'赵媛'}});
+    const october=liveRoleSheets({brand_selection:{anchor:(day)=>octoberRest&&day===1?'':'赵媛'}});
+    if(octoberRest){october.brand_selection.rows[0][1]='赵媛';october.brand_selection.rows[0][2]='休息';}
+    for(const roomCode of Object.keys(sheets)) {
+      const nextRows=october[roomCode].rows.map((row)=>{const result=[...row];result[0]=String(result[0]||'').replace(/^9月/u,'10月');return result;});
+      const day31=structuredClone(nextRows.slice(-4));day31[0][0]='10月31日';
+      sheets[roomCode].rows.push(...nextRows,...day31);
+    }
+    return sheets;
+  };
+  for(const rest of [false,true]) for(const note of [['10/1赵媛支援'],['10-01赵媛支援'],['10月1赵媛支援'],['10/1','','','赵媛支援']]) {
+    const sheets=source(rest);sheets.guanqi.rows.splice(120,0,note);
+    const requested=draft('2026-10-01',rest);
+    const proof=buildPlanningRoleEvidence(requested,sheets);
+    assert.deepEqual(proof.completeMonths,['2026-10'],'the October source is complete but still has a negative support note in September');
+    const plan=buildPlanningImportPlan(requested,total(requested.startDate),505,target,proof);
+    assert.equal(plan.ranges.length,0,'a 10/1 note after 9/30 cannot be missed when only October is requested');
+    assert.match(plan.unresolved[0].reason,/跨房.*核验/u);
+    assert.ok(proof.unexplainedSourceMentions['2026-10-01|赵媛']?.length);
+    if(note.length===1) {
+      const september=draft('2026-09-01');
+      assert.equal(buildPlanningImportPlan(september,total(september.startDate),505,target,buildPlanningRoleEvidence(september,sheets)).ranges.length,1,'the same explicitly October note must not conflict with September');
+    }
+  }
+  const reverse=source();reverse.guanqi.rows.splice(124,0,['9/30赵媛支援']);
+  const october=draft('2026-10-01');
+  assert.equal(buildPlanningImportPlan(october,total(october.startDate),505,target,buildPlanningRoleEvidence(october,reverse)).ranges.length,1,'a September note physically inside October is not an October conflict');
+  const september=draft('2026-09-30');
+  assert.equal(buildPlanningImportPlan(september,total(september.startDate),505,target,buildPlanningRoleEvidence(september,reverse)).ranges.length,0,'the same September note is still found when only September is requested');
+  const mixed=source();const attendanceNote=['10/1'];attendanceNote[13]='赵媛';attendanceNote[14]='L（05:30-14:30）';mixed.guanqi.rows.splice(120,0,attendanceNote);
+  const both={...draft('2026-09-01'),endDate:'2026-10-01',dates:['2026-09-01','2026-10-01'],assignments:[...draft('2026-09-01').assignments,...draft('2026-10-01').assignments]};
+  const combinedProof=buildPlanningRoleEvidence(both,mixed);
+  assert.ok(combinedProof.unexplainedSourceMentions['2026-10-01|赵媛']?.length,'a cell explained as September attendance cannot exempt its explicit October date');
+  for(const rest of [false,true]) for(const title of ['10/1','10-01','10月1']) {
+    const sheets=source(rest);sheets.guanqi.rows.splice(120,0,[title],['赵媛支援']);
+    const requested=draft('2026-10-01',rest);
+    const proof=buildPlanningRoleEvidence(requested,sheets);
+    assert.equal(buildPlanningImportPlan(requested,total(requested.startDate),505,target,proof).ranges.length,0,'a date heading must bind the person on its following row');
+    assert.ok(proof.unexplainedSourceMentions['2026-10-01|赵媛']?.length);
+    const september=draft('2026-09-01');
+    assert.equal(buildPlanningImportPlan(september,total(september.startDate),505,target,buildPlanningRoleEvidence(september,sheets)).ranges.length,1,'an October date heading also ends the September negative-evidence context');
+  }
+  const reverseSplit=source();reverseSplit.guanqi.rows.splice(124,0,['9/30'],['赵媛支援']);
+  assert.equal(buildPlanningImportPlan(october,total(october.startDate),505,target,buildPlanningRoleEvidence(october,reverseSplit)).ranges.length,1,'a September heading and following person note inside October must not conflict with October');
+  assert.equal(buildPlanningImportPlan(september,total(september.startDate),505,target,buildPlanningRoleEvidence(september,reverseSplit)).ranges.length,0,'a September heading inside October must still bind its following person note back to September');
+  const reset=source();reset.brand_selection.rows.splice(120,0,['10/1'],['10/2'],['赵媛支援']);
+  const resetProof=buildPlanningRoleEvidence(october,reset);
+  assert.equal(resetProof.unexplainedSourceMentions['2026-10-01|赵媛'],undefined,'a later explicit date replaces the prior date context');
+  assert.ok(resetProof.unexplainedSourceMentions['2026-10-02|赵媛']?.length);
+  assert.equal(buildPlanningImportPlan(october,total(october.startDate),505,target,resetProof).ranges.length,1,'a verified home-room work day is unaffected by another unambiguous day');
+  const ambiguous=source();ambiguous.brand_selection.rows.splice(120,0,['10/2、10/3'],['赵媛支援']);
+  const ambiguousProof=buildPlanningRoleEvidence(october,ambiguous);
+  assert.equal(buildPlanningImportPlan(october,total(october.startDate),505,target,ambiguousProof).ranges.length,0,'multiple-date context does not invent a precise assignment; that month stays fail-closed');
 });
 
 test('writeback proof rejects malformed or status-qualified times and roster shifts without weakening valid overnight slots', () => {
