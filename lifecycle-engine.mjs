@@ -610,7 +610,7 @@ export function interviewReminderSourceFingerprint(snapshot, date) {
   // Bind the reminder to both named calendar events and the recruitment chat
   // cohort. Sorting makes harmless API order changes irrelevant.
   const calendar = (snapshot?.interviewEvents?.[date] || [])
-    .filter(item => item?.status === 'calendar')
+    .filter(item => item?.status === 'calendar' && item?.source === '正式面试日历')
     .map(item => [String(item.eventId || ''), String(item.name || ''),
       String(item.startAt || ''),String(item.endAt || ''),String(item.summaryFingerprint || '')])
     .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
@@ -631,7 +631,8 @@ export function buildInterviewReminderPreview(snapshot, date) {
   if (!/^20\d{2}-\d{2}-\d{2}$/u.test(String(date || ''))) return pending('面试日期无效');
   if (!String(snapshot?.calendarStatus || '').startsWith('已连接：')) return pending('正式面试日历尚未接入');
   if (snapshot?.coverage?.capped || snapshot?.coverage?.reactionStatus !== '已核验') return pending('招聘群证据不完整');
-  const events = (snapshot?.interviewEvents?.[date] || []).filter(item => item?.status === 'calendar');
+  const events = (snapshot?.interviewEvents?.[date] || []).filter(item => item?.status === 'calendar'
+    && item?.source === '正式面试日历');
   if (!events.length) return pending('当天没有可核验的正式面试日程');
   const boundaryDate = recruitmentCycleRange(recruitmentCycleMonthForDate(date)).startDate;
   if (date === boundaryDate && snapshot?.boundaryCarryover?.status !== 'verified')

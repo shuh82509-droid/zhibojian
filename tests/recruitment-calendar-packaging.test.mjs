@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import vm from 'node:vm';
 import {recruitmentCycleRange} from '../lifecycle-engine.mjs';
+import {sanitizeRecruitmentOutcome} from '../interview-binding.mjs';
 
 const read=async path=>readFile(new URL(path,import.meta.url),'utf8');
 
@@ -24,6 +25,7 @@ test('formal calendar keeps every character used for a signed interview binding'
   const full=await reader(cycle);
   assert.match(full.status,/^已连接：/u);
   assert.ok(full.events['2026-09-24'][0].name.includes('末尾可核对'));
+  assert.equal(full.events['2026-09-24'][0].source,'正式面试日历');
   assert.equal(full.events['2026-09-24'][0].summaryFingerprint,
     createHash('sha256').update(summary).digest('hex'));
   summary=`周小雨正式面试${'额'.repeat(501)}`;
@@ -86,7 +88,8 @@ test('same-name daily report arrival cannot promote a current-cycle submitted ca
     linkRecruitmentCalendarWithBoundary:async candidates=>({candidates,matchedCount:0,pendingCount:0,
       boundary:{status:'verified'}}),
     recruitmentReviewerOpenId:'ou_reviewer',recruitmentCalendarId:'calendar_official',
-    chinaDateFor:()=> '2026-09-24',structuredClone,Date,
+    chinaDateFor:()=> '2026-09-24',structuredClone,Date,sanitizeRecruitmentOutcome,
+    completeRecruitmentChatSource:()=>true,
   };
   const snapshot=vm.runInNewContext(`${source.slice(start,end)}\nrecruitmentCycleSnapshot`,context);
   const result=await snapshot('2026-09');

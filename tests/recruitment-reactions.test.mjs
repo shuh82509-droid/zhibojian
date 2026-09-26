@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import {activeChatMessages,readCompleteMessageReactions,linkVerifiedRecruitmentCalendar,
   linkRecruitmentCalendarAcrossBoundary,recruitmentCycleMonthForDate,recruitmentCycleRange,
   recruitmentBoundaryCycleRange,parseRecruitmentMessages,buildInterviewReminderPreview} from '../lifecycle-engine.mjs';
+import {formalRecruitmentCalendarEvents,sanitizeRecruitmentOutcome} from '../interview-binding.mjs';
 
 const reaction=(operator_id,emoji_type,index)=>({operator:{operator_id},emoji_type,action_time:String(1700000000000+index)});
 const page=(messageId,items,{more=false,token='',count=items.length}={})=>({
@@ -201,7 +202,8 @@ test('background recruitment snapshot reads the full current cycle for both sour
     parseRecruitmentMessages:()=>({candidates:[],funnel:{},interviewEvents:{},submissionMessageCounts:{},sourceDate:''}),
     parseEmploymentMessages:()=>({candidates:[],sourceDate:''}),mergeRecruitmentCandidates:()=>[],
     supplementalEmploymentCandidates:()=>[],addStructuredAssessments:async candidates=>({candidates,summary:null,status:'待核验'}),
-    linkVerifiedRecruitmentCalendar,
+     linkVerifiedRecruitmentCalendar,formalRecruitmentCalendarEvents,sanitizeRecruitmentOutcome,
+    completeRecruitmentChatSource:()=>true,
     parseLatestCoachSummary:()=>null,recruitmentReviewerOpenId:'ou_reviewer',lifecycleSourceStatus:()=> 'current',
     lifecycleSnapshotPath:()=>'/unused',writeJsonAtomic:async()=>{},structuredClone,Date,
     readRecruitmentInterviewJournal:async()=>({schemaVersion:1,entries:[]}),
@@ -239,7 +241,7 @@ test('service reads the exact previous full cycle only for a first-day formal in
     getChatMessages:async(key,limit,window)=>{calls.push({key,limit,window});return prior;},
     parseRecruitmentMessages:()=>priorParsed,recruitmentReviewerOpenId:'ou_reviewer',
     interviewBindingEnabled:false,
-    linkRecruitmentCalendarAcrossBoundary};
+     linkRecruitmentCalendarAcrossBoundary,formalRecruitmentCalendarEvents};
   const link=vm.runInNewContext(`${serverSource.slice(start,end)}\nlinkRecruitmentCalendarWithBoundary`,context);
   const options={fresh:true,advanceStage:true};
   const verified=await link([], {submissionMessageCounts:{}},current,calendar,recruitmentCycleRange('2026-10'),options);
@@ -295,7 +297,11 @@ test('recruitment page shows pending review figures while reviewer identity is a
   for(const id of ['metricScreened','metricInterview','metricInterviewPassed','alertReview'])assert.equal(elements[id].textContent,'待核验');
   const ready={...base,coverage:{...base.coverage,reactionStatus:'已核验'}};
   vm.runInContext('updateDynamicFunnel(snapshot)',vm.createContext({...context,snapshot:ready}));
-  for(const id of ['metricScreened','metricInterview','metricInterviewPassed','alertReview'])assert.equal(elements[id].textContent,0);
+  for(const id of ['metricScreened','alertReview'])assert.equal(elements[id].textContent,0);
+  for(const id of ['metricInterview','metricInterviewPassed'])assert.equal(elements[id].textContent,'待核验');
+  const bound={...ready,interviewOutcomeVerification:'self_binding_required_v1'};
+  vm.runInContext('updateDynamicFunnel(snapshot)',vm.createContext({...context,snapshot:bound}));
+  for(const id of ['metricInterview','metricInterviewPassed'])assert.equal(elements[id].textContent,0);
   assert.match(html,/id="calendarCoverageRule"/);
   assert.doesNotMatch(html,/正式面试日历待授权；当前仅展示授权群聊中明确记录的面试信息/);
 });
@@ -304,7 +310,7 @@ const submissionCandidate=(name,{stage='initial_pass',initialReview='OK',sourceI
   name,stage,status:stage==='initial_pass'?'初审通过':stage,inSubmissionCohort:true,date,
   timeline:[[date,'已送审']],submissionEvidence:{name,date,sourceId,initialReview},
 });
-const calendarEvent=(title,eventId='cal_one')=>({name:title,status:'calendar',eventId});
+const calendarEvent=(title,eventId='cal_one')=>({name:title,status:'calendar',source:'正式面试日历',eventId});
 
 test('only one exact formal event and one verified OK submission advance to interview feedback',()=>{
   const short=submissionCandidate('王丽',{sourceId:'om_short'});

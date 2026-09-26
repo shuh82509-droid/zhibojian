@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {parseRecruitmentMessages, recruitmentBoundaryCycleRange} from './lifecycle-engine.mjs';
+import {parseRecruitmentMessages, recruitmentBoundaryCycleRange, linkVerifiedRecruitmentCalendar} from './lifecycle-engine.mjs';
 
 const messageId = value => /^om_[A-Za-z0-9_]+$/u.test(String(value || ''));
 const eventId = value => typeof value === 'string' && value.length > 0 && value.length <= 300 && !/[\s\u0000-\u001f]/u.test(value);
@@ -22,6 +22,152 @@ const completeRecruitmentChat = (chat, recruitmentChatId, cycle) =>
     && Number.isFinite(Date.parse(item?.createdAt||''))
     && Date.parse(item.createdAt)/1000>=cycle.startTime
     && Date.parse(item.createdAt)/1000<cycle.endTime+1);
+
+export const formalRecruitmentCalendarEvents = events => Object.fromEntries(
+  Object.entries(events && typeof events==='object' ? events : {}).map(([date,items])=>[date,
+    (Array.isArray(items)?items:[]).filter(item=>item && !Array.isArray(item)
+      && item.status==='calendar' && item.source==='正式面试日历' && eventId(item.eventId))]));
+
+/** A group post, offer or stale snapshot is never an official interview result.
+ * This projection is also applied when the self-binding feature is disabled.
+ * Fresh, verified self-bindings may be retained only after same-request source
+ * verification; callers must never set either trust flag for disk snapshots.
+ */
+export function sanitizeRecruitmentOutcome(snapshot,{
+  trustedFreshCalendar=false,trustedFreshChat=false,trustedFreshBinding=false,
+  trustedFreshAssessment=false
+}={}) {
+  if(!snapshot || typeof snapshot!=='object')return snapshot;
+  const result=structuredClone(snapshot);
+  const originalEvents=result.interviewEvents && typeof result.interviewEvents==='object'
+    ?result.interviewEvents:{};
+  const formalEvents=trustedFreshCalendar && String(result.calendarStatus||'').startsWith('已连接：')
+    ?formalRecruitmentCalendarEvents(originalEvents):{};
+  if(!trustedFreshCalendar && String(result.calendarStatus||'').startsWith('已连接：'))
+    result.calendarStatus='待核验：本次未重读正式面试日历；历史日程仅作线索。';
+  const candidates=Array.isArray(result.candidates)?result.candidates:[];
+  const sourceReady=trustedFreshCalendar && trustedFreshChat
+    && String(result.calendarStatus||'').startsWith('已连接：')
+    && result.coverage?.capped===false && result.coverage?.reactionStatus==='已核验';
+  const rechecked=linkVerifiedRecruitmentCalendar(candidates.map(candidate=>
+    candidate?.inSubmissionCohort && candidate.submissionEvidence?.initialReview==='OK'
+      ?{...candidate,stage:'initial_pass',calendarEvidence:null}:candidate),
+    formalEvents,result.submissionMessageCounts,{sourceReady,advanceStage:false}).candidates;
+  const clueText=text=>/面试(?:不)?通过|面评(?:不)?通过|已入职|入职\/到岗|考核通过|接受\s*offer/iu.test(String(text||''));
+  let signedCount=0,signedPassed=0,unverifiedCount=0;
+  result.candidates=candidates.map((candidate,index)=>{
+    if(!candidate || typeof candidate!=='object')return candidate;
+    const submission=candidate.submissionEvidence;
+    const cohort=candidate.inSubmissionCohort===true && messageId(submission?.sourceId)
+      && submission?.name===candidate.name && dateOnly(submission?.date)
+      && result.submissionMessageCounts?.[candidate.name]===1
+      && candidates.filter(item=>item?.inSubmissionCohort&&item?.name===candidate.name).length===1
+      && candidates.filter(item=>item?.inSubmissionCohort
+        && item?.submissionEvidence?.sourceId===submission.sourceId).length===1;
+    const calendar=candidate.calendarEvidence;
+    const checked=rechecked[index]?.calendarEvidence;
+    const matchedCurrent=cohort && checked && calendar?.source==='正式面试日历'
+      && checked.eventId===calendar.eventId && checked.date===calendar.date && checked.title===calendar.title;
+    const matchedCarry=candidate.boundaryCarryover===true && result.boundaryCarryover?.status==='verified'
+      && result.boundaryCarryover?.submissionMessageCounts?.[candidate.name]===1
+      && messageId(submission?.sourceId) && calendar?.source==='正式面试日历'
+      && Object.entries(formalEvents).flatMap(([date,items])=>items.map(item=>({date,item})))
+        .filter(({date,item})=>date===calendar.date && item.eventId===calendar.eventId
+          && item.name===calendar.title).length===1;
+    const signedCalendar=Boolean(sourceReady && (matchedCurrent || matchedCarry));
+    const signed=Boolean(trustedFreshBinding && signedCalendar
+      && candidate.interviewBinding?.status==='verified'
+      && ['pass','fail'].includes(candidate.interviewBinding.outcome)
+      && candidate.interviewBinding.recordId);
+    // The first day may carry a signed submission from the prior cycle.
+    // Preserve its verified stage, but keep the current-cycle funnel scoped
+    // exactly like projectInterviewBindings: current cohort only.
+    if(signed && candidate.inSubmissionCohort===true && candidate.submissionIdentityStatus!=='ambiguous'){
+      signedCount+=1;if(candidate.interviewBinding.outcome==='pass')signedPassed+=1;
+    }
+    const timeline=Array.isArray(candidate.timeline)?candidate.timeline:[];
+    const hasClue=['interview_pass','interview_fail','hired','interviewed','progress','pending_feedback'].includes(candidate.stage)
+      || Boolean(calendar) || Boolean(candidate.evaluationEvidence) || Boolean(candidate.startDate)
+      || Boolean(candidate.actualStartDate) || typeof candidate.assessmentPassed==='boolean'
+      || Boolean(candidate.assessmentEvidenceStatus) || Boolean(candidate.assessmentEvidence?.length)
+      || candidate.interviewBinding?.status==='verified'
+      || clueText(candidate.status) || clueText(candidate.note)
+      || timeline.some(row=>clueText(row?.[1]));
+    if(!hasClue && !signed)return candidate;
+    if(!signed)unverifiedCount+=1;
+    const stage=signed ? candidate.interviewBinding.outcome==='pass'?'interview_pass':'interview_fail'
+      : !cohort && !matchedCarry?'unmapped'
+      : submission?.initialReview==='No'?'initial_fail'
+      : submission?.initialReview==='OK' ? signedCalendar?'pending_feedback':'initial_pass':'unmapped';
+    const status=signed ? candidate.interviewBinding.outcome==='pass'?'面试通过 · 本人绑定':'面试不通过 · 本人绑定'
+      : stage==='initial_fail'?'初审不通过 · 后续记录待核验'
+      : stage==='initial_pass'?'初审通过 · 面评结论待核验'
+      : stage==='pending_feedback'?'正式面试已安排 · 面评结论待核验'
+      : '送审或面评归属待核验';
+    const rawTimeline=timeline.filter(row=>clueText(row?.[1])
+      && !String(row?.[1]||'').startsWith('倪梦萍本人绑定面评'));
+    const safeTimeline=timeline.map(row=>{
+      if(!clueText(row?.[1]) || signed && String(row?.[1]||'').startsWith('倪梦萍本人绑定面评'))return row;
+      return [row[0],'招聘群面评、Offer 或日报线索待核验；不作为正式面试或到岗结论。'];
+    });
+    return {...candidate,stage,status,
+      note:signed?'本人面评绑定已核验；Offer 与实际到岗仍待独立核验。'
+        :'招聘群面评、Offer 或日报仅作线索；正式结论待本人绑定。',
+      date:signedCalendar?calendar.date:cohort&&submission?.date?submission.date:candidate.date,
+      startDate:null,actualStartDate:null,actualStartDateBasis:null,
+      calendarEvidence:signedCalendar?calendar:null,
+      evaluationEvidence:signed?candidate.evaluationEvidence:null,
+      assessmentPassed:trustedFreshAssessment?candidate.assessmentPassed:null,
+      assessmentEvidence:trustedFreshAssessment?candidate.assessmentEvidence:null,
+      assessmentEvidenceStatus:trustedFreshAssessment?candidate.assessmentEvidenceStatus
+        :'待核验：双人确认记录本次未重读',
+      timeline:safeTimeline,
+      interviewBinding:signed?candidate.interviewBinding:{status:'pending',reason:'本人面评来源未在本次读取中完整核验'},
+      unverifiedOutcome:candidate.unverifiedOutcome
+        ?{...candidate.unverifiedOutcome,reportedAssessmentEvidenceStatus:
+          Object.hasOwn(candidate.unverifiedOutcome,'reportedAssessmentEvidenceStatus')
+            ?candidate.unverifiedOutcome.reportedAssessmentEvidenceStatus:candidate.assessmentEvidenceStatus??null}
+        :{reportedStage:candidate.stage,reportedStatus:candidate.status,
+        reportedNote:candidate.note,reportedStartDate:candidate.startDate||null,
+        reportedActualStartDate:candidate.actualStartDate||null,
+        reportedAssessmentPassed:candidate.assessmentPassed??null,
+        reportedAssessmentEvidence:candidate.assessmentEvidence||null,
+        reportedAssessmentEvidenceStatus:candidate.assessmentEvidenceStatus??null,
+        groupEvaluationEvidence:candidate.evaluationEvidence||null,
+        reportedCalendarEvidence:!signedCalendar?calendar||null:null,rawTimeline},
+    };
+  });
+  result.interviewEvents=Object.fromEntries(Object.entries(originalEvents).map(([date,items])=>[date,
+    (Array.isArray(items)?items:[]).map(item=>{
+      if(formalEvents[date]?.includes(item))return item;
+      if(Array.isArray(item))return {name:item[0],status:'pending_feedback',source:'历史面评线索待核验',reportedStatus:item[1]};
+      if(!item || typeof item!=='object')return item;
+      return {...item,status:'pending_feedback',source:item.status==='calendar'&&item.source==='正式面试日历'
+        ?'历史日历待复核':'招聘群面评线索',
+        reportedStatus:item.reportedStatus??item.status};
+    })]));
+  if(Array.isArray(result.interviewBindings))result.interviewBindings=result.interviewBindings.map(item=>{
+    if(item?.status!=='verified')return item;
+    const candidate=result.candidates.find(row=>row?.submissionEvidence?.sourceId===item.submissionMessageId
+      &&row?.interviewBinding?.status==='verified');
+    return candidate?item:{...item,status:'pending',reason:'已签面评来源未在本次读取中完整核验'};
+  });
+  result.funnel={...(result.funnel||{}),groupEvaluatedCount:trustedFreshBinding&&sourceReady?signedCount:null,
+    groupPassedCount:trustedFreshBinding&&sourceReady?signedPassed:null,hiredCount:null,
+    interviewScheduledCount:sourceReady?result.funnel?.interviewScheduledCount:null,
+    interviewScheduledPendingCount:sourceReady?result.funnel?.interviewScheduledPendingCount:null,
+    assessmentPassedCount:trustedFreshAssessment?result.funnel?.assessmentPassedCount:null,
+    assessmentFailedCount:trustedFreshAssessment?result.funnel?.assessmentFailedCount:null,
+    assessmentConflictCount:trustedFreshAssessment?result.funnel?.assessmentConflictCount:null};
+  result.coverage={...(result.coverage||{}),interviewOutcomeStatus:unverifiedCount
+    ?'群面评、Offer 或旧快照仅作线索；正式结论待本人绑定':'仅本人已签面评可形成正式结论'};
+  if(!trustedFreshAssessment)result.assessmentStatus='待核验：考核结论须重新读取双人确认记录';
+  result.assessmentOutcomeVerification=trustedFreshAssessment
+    ?'current_structured_dual_review_v1':'pending_revalidation';
+  if(!trustedFreshBinding || unverifiedCount)result.status='partial';
+  result.interviewOutcomeVerification='self_binding_required_v1';
+  return result;
+}
 
 /** A signed binding may inspect only the explicit heading and final conclusion.
  * Free-form bullets are intentionally never interpreted as a decision.
@@ -167,7 +313,8 @@ export function verifyInterviewBindingSources(snapshot, chat, payload, {
     if(otherPriorMentions.length)return pending('上周期还有同名或不完整消息，跨周期归属须人工核验');
   }
   const calendarEvents=Object.entries(snapshot.interviewEvents||{}).flatMap(([date,items])=>
-    (Array.isArray(items)?items:[]).filter(item=>item?.status==='calendar'&&item.eventId===calendarEventId)
+    (Array.isArray(items)?items:[]).filter(item=>item?.status==='calendar'
+      &&item.source==='正式面试日历'&&item.eventId===calendarEventId)
       .map(item=>({date,...item})));
   if(calendarEvents.length!==1||candidate.calendarEvidence?.eventId!==calendarEventId
     ||candidate.calendarEvidence?.date!==calendarEvents[0].date

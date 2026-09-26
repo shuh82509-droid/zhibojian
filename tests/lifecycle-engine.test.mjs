@@ -124,7 +124,7 @@ test('interview reminder requires a verified calendar and exact candidate match'
       submissionEvidence:{sourceId:'om_zhou',date:'2026-09-22',initialReview:'OK'},
       calendarEvidence:{eventId:'e1',date}}],
     submissionMessageCounts:{周小雨:1},
-    interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',eventId:'e1'}]},
+    interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',source:'正式面试日历',eventId:'e1'}]},
   };
   const preview = buildInterviewReminderPreview(snapshot, date);
   assert.equal(preview.status, 'preview');
@@ -133,29 +133,29 @@ test('interview reminder requires a verified calendar and exact candidate match'
   assert.deepEqual(preview.matches, [{name:'周小雨',eventId:'e1'}]);
   assert.match(preview.text, /周小雨/);
   assert.equal(buildInterviewReminderPreview({...snapshot,calendarStatus:'待授权'}, date).status, 'pending');
-  assert.equal(buildInterviewReminderPreview({...snapshot,interviewEvents:{[date]:[{name:'未知姓名面试',status:'calendar'}]}}, date).status, 'pending');
+  assert.equal(buildInterviewReminderPreview({...snapshot,interviewEvents:{[date]:[{name:'未知姓名面试',status:'calendar',source:'正式面试日历'}]}}, date).status, 'pending');
 });
 
 test('interview title does not mistake a Chinese name prefix for another candidate', () => {
   const date='2026-09-24',snapshot={calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',coverage:{capped:false,chatMessages:1,reactionStatus:'已核验'},
     candidates:[{name:'王丽',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_wangli',date:'2026-09-23',initialReview:'OK'},
       calendarEvidence:{eventId:'e1',date}}],submissionMessageCounts:{王丽:1},
-    interviewEvents:{[date]:[{name:'王丽娜面试 · 14:00',status:'calendar',eventId:'e1'}]}};
+    interviewEvents:{[date]:[{name:'王丽娜面试 · 14:00',status:'calendar',source:'正式面试日历',eventId:'e1'}]}};
   assert.equal(buildInterviewReminderPreview(snapshot,date).status,'pending');
-  assert.equal(buildInterviewReminderPreview({...snapshot,interviewEvents:{[date]:[{name:'面试王丽 · 14:00',status:'calendar',eventId:'e1'}]}},date).sourceReady,true);
+  assert.equal(buildInterviewReminderPreview({...snapshot,interviewEvents:{[date]:[{name:'面试王丽 · 14:00',status:'calendar',source:'正式面试日历',eventId:'e1'}]}},date).sourceReady,true);
   assert.equal(buildInterviewReminderPreview({...snapshot,candidates:[...snapshot.candidates,{name:'王丽娜',inSubmissionCohort:true,
     submissionEvidence:{sourceId:'om_wanglina',date:'2026-09-23',initialReview:'OK'},calendarEvidence:{eventId:'e1',date}}],
     submissionMessageCounts:{王丽:1,王丽娜:1}},date).status,'preview');
-  assert.equal(buildInterviewReminderPreview({...snapshot,submissionMessageCounts:{王丽:2},interviewEvents:{[date]:[{name:'王丽面试 · 14:00',status:'calendar',eventId:'e1'}]}},date).status,'pending');
+  assert.equal(buildInterviewReminderPreview({...snapshot,submissionMessageCounts:{王丽:2},interviewEvents:{[date]:[{name:'王丽面试 · 14:00',status:'calendar',source:'正式面试日历',eventId:'e1'}]}},date).status,'pending');
 });
 
 test('17:00 interview source fingerprint is order independent but detects calendar and chat changes',()=>{
   const date='2026-09-24',base={coverage:{capped:false},submissionMessageCounts:{王丽:1},
     candidates:[{name:'王丽',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_first'}}],
-    interviewEvents:{[date]:[{name:'王丽面试 · 14:00',status:'calendar',eventId:'e1'}]}};
+    interviewEvents:{[date]:[{name:'王丽面试 · 14:00',status:'calendar',source:'正式面试日历',eventId:'e1'}]}};
   const first=interviewReminderSourceFingerprint(base,date);
   assert.equal(first,interviewReminderSourceFingerprint({...base,interviewEvents:{[date]:[...base.interviewEvents[date]].reverse()}},date));
-  assert.notEqual(first,interviewReminderSourceFingerprint({...base,interviewEvents:{[date]:[{name:'王丽面试 · 15:00',status:'calendar',eventId:'e1'}]}},date));
+  assert.notEqual(first,interviewReminderSourceFingerprint({...base,interviewEvents:{[date]:[{name:'王丽面试 · 15:00',status:'calendar',source:'正式面试日历',eventId:'e1'}]}},date));
   assert.notEqual(first,interviewReminderSourceFingerprint({...base,interviewEvents:{[date]:[{...base.interviewEvents[date][0],endAt:'2026-09-24T08:30:00.000Z'}]}},date));
   assert.notEqual(first,interviewReminderSourceFingerprint({...base,interviewEvents:{[date]:[{...base.interviewEvents[date][0],summaryFingerprint:'a'.repeat(64)}]}},date));
   assert.notEqual(first,interviewReminderSourceFingerprint({...base,candidates:[...base.candidates,{name:'陈月',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_second'}}]},date));
@@ -172,7 +172,7 @@ test('17:00 first-day preview needs verified prior-cycle carryover and binds its
     candidates:[candidate],submissionMessageCounts:{},
     boundaryCarryover:{status:'verified',date,sourceCycle:'2026-09',chatMessages:386,
       submissionMessageCounts:{周小雨:1}},
-    interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',eventId:'cal_one'}]}};
+    interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',source:'正式面试日历',eventId:'cal_one'}]}};
   const carried=buildInterviewReminderPreview(snapshot,date);
   assert.equal(carried.status,'pending');
   assert.match(carried.reason,/跨周期首日候选人/u);
@@ -383,7 +383,7 @@ test('same-name submissions with distinct IDs never inherit one interview result
   assert.deepEqual(duplicate.interviewEvents,{});
   const snapshot={...duplicate,calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',
     coverage:{capped:false,chatMessages:3,reactionStatus:'已核验'},
-    interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',eventId:'cal_one'}]}};
+    interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',source:'正式面试日历',eventId:'cal_one'}]}};
   assert.equal(buildInterviewReminderPreview(snapshot,date).status,'pending');
   assert.equal(mergeRecruitmentCandidates(duplicate.candidates,[{name:'周小雨',stage:'interview_pass',status:'面试通过'}])[0].stage,'unmapped');
 });

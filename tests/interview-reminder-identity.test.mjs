@@ -18,7 +18,7 @@ const source=events=>({
   ],
   submissionMessageCounts:{测试甲:1,测试乙:1},
 });
-const event=(name,eventId)=>({status:'calendar',name:`${name}面试`,eventId});
+const event=(name,eventId)=>({status:'calendar',source:'正式面试日历',name:`${name}面试`,eventId});
 
 test('different official event IDs and different submitted people are previewable',()=>{
   const result=buildInterviewReminderPreview(source([event('测试甲','ev-a'),event('测试乙','ev-b')]),date);

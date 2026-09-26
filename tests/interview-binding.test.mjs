@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
-import {inspectInterviewPost,verifyInterviewBindingSources,projectInterviewBindings} from '../interview-binding.mjs';
+import {inspectInterviewPost,verifyInterviewBindingSources,projectInterviewBindings,sanitizeRecruitmentOutcome} from '../interview-binding.mjs';
 import {centralFeishuOpenId,recruitmentCycleRange,recruitmentBoundaryCycleRange,
   parseRecruitmentMessages,linkRecruitmentCalendarAcrossBoundary} from '../lifecycle-engine.mjs';
 
@@ -23,7 +23,7 @@ function fixture(){
   const snapshot={cycle:recruitmentCycleRange('2026-09'),calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',
     coverage:{capped:false,reactionStatus:'已核验',chatMessages:2},
     candidates:[candidate],submissionMessageCounts:{周小雨:1},
-    interviewEvents:{'2026-09-24':[{eventId:'evt_one',name:title,status:'calendar',summaryFingerprint:'a'.repeat(64),
+    interviewEvents:{'2026-09-24':[{eventId:'evt_one',name:title,status:'calendar',source:'正式面试日历',summaryFingerprint:'a'.repeat(64),
       startAt:'2026-09-24T07:30:00.000Z',endAt:'2026-09-24T08:30:00.000Z'}]},
     funnel:{groupEvaluatedCount:0,groupPassedCount:0}};
   const chat={key:'recruitment',chatId,truncated:false,paginationIssue:'',reactionStatus:'已核验',
@@ -49,7 +49,7 @@ function crossFixture(){
     sourceMessageCount:1,deletedMessageCount:0,messages:[post]};
   const prior=parseRecruitmentMessages(previousChat.messages,{reviewerOpenId:reviewer});
   const current=parseRecruitmentMessages(chat.messages,{reviewerOpenId:reviewer});
-  const event={eventId:'evt_cross',name:'周小雨正式面试 · 16:00',status:'calendar',
+  const event={eventId:'evt_cross',name:'周小雨正式面试 · 16:00',status:'calendar',source:'正式面试日历',
     summaryFingerprint:'c'.repeat(64),startAt:'2026-09-25T07:30:00.000Z',
     endAt:'2026-09-25T08:30:00.000Z'};
   const interviewEvents={'2026-09-25':[event]};
@@ -84,6 +84,12 @@ test('跨周期首日本期仅有面评时合并成唯一待签候选，并以�
   const readback=projectInterviewBindings(snapshot,chat,[entry],crossOptions);
   assert.equal(readback.candidates[0].interviewBinding.status,'verified');
   assert.equal(readback.candidates[0].stage,'interview_fail');
+  assert.equal(readback.funnel.groupEvaluatedCount,0,'prior-cycle submission is not in current cohort');
+  const safe=sanitizeRecruitmentOutcome(readback,{trustedFreshCalendar:true,trustedFreshChat:true,
+    trustedFreshBinding:true});
+  assert.equal(safe.candidates[0].stage,'interview_fail','signed carryover stays verified');
+  assert.equal(safe.funnel.groupEvaluatedCount,0,'signed carryover never increases current-cycle evaluated count');
+  assert.equal(safe.funnel.groupPassedCount,0);
   const editedPrior={...previousChat,messages:[{...previousChat.messages[0],updatedAt:'2026-09-25T10:30:00.000Z'}]};
   assert.equal(projectInterviewBindings(snapshot,chat,[entry],{...crossOptions,previousChat:editedPrior})
     .candidates[0].interviewBinding.status,'pending');
@@ -206,7 +212,7 @@ test('跨周期实时读取仅取当期、前期各一份招聘群快照与一�
   const calls=[];
   const current={key:'recruitment',period:'2026-10'};
   const prior={key:'recruitment',period:'2026-09'};
-  const calendar={events:{'2026-09-25':[{status:'calendar',eventId:'evt_cross'}]},status:'已连接：1'};
+  const calendar={events:{'2026-09-25':[{status:'calendar',source:'正式面试日历',eventId:'evt_cross'}]},status:'已连接：1'};
   const read=vm.runInNewContext(`${code}\ninterviewBindingSources`,{
     recruitmentCycleRange:month=>({month,period:'current'}),
     recruitmentBoundaryCycleRange:()=>({date:'2026-09-25',previous:{period:'previous'}}),

@@ -15,7 +15,8 @@ import { frameHeadersForHub } from './frame-policy.mjs';
 import { createCalendarUserReader } from './calendar-user-reader.mjs';
 import { createReminderJournalLock } from './lifecycle-reminder-lock.mjs';
 import { writeDurableJsonAtomic } from './durable-journal.mjs';
-import {inspectInterviewPost, verifyInterviewBindingSources, projectInterviewBindings} from './interview-binding.mjs';
+import {inspectInterviewPost, verifyInterviewBindingSources, projectInterviewBindings,
+  sanitizeRecruitmentOutcome, formalRecruitmentCalendarEvents} from './interview-binding.mjs';
 import { reminderScheduleConfig } from './reminder-gates.mjs';
 import { createCalendarAuthHandler } from './calendar-auth-http.mjs';
 import { createCoachCalendarAuth } from './coach-calendar-auth.mjs';
@@ -1838,8 +1839,12 @@ async function refreshRecruitmentLifecycle(targetDate,{fresh=false,persist=true}
       recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor(),
       previousChat:linked.previousChat})
     :snapshot;
-  if(persist)await writeJsonAtomic(lifecycleSnapshotPath('recruitment'), verified);
-  return verified;
+  const safe=sanitizeRecruitmentOutcome(verified,{trustedFreshCalendar:calendarResult.status==='fulfilled',
+    trustedFreshChat:completeRecruitmentChatSource(chatResult.value,cycle),
+    trustedFreshBinding:interviewBindingEnabled,
+    trustedFreshAssessment:Boolean(assessment.summary)&&completeRecruitmentChatSource(chatResult.value,cycle)});
+  if(persist)await writeJsonAtomic(lifecycleSnapshotPath('recruitment'), safe);
+  return safe;
 }
 let recruitmentSnapshotReadInFlight=null;
 function readFreshRecruitmentSnapshot() {
@@ -1881,7 +1886,7 @@ async function linkRecruitmentCalendarWithBoundary(candidates, parsed, chat, cal
       }
     } catch { previousSourceReady=false; }
   }
-  const linked=linkRecruitmentCalendarAcrossBoundary(candidates,previousParsed,calendar.events,parsed.submissionMessageCounts,{
+  const linked=linkRecruitmentCalendarAcrossBoundary(candidates,previousParsed,formalRecruitmentCalendarEvents(calendar.events),parsed.submissionMessageCounts,{
     boundaryDate:boundaryRange.date,previousCycle:boundaryRange.previous,currentSourceReady,
     previousSourceReady,advanceStage,
   });
@@ -1915,7 +1920,7 @@ async function readRecruitmentCalendar(cycle) {
     const time = timestamp ? new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(timestamp * 1000)) : '';
     const summary = fullSummary.trim();
     if(!summary){unverifiableTitles+=1;return;}
-    (events[date] ||= []).push({name:`${summary}${time ? ` · ${time}` : ''}`,status:'calendar',eventId:String(item?.event_id || ''),
+    (events[date] ||= []).push({name:`${summary}${time ? ` · ${time}` : ''}`,status:'calendar',source:'正式面试日历',eventId:String(item?.event_id || ''),
       summaryFingerprint:createHash('sha256').update(fullSummary).digest('hex'),
       startAt:timestamp>0?new Date(timestamp*1000).toISOString():'',
       endAt:endTimestamp>timestamp?new Date(endTimestamp*1000).toISOString():''});
@@ -1987,11 +1992,15 @@ async function recruitmentCycleSnapshot(month,{
     unmappedCount:candidates.filter(item => item.stage === 'unmapped').length,
     coverage:{chatMessages:chat.sourceMessageCount ?? chat.messages?.length ?? 0,deletedMessages:chat.deletedMessageCount ?? 0,capped:Boolean(chat.truncated),reactionStatus:recruitmentReviewerOpenId ? (chat.reactionStatus || '待核验') : '待配置审查人身份',reactionFailure:chat.reactionFailure || '',employmentStatus:employmentResult.status === 'fulfilled' ? '已读取' : '待授权',employmentMessages:employmentResult.status === 'fulfilled' ? employmentResult.value.sourceMessageCount ?? employmentResult.value.messages?.length ?? 0 : null,employmentCapped:employmentResult.status === 'fulfilled' ? Boolean(employmentResult.value.truncated) : null,employmentFailure:employmentResult.status === 'rejected' ? String(employmentResult.reason?.message || 'WIS直播战队日报读取失败') : ''}
   };
-  return interviewBindingEnabled
+  const verified=interviewBindingEnabled
     ?projectInterviewBindings(snapshot,chat,(await readRecruitmentInterviewJournal()).entries,{reviewerOpenId:recruitmentReviewerOpenId,
       recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor(),
       previousChat:linked.previousChat})
     :snapshot;
+  return sanitizeRecruitmentOutcome(verified,{trustedFreshCalendar:calendarResult.status==='fulfilled',
+    trustedFreshChat:completeRecruitmentChatSource(chat,cycle),
+    trustedFreshBinding:interviewBindingEnabled,
+    trustedFreshAssessment:Boolean(assessment.summary)&&completeRecruitmentChatSource(chat,cycle)});
 }
 
 const rankingCellText = value => Array.isArray(value) ? value.map(rankingCellText).join('')
@@ -2469,7 +2478,8 @@ async function refreshLifecycleModules(modules = lifecycleModules, trigger = 'ma
         results[module] = {ok:true,data:snapshot};
         await appendLifecycleLog({module,trigger,targetDate,ok:true,status:snapshot.status,sourceDate:snapshot.sourceDate,at:snapshot.generatedAt});
       } catch (error) {
-        const previous = await readLifecycleSnapshot(module);
+        const storedPrevious = await readLifecycleSnapshot(module);
+        const previous = module==='recruitment' ? sanitizeRecruitmentOutcome(storedPrevious) : storedPrevious;
         const message = String(error?.message || '生命周期数据刷新失败');
         results[module] = {ok:false,data:previous,error:message,code:error?.details || 'lifecycle_refresh_error'};
         await appendLifecycleLog({module,trigger,targetDate,ok:false,status:'stale',sourceDate:previous?.sourceDate || '',error:message,at:new Date().toISOString()});
@@ -2500,7 +2510,7 @@ async function lifecycleStatus() {
     schedulerEnabled:lifecycleSchedulerEnabled,
     lastAttemptAt:lifecycleState.lastAttemptAt,
     lastError:lifecycleState.lastError,
-    modules:{recruitment:snapshotStatus(recruitment),anchors:snapshotStatus(anchors)},
+    modules:{recruitment:snapshotStatus(sanitizeRecruitmentOutcome(recruitment)),anchors:snapshotStatus(anchors)},
     logs:(Array.isArray(log) ? log : []).slice(0, 20)
   };
 }
@@ -2735,7 +2745,7 @@ async function lifecycleApi(req, res, url, routePath, auth) {
         const stored=await readLifecycleSnapshot(module);
         if(interviewBindingEnabled||stored?.recruitmentAttributionSchemaVersion!==1)
           return json(res,200,{ok:true,data:await readFreshRecruitmentSnapshot()});
-        return json(res,200,{ok:true,data:stored});
+        return json(res,200,{ok:true,data:sanitizeRecruitmentOutcome(stored)});
       }
       const snapshot=await readLifecycleSnapshot(module);
       return json(res, 200, {ok:true,data:module==='anchors'?verifiedAnchorEvidence(snapshot):snapshot});
