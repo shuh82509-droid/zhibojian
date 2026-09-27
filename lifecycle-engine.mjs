@@ -372,13 +372,33 @@ function calendarTitleNamesPerson(title, name) {
     // An event entitled 王丽娜面试/复盘 must never be attributed to 王丽. The
     // limited role/interview/review labels cover normal calendar title shapes;
     // any other ambiguous title stays pending for a human to reconcile.
-    const left = !before || !/\p{Script=Han}$/u.test(before) || /(?:(?:正式|线上|线下|视频)?面试|初试|复试|试播|复盘|候选人|主播|姓名)$/u.test(before);
-    const right = !after || !/^\p{Script=Han}/u.test(after) || /^(?:(?:正式|线上|线下|视频)?面试|初试|复试|试播|复盘|主播)/u.test(after);
+    const left = !before || !/\p{Script=Han}$/u.test(before) || /(?:(?:正式|线上|线下|视频)?面试|初试|复试|试播|复盘|候选人|主播|姓名|与|和|及|陪同|参与|协助|协同|同场)$/u.test(before);
+    const right = !after || !/^\p{Script=Han}/u.test(after) || /^(?:(?:正式|线上|线下|视频)?面试|初试|复试|试播|复盘|主播|(?:与|和|及|陪同|参与|协助|协同|同场)(?=[\p{Script=Han}·]{2,}))/u.test(after);
     if (left && right) return true;
     from = index + candidate.length;
   }
   return false;
 }
+
+// Calendar titles are not a trusted list of interviewees. Matching only names
+// in the recruitment cohort misses an unsubmitted second person (for example
+// "周小雨、李晓燕面试" when only 周小雨 was submitted). Accept only one occurrence
+// of the named person plus known interview/role labels and non-word metadata;
+// all other words, including another person's name, require human review.
+function calendarTitleNamesOnlyPerson(title, name) {
+  if (!calendarTitleNamesPerson(title, name)) return false;
+  const parts = String(title || '').split(String(name));
+  if (parts.length !== 2) return false;
+  const remainder = `${parts[0]}${parts[1]}`;
+  if (/[、&＆+＋]/u.test(remainder)) return false;
+  const withoutLabels = remainder.replace(/(?:正式|线上|线下|视频)?面试|初试|复试|试播|复盘|候选人|主播|姓名/gu, '')
+    .replace(/(?<!\d)(?:[01]?\d|2[0-3])[:：][0-5]\d(?!\d)/gu, '');
+  // Arbitrary numbers or symbols might identify another interviewee, not
+  // harmless metadata. Only an explicit clock time may be discarded.
+  return !withoutLabels.replace(/[\s\p{P}]+/gu, '');
+}
+
+const possibleCalendarName = value => String(value || '').normalize('NFKC').replace(/[\p{Cf}\s]/gu, '');
 
 /** Join formal calendar events to the single, source-backed recruitment submission.
  * A title mentioning two cohort members, duplicate event, or repeated submission
@@ -404,8 +424,19 @@ export function linkVerifiedRecruitmentCalendar(candidates = [], calendarEvents 
     for (const event of Array.isArray(events) ? events : []) {
       if (event?.status !== 'calendar') continue;
       const named = cohort.filter(item => (!item.boundaryCarryoverDate || item.boundaryCarryoverDate === date)
-        && calendarTitleNamesPerson(event.name, item.name));
-      if (!named.length) continue; // An unrelated event is not a missing cohort interview.
+        && calendarTitleNamesOnlyPerson(event.name, item.name));
+      if (!named.length) {
+        // A title containing a cohort name but not meeting the strict
+        // single-person grammar is ambiguous, not an unrelated event or a
+        // clean zero. This deliberately includes possible longer-name prefixes.
+        const ambiguous = cohort.filter(item => (!item.boundaryCarryoverDate || item.boundaryCarryoverDate === date)
+          && possibleCalendarName(event.name).includes(possibleCalendarName(item.name)));
+        if (ambiguous.length) {
+          ambiguous.forEach(item => conflicted.add(item.name));
+          pendingCount += 1;
+        }
+        continue;
+      }
       const names = [...new Set(named.map(item => item.name))];
       const validEvent = /^20\d{2}-\d{2}-\d{2}$/u.test(date) && Boolean(String(event.eventId || '').trim());
       if (names.length !== 1 || !validEvent) {
@@ -493,7 +524,7 @@ export function linkRecruitmentCalendarAcrossBoundary(currentCandidates = [], pr
   // previous cycle's interview result. Retests and offers need a new explicit
   // source association; retaining the old pass/fail would label the new event
   // as already evaluated. Leave the old record untouched and fail closed.
-  if(prior.some(item=>firstDayEvents.some(event=>calendarTitleNamesPerson(event.name,item.name))
+  if(prior.some(item=>firstDayEvents.some(event=>calendarTitleNamesOnlyPerson(event.name,item.name))
     && (item.stage!=='initial_pass'||item.evaluationEvidence||item.calendarEvidence
       ||item.interviewBinding||item.startDate||item.actualStartDate)))
     return pending('上周期已有面评、面试或录用证据，不能自动归属到新周期首日面试');
@@ -503,7 +534,7 @@ export function linkRecruitmentCalendarAcrossBoundary(currentCandidates = [], pr
   // evaluation-only row into the carry candidate; the signed source verifier
   // must still bind its exact post ID after the formal event has ended.
   const carriedNames = new Set(prior.filter(item=>firstDayEvents.some(event=>
-    calendarTitleNamesPerson(event.name,item.name))).map(item=>item.name));
+    calendarTitleNamesOnlyPerson(event.name,item.name))).map(item=>item.name));
   const evaluationOnly = item => carriedNames.has(item?.name)
     && item?.inSubmissionCohort===false && !item?.submissionEvidence
     && item?.evaluationEvidence?.sourceId
@@ -642,7 +673,7 @@ export function buildInterviewReminderPreview(snapshot, date) {
     (date === boundaryDate && item?.boundaryCarryover)) && item?.name);
   const matches = [];
   for (const event of events) {
-    const named = candidates.filter(item => calendarTitleNamesPerson(event.name, item.name));
+    const named = candidates.filter(item => calendarTitleNamesOnlyPerson(event.name, item.name));
     const candidate = named[0];
     const count = candidate?.boundaryCarryover
       ? snapshot?.boundaryCarryover?.submissionMessageCounts?.[candidate.name]
@@ -917,6 +948,7 @@ export function countCoachReviews(rotation, eventsByRoom = {}, asOf = new Date()
     }
     const anchors = (rotation.rooms[room] || []).map(name => ({name,count:0}));
     const used = new Set();
+    let ambiguousReview = false;
     for (const event of events) {
       const id = String(event?.eventId || event?.event_id || '');
       const summary = String(event?.summary || '');
@@ -926,12 +958,20 @@ export function countCoachReviews(rotation, eventsByRoom = {}, asOf = new Date()
       // at local midnight, so today's all-day review counts at 17:30.
       const happened = Number.isFinite(startAt) ? startAt <= asOf.getTime() : date <= chinaDateFor(asOf);
       if (!id || used.has(id) || event?.status === 'cancelled' || date < rotation.week.start || date > rotation.week.end || !happened || !summary.includes('复盘')) continue;
-      const matches = anchors.filter(item => calendarTitleNamesPerson(summary, item.name));
-      if (matches.length !== 1) continue;
+      // Coach calendars commonly prefix a review with its verified room name.
+      // Strip only this exact room; all other extra words remain ambiguous.
+      const title = summary.startsWith(room) ? summary.slice(room.length) : summary;
+      const matches = anchors.filter(item => calendarTitleNamesOnlyPerson(title, item.name));
+      if (matches.length !== 1) {
+        if (anchors.some(item => possibleCalendarName(summary).includes(possibleCalendarName(item.name)))) ambiguousReview = true;
+        continue;
+      }
       used.add(id);
       matches[0].count += 1;
     }
-    result[room] = {status:'ready',anchors,zeroReview:anchors.filter(item => item.count === 0).map(item => item.name)};
+    result[room] = ambiguousReview
+      ? {status:'pending',reason:'教练复盘日程标题包含轮转主播但身份不唯一，需本人核验',anchors}
+      : {status:'ready',anchors,zeroReview:anchors.filter(item => item.count === 0).map(item => item.name)};
   }
   return {status:Object.values(result).every(room => room.status === 'ready') ? 'ready' : 'partial',week:rotation.week,rooms:result};
 }

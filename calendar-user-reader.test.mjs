@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash, randomBytes} from 'node:crypto';
-import {mkdtemp, readFile, rm, mkdir} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, mkdir, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createCalendarUserReader} from './calendar-user-reader.mjs';
@@ -145,6 +145,151 @@ test('rotated one-use token survives reader restart before another protected cal
     await reader.get('/calendar/v4/calendars/test_calendar/events');
     assert.deepEqual(usedRefreshTokens,['refresh_1','refresh_2']);
   } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test('uncertain refresh timeout quarantines the one-use grant across concurrent reads and restart until new OAuth',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'calendar-refresh-uncertain-'));
+ const encryptionKey=randomBytes(32).toString('base64');
+ let clock=1_000_000,refreshes=0,authorizationCodes=0;
+ try{
+  const provider=async(url,options)=>{
+   if(url.endsWith('/oauth/v3/token')){
+    const body=new URLSearchParams(options.body);
+    if(body.get('grant_type')==='refresh_token'){
+     refreshes+=1;
+     assert.equal(body.get('refresh_token'),'refresh_1');
+     assert.equal(JSON.parse(await readFile(join(dir,'calendar-user.enc.refresh-uncertain'),'utf8')).version,1);
+     throw Error('provider timeout after possible rotation');
+    }
+    authorizationCodes+=1;
+    const n=authorizationCodes===1?1:3;
+    return response({code:0,access_token:`access_${n}`,refresh_token:`refresh_${n}`,expires_in:7200,refresh_token_expires_in:604800,scope});
+   }
+   if(url.endsWith('/user_info'))return response({code:0,data:{open_id:'ou_expected'}});
+   if(url.endsWith('/test_calendar'))return response({code:0,data:{calendar:{role:'reader'}}});
+   return response({code:0,data:{items:[]}});
+  };
+  let reader=setup(dir,provider,()=>clock,encryptionKey);
+  let attempt=reader.begin();await reader.complete({code:'first',state:attempt.state,cookieState:attempt.state});
+  clock+=7_000_000;
+  const results=await Promise.allSettled([reader.get('/calendar/v4/calendars/test_calendar/events'),reader.get('/calendar/v4/calendars/test_calendar/events')]);
+  assert.deepEqual(results.map(item=>item.status),['rejected','rejected']);
+  assert.equal(refreshes,1);
+  const marker=await readFile(join(dir,'calendar-user.enc.refresh-uncertain'),'utf8');
+  assert.doesNotMatch(marker,/refresh_1|access_1|test_secret/u);
+  assert.equal((await reader.status()).authorized,false);
+  reader=setup(dir,provider,()=>clock,encryptionKey);
+  await assert.rejects(reader.get('/calendar/v4/calendars/test_calendar/events'),{code:'calendar_refresh_uncertain'});
+  assert.equal(refreshes,1);
+  attempt=reader.begin();
+  assert.equal((await reader.complete({code:'new',state:attempt.state,cookieState:attempt.state})).authorized,true);
+  assert.deepEqual((await reader.get('/calendar/v4/calendars/test_calendar/events')).items,[]);
+  assert.equal(refreshes,1);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('refresh response followed by failed durable save never reuses the consumed old grant',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'calendar-refresh-save-fail-'));
+ const encryptionKey=randomBytes(32).toString('base64'),storePath=join(dir,'calendar-user.enc');
+ let clock=1_000_000,refreshes=0,encryptedBefore;
+ try{
+  const provider=async(url,options)=>{
+   if(url.endsWith('/oauth/v3/token')){
+    const body=new URLSearchParams(options.body);
+    if(body.get('grant_type')==='refresh_token'){
+     refreshes+=1;
+     assert.equal(body.get('refresh_token'),'refresh_1');
+     // Deterministic save failure after the provider has returned a rotated
+     // grant: a directory cannot be replaced by the encrypted temp file.
+     await rm(storePath);await mkdir(storePath);
+     return response({code:0,access_token:'access_2',refresh_token:'refresh_2',expires_in:7200,refresh_token_expires_in:604800,scope});
+    }
+    return response({code:0,access_token:'access_1',refresh_token:'refresh_1',expires_in:7200,refresh_token_expires_in:604800,scope});
+   }
+   if(url.endsWith('/user_info'))return response({code:0,data:{open_id:'ou_expected'}});
+   if(url.endsWith('/test_calendar'))return response({code:0,data:{calendar:{role:'reader'}}});
+   return response({code:0,data:{items:[]}});
+  };
+  let reader=setup(dir,provider,()=>clock,encryptionKey);
+  const attempt=reader.begin();await reader.complete({code:'first',state:attempt.state,cookieState:attempt.state});
+  encryptedBefore=await readFile(storePath,'utf8');
+  clock+=7_000_000;
+  await assert.rejects(reader.get('/calendar/v4/calendars/test_calendar/events'));
+  assert.equal(refreshes,1);
+  await rm(storePath,{recursive:true});await writeFile(storePath,encryptedBefore);
+  reader=setup(dir,provider,()=>clock,encryptionKey);
+  assert.equal((await reader.status()).authorized,false);
+  await assert.rejects(reader.get('/calendar/v4/calendars/test_calendar/events'),{code:'calendar_refresh_uncertain'});
+  assert.equal(refreshes,1);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('crash-truncated refresh marker blocks old grant but a verified new OAuth clears it',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'calendar-refresh-truncated-'));
+ const encryptionKey=randomBytes(32).toString('base64');
+ let clock=1_000_000,refreshes=0,authorizations=0;
+ try{
+  const provider=async(url,options)=>{
+   if(url.endsWith('/oauth/v3/token')){
+    const body=new URLSearchParams(options.body);
+    if(body.get('grant_type')==='refresh_token'){
+     refreshes+=1;
+     throw Error('old refresh grant must not be sent');
+    }
+    const n=++authorizations;
+    return response({code:0,access_token:`access_${n}`,refresh_token:`refresh_${n}`,expires_in:7200,refresh_token_expires_in:604800,scope});
+   }
+   if(url.endsWith('/user_info'))return response({code:0,data:{open_id:'ou_expected'}});
+   if(url.endsWith('/test_calendar'))return response({code:0,data:{calendar:{role:'reader'}}});
+   return response({code:0,data:{items:[]}});
+  };
+  let reader=setup(dir,provider,()=>clock,encryptionKey);
+  let attempt=reader.begin();await reader.complete({code:'first',state:attempt.state,cookieState:attempt.state});
+  await writeFile(join(dir,'calendar-user.enc.refresh-uncertain'),'');
+  clock+=7_000_000;
+  reader=setup(dir,provider,()=>clock,encryptionKey);
+  assert.equal((await reader.status()).authorized,false);
+  await assert.rejects(reader.get('/calendar/v4/calendars/test_calendar/events'),{code:'calendar_refresh_uncertain'});
+  assert.equal(refreshes,0);
+  attempt=reader.begin();
+  assert.equal((await reader.complete({code:'second',state:attempt.state,cookieState:attempt.state})).authorized,true);
+  await assert.rejects(readFile(join(dir,'calendar-user.enc.refresh-uncertain'),'utf8'),{code:'ENOENT'});
+  assert.deepEqual((await reader.get('/calendar/v4/calendars/test_calendar/events')).items,[]);
+  assert.equal(refreshes,0);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('malformed refresh marker cannot be cleared by OAuth that reuses the quarantined grant',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'calendar-refresh-same-grant-'));
+ const encryptionKey=randomBytes(32).toString('base64');
+ let clock=1_000_000,refreshes=0,authorizations=0;
+ try{
+  const provider=async(url,options)=>{
+   if(url.endsWith('/oauth/v3/token')){
+    const body=new URLSearchParams(options.body);
+    if(body.get('grant_type')==='refresh_token'){
+     refreshes+=1;
+     throw Error('quarantined grant must not be retried');
+    }
+    authorizations+=1;
+    return response({code:0,access_token:`access_${authorizations}`,refresh_token:'refresh_1',expires_in:7200,refresh_token_expires_in:604800,scope});
+   }
+   if(url.endsWith('/user_info'))return response({code:0,data:{open_id:'ou_expected'}});
+   if(url.endsWith('/test_calendar'))return response({code:0,data:{calendar:{role:'reader'}}});
+   return response({code:0,data:{items:[]}});
+  };
+  let reader=setup(dir,provider,()=>clock,encryptionKey);
+  let attempt=reader.begin();await reader.complete({code:'first',state:attempt.state,cookieState:attempt.state});
+  await writeFile(join(dir,'calendar-user.enc.refresh-uncertain'),'');
+  clock+=7_000_000;
+  reader=setup(dir,provider,()=>clock,encryptionKey);
+  attempt=reader.begin();
+  await assert.rejects(reader.complete({code:'second',state:attempt.state,cookieState:attempt.state}),{code:'calendar_refresh_uncertain'});
+  assert.equal((await reader.status()).authorized,false);
+  await assert.rejects(reader.get('/calendar/v4/calendars/test_calendar/events'),{code:'calendar_refresh_uncertain'});
+  assert.equal(refreshes,0);
+  assert.equal(authorizations,2);
+ }finally{await rm(dir,{recursive:true,force:true});}
 });
 
 test('only coach readers explicitly allow bounded instance_view on their own calendar',async()=>{

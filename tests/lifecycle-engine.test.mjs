@@ -134,6 +134,13 @@ test('interview reminder requires a verified calendar and exact candidate match'
   assert.match(preview.text, /周小雨/);
   assert.equal(buildInterviewReminderPreview({...snapshot,calendarStatus:'待授权'}, date).status, 'pending');
   assert.equal(buildInterviewReminderPreview({...snapshot,interviewEvents:{[date]:[{name:'未知姓名面试',status:'calendar',source:'正式面试日历'}]}}, date).status, 'pending');
+  for(const title of ['周小雨、李晓燕面试','面试：周小雨 / 李晓燕','周小雨与李晓燕面试',
+    '周小雨陪同李晓燕面试','李晓燕陪同周小雨面试','周小雨讨论李晓燕面试',
+    '周小雨面试（李晓燕共同参加）']){
+    const ambiguous=buildInterviewReminderPreview({...snapshot,interviewEvents:{[date]:[{name:title,status:'calendar',source:'正式面试日历',eventId:'e1'}]}},date);
+    assert.equal(ambiguous.status,'pending',title);
+    assert.equal(ambiguous.sourceReady,undefined,title);
+  }
 });
 
 test('interview title does not mistake a Chinese name prefix for another candidate', () => {
@@ -336,6 +343,23 @@ test('coach review never credits a same-prefix different anchor',()=>{
   assert.deepEqual(countCoachReviews(rotation,events,asOf).rooms['官旗'].anchors,[{name:'王丽',count:0}]);
   events['官旗'].push({eventId:'review-exact',date:'2026-09-24',summary:'王丽复盘'});
   assert.deepEqual(countCoachReviews(rotation,events,asOf).rooms['官旗'].anchors,[{name:'王丽',count:1}]);
+  events['官旗'].push({eventId:'review-mixed',date:'2026-09-24',summary:'王丽、李晓燕复盘'});
+  assert.deepEqual(countCoachReviews(rotation,events,asOf).rooms['官旗'].anchors,[{name:'王丽',count:1}]);
+  assert.equal(countCoachReviews(rotation,events,asOf).rooms['官旗'].status,'pending');
+  assert.equal(coachReviewReminder('官旗','曾泳淇',countCoachReviews(rotation,events,asOf)).status,'pending');
+});
+
+test('coach review accepts exact room prefix but never sends a false zero for ambiguous names',()=>{
+  const rotation={status:'ready',week:{start:'2026-09-23',end:'2026-09-29'},rooms:{官旗:['潘小慧'],品牌精选:[],优选:[],王鸥美肤:[]}};
+  const asOf=new Date('2026-09-24T09:30:00.000Z');
+  const events={官旗:[{eventId:'room-review',date:'2026-09-24',summary:'官旗主播潘小慧复盘'}],品牌精选:[],优选:[],王鸥美肤:[]};
+  assert.deepEqual(countCoachReviews(rotation,events,asOf).rooms['官旗'].anchors,[{name:'潘小慧',count:1}]);
+  for(const title of ['官旗主播潘小慧、李晓燕复盘','潘\u200B小慧复盘']){
+    events.官旗=[{eventId:'ambiguous',date:'2026-09-24',summary:title}];
+    const summary=countCoachReviews(rotation,events,asOf);
+    assert.equal(summary.rooms['官旗'].status,'pending',title);
+    assert.equal(coachReviewReminder('官旗','曾泳淇',summary).status,'pending',title);
+  }
 });
 
 test('recruitment parser deduplicates daily headcount but not different same-name submissions', () => {

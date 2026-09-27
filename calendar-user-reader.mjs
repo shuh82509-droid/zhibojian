@@ -1,4 +1,4 @@
-import {createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual} from 'node:crypto';
+import {createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual} from 'node:crypto';
 import {mkdir, readFile, rename, open, unlink, rmdir} from 'node:fs/promises';
 import {dirname} from 'node:path';
 
@@ -11,6 +11,7 @@ export function createCalendarUserReader({appId, appSecret, calendarId, addition
   const configured = Boolean(appId && appSecret && calendarId && expectedOpenId && redirectUri && storePath && key.length === 32);
   const pending = new Map();
   const context = Buffer.from(JSON.stringify([appId, calendarId, expectedOpenId]));
+  const refreshMarkerPath = `${storePath}.refresh-uncertain`;
   const permittedCalendars = new Set([calendarId, ...(Array.isArray(additionalCalendarIds) ? additionalCalendarIds : [])].filter(value => typeof value === 'string' && /^[A-Za-z0-9_@.\-]{3,256}$/u.test(value)));
   let refreshInFlight = null;
   const error = (code, message) => Object.assign(new Error(message), {code});
@@ -70,6 +71,66 @@ export function createCalendarUserReader({appId, appSecret, calendarId, addition
       throw cause;
     }
   }
+  const refreshFingerprint = token => createHmac('sha256', key).update(context).update('\0').update(String(token || '')).digest('hex');
+  async function syncStoreDirectory() {
+    if (process.platform === 'win32') return;
+    const directory = await open(dirname(storePath), 'r');
+    try { await directory.sync(); }
+    finally { await directory.close(); }
+  }
+  async function refreshMarkerState(record) {
+    let raw;
+    try { raw = await readFile(refreshMarkerPath, 'utf8'); }
+    catch (cause) { return cause?.code === 'ENOENT' ? 'clear' : 'invalid'; }
+    try {
+      const marker = JSON.parse(raw);
+      if (marker.version !== 1 || !/^[a-f0-9]{64}$/u.test(marker.fingerprint)) return 'invalid';
+      return record?.refreshToken && same(marker.fingerprint, refreshFingerprint(record.refreshToken)) ? 'uncertain' : 'superseded';
+    } catch { return 'invalid'; }
+  }
+  function rejectUncertainRefresh() {
+    throw error('calendar_refresh_uncertain', `${ownerLabel}日历授权刷新结果待核验；请由本人重新完成只读授权，勿重试旧凭据。`);
+  }
+  async function clearSupersededRefreshMarker(record) {
+    const state = await refreshMarkerState(record);
+    if (state === 'invalid' || state === 'uncertain') rejectUncertainRefresh();
+    if (state !== 'superseded') return;
+    await unlink(refreshMarkerPath);
+    await syncStoreDirectory();
+  }
+  async function clearRefreshMarkerAfterReauthorization(record) {
+    const state = await refreshMarkerState(record);
+    // Only a newly verified authorization saved under the same exclusive
+    // lock may replace an unreadable old marker. A matching fingerprint could
+    // still be the same consumed one-use grant and must remain quarantined.
+    if (state === 'uncertain') rejectUncertainRefresh();
+    if (state === 'clear') return;
+    await unlink(refreshMarkerPath);
+    await syncStoreDirectory();
+  }
+  async function markRefreshAttempt(record) {
+    const temp = `${refreshMarkerPath}.${randomBytes(8).toString('hex')}.tmp`;
+    let created = false, renamed = false;
+    try {
+      const file = await open(temp, 'wx', 0o600);
+      created = true;
+      try {
+        await file.writeFile(JSON.stringify({version:1,fingerprint:refreshFingerprint(record.refreshToken)}), 'utf8');
+        await file.sync();
+      } finally { await file.close(); }
+      if (await refreshMarkerState(record) !== 'clear') rejectUncertainRefresh();
+      await rename(temp, refreshMarkerPath);
+      renamed = true;
+      // No refresh POST is allowed until the atomic marker rename is durable.
+      await syncStoreDirectory();
+    } catch (cause) {
+      if (created && !renamed) {
+        try { await unlink(temp); }
+        catch { /* An orphan temp cannot authorize a refresh request. */ }
+      }
+      throw cause;
+    }
+  }
   // Never steal a stale lock: a crashed refresh may already have rotated the
   // one-use refresh token. Recovery must verify the original credential first.
   async function exclusive(operation) {
@@ -79,13 +140,22 @@ export function createCalendarUserReader({appId, appSecret, calendarId, addition
     catch { throw error('calendar_authorization_busy', '日历授权正在处理或上次结果待核验，请勿重复授权。'); }
     try { return await operation(); } finally { await rmdir(lock); }
   }
-  function statusFrom(record) {
+  function statusFrom(record, refreshState = 'clear') {
     if (!configured) return {configured:false, authorized:false, reason:'日历用户授权配置不完整'};
     if (!record) return {configured:true, authorized:false, reason:`等待${ownerLabel}完成飞书用户授权`};
-    const authorized = same(record.openId, expectedOpenId) && record.refreshExpiresAt > now() && requiredScopes.every(s => String(record.scopes).split(/\s+/u).includes(s));
-    return {configured:true, authorized, ...(authorized ? {} : {reason:`${ownerLabel}用户授权已过期或账号不匹配`}), openId:record.openId, refreshExpiresAt:record.refreshExpiresAt};
+    const authorized = refreshState !== 'uncertain' && refreshState !== 'invalid'
+      && same(record.openId, expectedOpenId) && record.refreshExpiresAt > now()
+      && requiredScopes.every(s => String(record.scopes).split(/\s+/u).includes(s));
+    const reason = refreshState === 'uncertain' || refreshState === 'invalid'
+      ? `${ownerLabel}日历授权刷新结果待核验，请本人重新授权`
+      : `${ownerLabel}用户授权已过期或账号不匹配`;
+    return {configured:true, authorized, ...(authorized ? {} : {reason}), openId:record.openId, refreshExpiresAt:record.refreshExpiresAt};
   }
-  async function status() { return statusFrom(await load()); }
+  async function status() {
+    if (!configured) return statusFrom(null);
+    const record = await load();
+    return statusFrom(record, await refreshMarkerState(record));
+  }
   function begin() {
     if (!configured) throw error('calendar_auth_not_configured', '日历用户授权尚未配置。');
     const redirect = new URL(redirectUri);
@@ -155,26 +225,46 @@ export function createCalendarUserReader({appId, appSecret, calendarId, addition
     if (!attempt || now() - attempt.createdAt > 600_000 || !same(state, cookieState) || !code) throw error('calendar_oauth_state_invalid', '日历授权校验失败或已过期，请重新发起。');
     if (!/^[A-Za-z0-9._~-]{43,128}$/u.test(attempt.verifier) || !same(createHash('sha256').update(attempt.verifier).digest('base64url'),attempt.challenge)) throw error('calendar_pkce_local_invalid','日历授权安全参数校验失败，未提交凭据请求。');
     return exclusive(async () => {
+    const previous = await load();
+    const markerBefore = await refreshMarkerState(previous);
     const data = await tokenRequest({grant_type:'authorization_code',code,redirect_uri:redirectUri,code_verifier:attempt.verifier,scope:requiredScopes.join(' ')});
     const openId = await getUserInfo(data.access_token);
     if (!same(openId, expectedOpenId)) throw error('calendar_oauth_wrong_user', `授权账号不是指定的${ownerLabel}账号，凭据未保存。`);
     await verifyCalendarAccess(data.access_token);
-    await save(recordFrom(data, openId));
+    const newRecord = recordFrom(data, openId);
+    // A malformed marker has no readable fingerprint. The old encrypted
+    // record still identifies its possibly consumed one-use grant; a fresh
+    // OAuth response must not clear quarantine if the provider reused it.
+    if (markerBefore !== 'clear' && previous?.refreshToken && same(previous.refreshToken,newRecord.refreshToken)) rejectUncertainRefresh();
+    await save(newRecord);
+    // A freshly verified, durable OAuth grant supersedes an invalid marker
+    // left by a crash during an earlier refresh attempt.
+    await clearRefreshMarkerAfterReauthorization(newRecord);
     return status();
     });
   }
   async function accessToken() {
     if (!configured) throw error('calendar_auth_not_configured', '正式面试日历的用户授权尚未配置。');
     const record = await load();
+    if (['uncertain','invalid'].includes(await refreshMarkerState(record))) rejectUncertainRefresh();
     if (!record || !same(record.openId, expectedOpenId) || record.refreshExpiresAt <= now()) throw error('calendar_authorization_required', `${ownerLabel}日历需本人重新授权。`);
     if (record.accessExpiresAt > now() + 300_000) return record.accessToken;
     if (!refreshInFlight) refreshInFlight = exclusive(async () => {
       const latest = await load();
+      const markerState = await refreshMarkerState(latest);
+      if (markerState === 'uncertain' || markerState === 'invalid') rejectUncertainRefresh();
       if (latest?.accessExpiresAt > now() + 300_000) return latest.accessToken;
       if (!latest?.refreshToken || latest.refreshExpiresAt <= now()) throw error('calendar_authorization_required', '正式面试日历授权已过期。');
+      if (markerState === 'superseded') await clearSupersededRefreshMarker(latest);
+      // The marker is durable before the POST. A timeout, provider error,
+      // process crash or failed credential save therefore never retries an
+      // unknown one-use refresh grant from the original encrypted file.
+      await markRefreshAttempt(latest);
       const data = await tokenRequest({grant_type:'refresh_token',refresh_token:latest.refreshToken,scope:requiredScopes.join(' ')});
       const rotated = recordFrom(data, latest.openId);
       await save(rotated);
+      try { await clearSupersededRefreshMarker(rotated); }
+      catch { /* The durable rotated record supersedes its old marker. */ }
       return rotated.accessToken;
     }).finally(() => { refreshInFlight = null; });
     return refreshInFlight;

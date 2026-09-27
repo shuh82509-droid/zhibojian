@@ -352,6 +352,33 @@ test('ambiguous title, repeated event, repeated submission or missing event id r
   assert.equal(sharedEventId.matchedCount,null);
 });
 
+test('formal calendar title with an unsubmitted second person never advances the submitted candidate',()=>{
+  const submitted=submissionCandidate('周小雨',{sourceId:'om_zhou'});
+  const titles=['周小雨、李晓燕面试','面试：周小雨 / 李晓燕','周小雨，李晓燕复试',
+    '周小雨与李晓燕面试','周小雨陪同李晓燕面试','李晓燕陪同周小雨面试',
+    '周小雨讨论李晓燕面试',
+    '周小雨面试（李晓燕共同参加）','周小雨、面试',
+    '周小\u200B雨、李晓燕面试','周小\u2060雨、李晓燕面试',
+    '周小雨/07面试','周小雨/①面试','周小雨/😀面试','周小雨面试（2）'];
+  for(const title of titles){
+    const result=linkVerifiedRecruitmentCalendar([submitted],{
+      '2026-09-25':[calendarEvent(title)]
+    },{周小雨:1},{sourceReady:true,advanceStage:true});
+    assert.equal(result.matchedCount,null,title);
+    assert.equal(result.pendingCount,1,title);
+    assert.equal(result.candidates[0].stage,'initial_pass',title);
+    assert.equal(result.candidates[0].calendarEvidence,undefined,title);
+    assert.match(result.candidates[0].calendarScheduleStatus,/待核验/u,title);
+  }
+  for(const title of ['周小雨面试 · 14:00','正式面试周小雨（14:00）','候选人：周小雨线上面试']){
+    const result=linkVerifiedRecruitmentCalendar([submitted],{
+      '2026-09-25':[calendarEvent(title)]
+    },{周小雨:1},{sourceReady:true,advanceStage:true});
+    assert.equal(result.matchedCount,1,title);
+    assert.equal(result.candidates[0].stage,'pending_feedback',title);
+  }
+});
+
 test('unverified reaction, prior date, negative review and higher-stage conclusions never auto-promote',()=>{
   const target=submissionCandidate('李华',{sourceId:'om_target'});
   const events={'2026-09-25':[calendarEvent('李华正式面试')]};
