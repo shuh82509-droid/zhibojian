@@ -23,6 +23,12 @@ export function createCoachCalendarAuth({readers,coachNames,employeeNos,openIds,
   } catch { return null; } })();
   const publicOrigin=callbackUrl?.origin || '';
   const publicReady = () => Boolean(enabled && publicEnabled && !readOnly && invitations?.configured && callbackUrl);
+  // The formal gateway strips basePath before proxying to this server and
+  // overwrites X-Forwarded-Prefix with the external module path. Never infer
+  // the public route from a client-supplied URL or an unverified Host alone.
+  const formalGatewayRequest = (req,url,path) => Boolean(callbackUrl
+    && url.pathname===path && req.headers.host===callbackUrl.host
+    && req.headers['x-forwarded-prefix']===basePath);
   const coachNameMatches = (user, expected) => {
     if (!user || typeof user !== 'object') return false;
     const supplied = [user.realName, user.name].filter(value => value !== undefined && value !== null && value !== '');
@@ -59,7 +65,8 @@ export function createCoachCalendarAuth({readers,coachNames,employeeNos,openIds,
     if (routePath===invitePath) {
       if(req.method!=='POST') { json(res,405,{ok:false,error:'邀请仅支持 POST。'});return true; }
       if(!publicReady()) { json(res,423,{ok:false,error:'免登录的本人授权邀请尚未开放。'});return true; }
-      if(req.headers['x-requested-with']!=='XMLHttpRequest' || !sameFormOrigin(req) || !await authorizeIssuer(auth)) {
+      if(req.headers['x-requested-with']!=='XMLHttpRequest' || req.headers['x-forwarded-prefix']!==basePath
+        || !sameFormOrigin(req) || !await authorizeIssuer(auth)) {
         json(res,403,{ok:false,error:'仅已核验的中枢管理员可签发教练本人授权邀请。'});return true;
       }
       const query=requestUrl?.searchParams || new URL(req.url||'/',publicOrigin).searchParams;
@@ -95,10 +102,10 @@ export function createCoachCalendarAuth({readers,coachNames,employeeNos,openIds,
   }
   async function handlePublic(req,res,routePath,url) {
     if(routePath!==consentPath && routePath!==publicStartPath) return false;
-    if(url.pathname!==basePath+routePath) return false;
+    if(url.pathname!==routePath) return false;
     res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','no-referrer');
     if(!publicReady()) { page(res,423,'本人授权暂不可用','教练本人授权邀请尚未开放，请联系管理员。',true);return true; }
-    if(req.headers.host!==callbackUrl.host) { page(res,421,'邀请入口不可用','请使用正式中枢域名打开本人邀请。',true);return true; }
+    if(!formalGatewayRequest(req,url,routePath)) { page(res,421,'邀请入口不可用','请使用正式中枢域名打开本人邀请。',true);return true; }
     if(routePath===consentPath) {
       if(req.method!=='GET') { page(res,405,'请求方式不支持','请打开管理员发给本人的授权邀请。',true);return true; }
       if(url.search) { page(res,400,'邀请不可用','请使用管理员发给本人的完整授权链接。',true);return true; }
@@ -131,14 +138,14 @@ export function createCoachCalendarAuth({readers,coachNames,employeeNos,openIds,
     return true;
   }
   async function handleCallback(req,res,url) {
-    if(url.pathname!==basePath+callbackPath) return false;
+    if(url.pathname!==callbackPath) return false;
     const state=url.searchParams.get('state') || '';
     const item=pending.get(state);
     if (!item) return false; // Leave the pre-existing interview OAuth callback untouched.
     pending.delete(state);
     res.setHeader('Set-Cookie',cookie('',0));
-    if(item.mode==='public' && (!callbackUrl || req.headers.host!==callbackUrl.host)) {
-      page(res,421,'日历授权未完成','回调地址与正式中枢不一致，未保存授权。',true);return true;
+    if(!formalGatewayRequest(req,url,callbackPath)) {
+      page(res,421,'日历授权未完成','回调地址与正式中枢不一致，未保存授权。',item.mode==='public');return true;
     }
     if (req.method !== 'GET') { page(res,405,'日历授权未完成','授权回调只接受 GET。');return true; }
     if (!enabled || readOnly || clock()-item.at>600_000) { page(res,409,'日历授权未完成','授权已过期或当前仅供查看，请由本人重新发起。');return true; }

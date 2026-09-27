@@ -12,7 +12,11 @@ import {createCalendarUserReader} from './calendar-user-reader.mjs';
 const names={'官旗':'曾泳淇','优选':'李爽'};
 const numbers={'官旗':'FD-024035','优选':'FD-028493'};
 const openIds={'官旗':'ou_guanqi','优选':'ou_youxuan'};
-const callbackUrl='https://hub.fandow.com/modules/live-room-management/api/lifecycle/calendar-auth/callback';
+const basePath='/modules/live-room-management';
+const callbackPath='/api/lifecycle/calendar-auth/callback';
+const callbackUrl=`https://hub.fandow.com${basePath}${callbackPath}`;
+const callbackRequest=cookie=>({method:'GET',headers:{host:'hub.fandow.com','x-forwarded-prefix':basePath,cookie}});
+const upstreamCallback=(state,code='ok')=>new URL(`https://hub.fandow.com${callbackPath}?state=${state}&code=${code}`);
 function response(){
   return {headers:{},status:0,body:null,setHeader(k,v){this.headers[k]=v;},writeHead(status,headers){this.status=status;Object.assign(this.headers,headers);},end(body){this.body=body;}};
 }
@@ -24,7 +28,7 @@ function fixture({enabled=true,readOnly=false,contactVerified=true}={}){
     complete:async args=>{calls.push({room,...args});if(args.cookieState!==args.state)throw new Error('state mismatch');return {authorized:true};},
   };
   const json=(res,status,value)=>{res.status=status;res.body=value;};
-  const auth=createCoachCalendarAuth({readers,coachNames:names,employeeNos:numbers,openIds,basePath:'/modules/live-room-management',enabled,readOnly,json,
+  const auth=createCoachCalendarAuth({readers,coachNames:names,employeeNos:numbers,openIds,basePath,enabled,readOnly,json,publicCallbackUrl:callbackUrl,
     verifyActor:async(room,openId,name,number)=>{assert.equal(openId,openIds[room]);assert.equal(name,names[room]);assert.equal(number,numbers[room]);if(!contactVerified)throw Error('contact identity unverified');},clock:()=>1000});
   const person=room=>({ok:true,mode:'central',user:{number:numbers[room],name:names[room]},permissions:{allowed_modules:['live-room-management']}});
   const req=(room,method='POST')=>({method,headers:{'x-requested-with':'XMLHttpRequest',origin:'https://hub.fandow.com',host:'hub.fandow.com'},auth:person(room)});
@@ -72,12 +76,12 @@ test('共享回调仅消费自身 state 和 HttpOnly cookie，未匹配状态留
   await f.auth.handleApi(f.req('官旗'),started,'/api/lifecycle/coach-calendar-auth/start',f.person('官旗'));
   const state=started.headers['Set-Cookie'].match(/=([^;]+)/)[1];
   const unknown=response();
-  assert.equal(await f.auth.handleCallback({method:'GET',headers:{cookie:`live_coach_calendar_oauth_state=${state}`}},unknown,new URL(`${callbackUrl}?state=interview-state&code=ok`)),false);
+  assert.equal(await f.auth.handleCallback(callbackRequest(`live_coach_calendar_oauth_state=${state}`),unknown,upstreamCallback('interview-state')),false);
   const result=response();
-  assert.equal(await f.auth.handleCallback({method:'GET',headers:{cookie:`live_coach_calendar_oauth_state=${state}`}},result,new URL(`${callbackUrl}?state=${state}&code=ok`)),true);
+  assert.equal(await f.auth.handleCallback(callbackRequest(`live_coach_calendar_oauth_state=${state}`),result,upstreamCallback(state)),true);
   assert.equal(result.status,200);assert.match(result.body,/本人日历授权完成/);
   assert.deepEqual(f.calls,[{room:'官旗',code:'ok',state,cookieState:state}]);
-  assert.equal(await f.auth.handleCallback({method:'GET',headers:{}},response(),new URL(`${callbackUrl}?state=${state}&code=ok`)),false);
+  assert.equal(await f.auth.handleCallback(callbackRequest(''),response(),upstreamCallback(state)),false);
 });
 test('跨站发起、错误 cookie、候选只读和功能关闭均不保存授权',async()=>{
   const f=fixture(),bad=f.req('官旗');bad.headers.origin='https://evil.example';
@@ -85,7 +89,7 @@ test('跨站发起、错误 cookie、候选只读和功能关闭均不保存授�
   assert.equal(denied.status,403);
   const started=response();await f.auth.handleApi(f.req('优选'),started,'/api/lifecycle/coach-calendar-auth/start',f.person('优选'));
   const state=started.headers['Set-Cookie'].match(/=([^;]+)/)[1];
-  const mismatched=response();await f.auth.handleCallback({method:'GET',headers:{cookie:'live_coach_calendar_oauth_state=wrong'}},mismatched,new URL(`${callbackUrl}?state=${state}&code=ok`));
+  const mismatched=response();await f.auth.handleCallback(callbackRequest('live_coach_calendar_oauth_state=wrong'),mismatched,upstreamCallback(state));
   assert.equal(mismatched.status,400);assert.equal(f.calls.length,1);
   for(const option of [{enabled:false},{readOnly:true}]){
     const locked=fixture(option),res=response();await locked.auth.handleApi(locked.req('官旗'),res,'/api/lifecycle/coach-calendar-auth/start',locked.person('官旗'));
@@ -106,7 +110,6 @@ test('直播中心提供本人授权入口，页面脚本可解析且不开放�
 
 async function exerciseCoachOAuth(upstreamCode=0) {
   const dir=await mkdtemp(join(tmpdir(),'coach-oauth-route-'));
-  const basePath='/modules/live-room-management';
   const redirectUri=`https://hub.fandow.com${basePath}/api/lifecycle/calendar-auth/callback`;
   const tokenFile=join(dir,'coach.enc');
   const diagnostics=[];
@@ -135,7 +138,7 @@ async function exerciseCoachOAuth(upstreamCode=0) {
       throw Error(`unexpected mock provider call: ${url}`);
     }});
   const auth=createCoachCalendarAuth({readers:{'官旗':reader},coachNames:{'官旗':'曾泳淇'},employeeNos:{'官旗':'FD-024035'},openIds:{'官旗':'ou_guanqi'},
-    basePath,enabled:true,readOnly:false,json:(res,status,body)=>{res.status=status;res.body=body;},clock:()=>1_000_000,
+    basePath,enabled:true,readOnly:false,publicCallbackUrl:redirectUri,json:(res,status,body)=>{res.status=status;res.body=body;},clock:()=>1_000_000,
     verifyActor:async(room,openId,name,number)=>assert.deepEqual([room,openId,name,number],['官旗','ou_guanqi','曾泳淇','FD-024035'])});
   const actor={ok:true,mode:'central',user:{number:'FD-024035',name:'曾泳淇'},permissions:{allowed_modules:['live-room-management']}};
   const start=response();
@@ -151,8 +154,8 @@ async function exerciseCoachOAuth(upstreamCode=0) {
   assert.match(start.headers['Set-Cookie'],/HttpOnly; Secure; SameSite=Lax/u);
   assert.match(start.headers['Set-Cookie'],/Path=\/modules\/live-room-management\/api\/lifecycle\/calendar-auth\/callback/u);
   const callback=response();
-  await auth.handleCallback({method:'GET',headers:{cookie:start.headers['Set-Cookie'].split(';')[0]}},callback,
-    new URL(`${redirectUri}?code=mock_one_use_code&state=${encodeURIComponent(state)}`));
+  await auth.handleCallback(callbackRequest(start.headers['Set-Cookie'].split(';')[0]),callback,
+    upstreamCallback(encodeURIComponent(state),'mock_one_use_code'));
   return {dir,tokenFile,reader,callback,diagnostics};
 }
 

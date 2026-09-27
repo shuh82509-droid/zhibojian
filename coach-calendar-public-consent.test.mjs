@@ -13,13 +13,14 @@ import {createCalendarUserReader} from './calendar-user-reader.mjs';
 const basePath='/modules/live-room-management';
 const origin='https://hub.fandow.com';
 const callbackUrl=`${origin}${basePath}/api/lifecycle/calendar-auth/callback`;
+const callbackPath='/api/lifecycle/calendar-auth/callback';
 const paths={invite:'/api/lifecycle/coach-calendar-auth/invite',consent:'/api/lifecycle/coach-calendar-auth/consent',start:'/api/lifecycle/coach-calendar-auth/public-start'};
 const names={'官旗':'曾泳淇','优选':'李爽'};
 const numbers={'官旗':'FD-024035','优选':'FD-028493'};
 const openIds={'官旗':'ou_guanqi','优选':'ou_youxuan'};
 function response(){return {headers:{},status:0,body:null,setHeader(k,v){this.headers[k]=v;},writeHead(status,headers){this.status=status;Object.assign(this.headers,headers);},end(body){this.body=body;}};}
 function request(method,path,{body='',originHeader=origin,fetchSite='same-origin',xhr=false}={}) {
-  return {method,url:basePath+path,headers:{host:'hub.fandow.com',origin:originHeader,'sec-fetch-site':fetchSite,
+  return {method,url:path,headers:{host:'hub.fandow.com','x-forwarded-prefix':basePath,origin:originHeader,'sec-fetch-site':fetchSite,
     ...(xhr?{'x-requested-with':'XMLHttpRequest'}:{}),...(body?{'content-type':'application/x-www-form-urlencoded'}:{})},
     async *[Symbol.asyncIterator](){if(body)yield Buffer.from(body);}};
 }
@@ -43,7 +44,7 @@ async function fixture({publicEnabled=true,enabled=true,contactVerified=true,reg
   const administrator={ok:true,mode:'central',permissions:{super_admin:true}};
   async function issue(room='官旗',actor=administrator) {
     const path=`${paths.invite}?room=${encodeURIComponent(room)}`;
-    const res=response();await auth.handleApi(request('POST',path,{xhr:true}),res,paths.invite,actor,new URL(origin+basePath+path));
+    const res=response();await auth.handleApi(request('POST',path,{xhr:true}),res,paths.invite,actor,new URL(origin+path));
     return res;
   }
   return {dir,invites,auth,calls,issue,administrator,setContactVerified:value=>{verified=value;}};
@@ -63,8 +64,14 @@ test('预签邀请仅有已核验的管理员可签发，且不接受访客自�
     assert.match(decodeURIComponent(url.hash.slice(8)),/^[A-Za-z0-9_-]{43}\.[0-9]{13}\.[A-Za-z0-9_-]{43}$/u);
     const crossOrigin=response();
     await f.auth.handleApi(request('POST',`${paths.invite}?room=官旗`,{xhr:true,originHeader:'https://evil.example'}),crossOrigin,paths.invite,f.administrator,
-      new URL(origin+basePath+paths.invite+'?room=官旗'));
+      new URL(origin+paths.invite+'?room=官旗'));
     assert.equal(crossOrigin.status,403);
+    const missingPrefix=request('POST',`${paths.invite}?room=官旗`,{xhr:true});
+    delete missingPrefix.headers['x-forwarded-prefix'];
+    const wrongRoute=response();
+    await f.auth.handleApi(missingPrefix,wrongRoute,paths.invite,f.administrator,
+      new URL(origin+paths.invite+'?room=官旗'));
+    assert.equal(wrongRoute.status,403);
   } finally {await rm(f.dir,{recursive:true,force:true});}
 });
 
@@ -95,7 +102,7 @@ test('两次并发使用同一邀请，最多一次进入飞书授权',async()=>
     const issued=await f.issue();const token=decodeURIComponent(new URL(issued.body.inviteUrl).hash.slice(8));
     const form=`invite=${encodeURIComponent(token)}`;
     const responses=await Promise.all([0,1].map(async()=>{
-      const res=response();await f.auth.handlePublic(request('POST',paths.start,{body:form}),res,paths.start,new URL(origin+basePath+paths.start));return res;
+      const res=response();await f.auth.handlePublic(request('POST',paths.start,{body:form}),res,paths.start,new URL(origin+paths.start));return res;
     }));
     assert.deepEqual(responses.map(item=>item.status).sort(),[303,409]);
     assert.equal(responses.filter(item=>item.status===303).length,1);
@@ -106,7 +113,7 @@ test('无需中枢会话的本人邀请页经同源表单、单次 state 与 coo
   const f=await fixture();
   try {
     const issued=await f.issue();const link=new URL(issued.body.inviteUrl),token=decodeURIComponent(link.hash.slice(8));
-    const landing=response();await f.auth.handlePublic(request('GET',paths.consent),landing,paths.consent,new URL(link.origin+link.pathname));
+    const landing=response();await f.auth.handlePublic(request('GET',paths.consent),landing,paths.consent,new URL(origin+paths.consent));
     assert.equal(landing.status,200);assert.match(landing.body,/无需登录中枢/u);
     assert.equal(landing.body.includes(token),false);
     assert.doesNotMatch(landing.body,/ou_guanqi|FD-024035/u);
@@ -121,24 +128,24 @@ test('无需中枢会话的本人邀请页经同源表单、单次 state 与 coo
     assert.equal(controls.invite.value,token);assert.equal(controls.submit.disabled,false);
     assert.equal(historyCalls.length,1);
     const queryLink=response();await f.auth.handlePublic(request('GET',paths.consent),queryLink,paths.consent,
-      new URL(`${origin}${basePath}${paths.consent}?invite=${encodeURIComponent(token)}`));
+      new URL(`${origin}${paths.consent}?invite=${encodeURIComponent(token)}`));
     assert.equal(queryLink.status,400);assert.equal(String(queryLink.body).includes(token),false);
     const form=`invite=${encodeURIComponent(token)}`;
     for(const [originHeader,fetchSite] of [['https://evil.example','cross-site'],['', 'same-origin']]) {
-      const rejected=response();await f.auth.handlePublic(request('POST',paths.start,{body:form,originHeader,fetchSite}),rejected,paths.start,new URL(origin+basePath+paths.start));
+      const rejected=response();await f.auth.handlePublic(request('POST',paths.start,{body:form,originHeader,fetchSite}),rejected,paths.start,new URL(origin+paths.start));
       assert.equal(rejected.status,403);
     }
-    const started=response();await f.auth.handlePublic(request('POST',paths.start,{body:form}),started,paths.start,new URL(origin+basePath+paths.start));
+    const started=response();await f.auth.handlePublic(request('POST',paths.start,{body:form}),started,paths.start,new URL(origin+paths.start));
     assert.equal(started.status,303);assert.match(started.headers.Location,/^https:\/\/accounts\.feishu\.cn\//u);
     assert.match(started.headers['Set-Cookie'],/HttpOnly; Secure; SameSite=Lax/u);
     assert.equal(started.headers['Referrer-Policy'],'no-referrer');
     const state=started.headers['Set-Cookie'].match(/=([^;]+)/u)[1];
     const wrong=response();await f.auth.handleCallback(request('GET','/api/lifecycle/calendar-auth/callback'),wrong,
-      new URL(`${callbackUrl}?state=${state}&code=mock`));
+      new URL(`${origin}${callbackPath}?state=${state}&code=mock`));
     assert.equal(wrong.status,400);assert.equal(f.calls.length,1); // The real reader rejects before token exchange.
     const second=response();assert.equal(await f.auth.handleCallback(request('GET','/api/lifecycle/calendar-auth/callback'),second,
-      new URL(`${callbackUrl}?state=${state}&code=mock`)),false);
-    const replay=response();await f.auth.handlePublic(request('POST',paths.start,{body:form}),replay,paths.start,new URL(origin+basePath+paths.start));
+      new URL(`${origin}${callbackPath}?state=${state}&code=mock`)),false);
+    const replay=response();await f.auth.handlePublic(request('POST',paths.start,{body:form}),replay,paths.start,new URL(origin+paths.start));
     assert.equal(replay.status,409);
   } finally {await rm(f.dir,{recursive:true,force:true});}
 });
@@ -149,14 +156,14 @@ test('正确 cookie 的本人回调成功，身份状态改变则拒绝并不换
     try {
       const issued=await f.issue();const token=decodeURIComponent(new URL(issued.body.inviteUrl).hash.slice(8));
       const started=response();await f.auth.handlePublic(request('POST',paths.start,{body:`invite=${encodeURIComponent(token)}`}),started,paths.start,
-        new URL(origin+basePath+paths.start));
+        new URL(origin+paths.start));
       assert.equal(started.status,303);
       const state=started.headers['Set-Cookie'].match(/=([^;]+)/u)[1];
       const callback=response();
       const cookies=started.headers['Set-Cookie'].split(';')[0];
       const req=request('GET','/api/lifecycle/calendar-auth/callback');req.headers.cookie=cookies;
       if(!contactVerified)f.setContactVerified(false);
-      await f.auth.handleCallback(req,callback,new URL(`${callbackUrl}?state=${state}&code=mock`));
+      await f.auth.handleCallback(req,callback,new URL(`${origin}${callbackPath}?state=${state}&code=mock`));
       assert.equal(callback.status,contactVerified?200:400);assert.equal(f.calls.length,contactVerified?1:0);
       if(contactVerified)assert.doesNotMatch(callback.body,/返回直播中心/u);
     } finally {await rm(f.dir,{recursive:true,force:true});}
@@ -195,12 +202,12 @@ test('公开邀请完整走原飞书 PKCE reader：错账号、错主日历拒�
         invitations,clock:()=>now,authorizeIssuer:async()=>true,verifyActor:async()=>{},json:(res,status,data)=>{res.status=status;res.body=data;}});
       const invite=await invitations.issue('官旗',openIds['官旗']);
       const started=response();await auth.handlePublic(request('POST',paths.start,{body:`invite=${encodeURIComponent(invite.token)}`}),started,paths.start,
-        new URL(origin+basePath+paths.start));
+        new URL(origin+paths.start));
       assert.equal(started.status,303);authorizationUrl=started.headers.Location;
       const state=new URL(authorizationUrl).searchParams.get('state');
       const callback=response(),req=request('GET','/api/lifecycle/calendar-auth/callback');
       req.headers.cookie=started.headers['Set-Cookie'].split(';')[0];
-      await auth.handleCallback(req,callback,new URL(`${redirectUri}?state=${state}&code=mock_one_time_code`));
+      await auth.handleCallback(req,callback,new URL(`${origin}${callbackPath}?state=${state}&code=mock_one_time_code`));
       assert.equal(callback.status,mode==='valid'?200:400);
       assert.equal((await reader.status()).authorized,mode==='valid');
       assert.equal(tokenRequests,1);
@@ -212,7 +219,7 @@ test('新公共入口默认 OFF，且路由只开放最小 consent 与 public-st
   const f=await fixture({publicEnabled:false});
   try {
     const denied=await f.issue();assert.equal(denied.status,423);
-    const page=response();await f.auth.handlePublic(request('GET',paths.consent),page,paths.consent,new URL(origin+basePath+paths.consent+'?invite=fake'));
+    const page=response();await f.auth.handlePublic(request('GET',paths.consent),page,paths.consent,new URL(origin+paths.consent+'?invite=fake'));
     assert.equal(page.status,423);
     assert.equal(await f.auth.handlePublic(request('GET','/api/lifecycle/coach-calendar-auth/status'),response(),'/api/lifecycle/coach-calendar-auth/status',new URL(origin)),false);
     const server=readFileSync(new URL('./server.js',import.meta.url),'utf8');
@@ -234,8 +241,55 @@ test('免登录入口必须绑定正式 HTTPS Host 与完整的已登记回调�
   const f=await fixture();
   try {
     const wrongHost=request('GET',paths.consent);wrongHost.headers.host='another.fandow.com';
-    const res=response();await f.auth.handlePublic(wrongHost,res,paths.consent,new URL(origin+basePath+paths.consent));
+    const res=response();await f.auth.handlePublic(wrongHost,res,paths.consent,new URL(origin+paths.consent));
     assert.equal(res.status,421);
+    for(const prefix of [undefined,'/yxb/wis-marketing-hub/modules/other']) {
+      const wrongPrefix=request('GET',paths.consent);
+      if(prefix===undefined)delete wrongPrefix.headers['x-forwarded-prefix'];
+      else wrongPrefix.headers['x-forwarded-prefix']=prefix;
+      const denied=response();
+      assert.equal(await f.auth.handlePublic(wrongPrefix,denied,paths.consent,new URL(origin+paths.consent)),true);
+      assert.equal(denied.status,421);
+    }
+    const unrewritten=response();
+    assert.equal(await f.auth.handlePublic(request('GET',paths.consent),unrewritten,paths.consent,
+      new URL(origin+basePath+paths.consent)),false);
+    assert.equal(unrewritten.status,0);
+  } finally {await rm(f.dir,{recursive:true,force:true});}
+});
+
+test('正式网关重写后才允许无登录 POST，错误前缀不消费邀请或换取凭据',async()=>{
+  const f=await fixture();
+  try {
+    const issued=await f.issue(),token=decodeURIComponent(new URL(issued.body.inviteUrl).hash.slice(8));
+    const form=`invite=${encodeURIComponent(token)}`;
+    const wrong=request('POST',paths.start,{body:form});wrong.headers['x-forwarded-prefix']='/wrong-module';
+    const denied=response();
+    assert.equal(await f.auth.handlePublic(wrong,denied,paths.start,new URL(origin+paths.start)),true);
+    assert.equal(denied.status,421);
+    assert.equal((await f.invites.inspect(token)).room,'官旗');
+    const started=response();
+    await f.auth.handlePublic(request('POST',paths.start,{body:form}),started,paths.start,new URL(origin+paths.start));
+    assert.equal(started.status,303);
+    const state=started.headers['Set-Cookie'].match(/=([^;]+)/u)[1];
+    const req=request('GET',callbackPath);req.headers['x-forwarded-prefix']='/wrong-module';
+    req.headers.cookie=started.headers['Set-Cookie'].split(';')[0];
+    const callback=response();
+    assert.equal(await f.auth.handleCallback(req,callback,new URL(`${origin}${callbackPath}?state=${state}&code=mock`)),true);
+    assert.equal(callback.status,421);
+    assert.equal(f.calls.length,0);
+    assert.equal(await f.auth.handleCallback(request('GET',callbackPath),response(),
+      new URL(`${origin}${callbackPath}?state=${state}&code=mock`)),false);
+  } finally {await rm(f.dir,{recursive:true,force:true});}
+});
+
+test('旧面试日历 state 与其他路由不会被教练公开入口或回调抢占',async()=>{
+  const f=await fixture();
+  try {
+    const req=request('GET',callbackPath),res=response();
+    assert.equal(await f.auth.handlePublic(req,res,callbackPath,new URL(origin+callbackPath)),false);
+    assert.equal(await f.auth.handleCallback(req,res,new URL(`${origin}${callbackPath}?state=interview-state&code=mock`)),false);
+    assert.equal(res.status,0);
   } finally {await rm(f.dir,{recursive:true,force:true});}
 });
 
@@ -244,15 +298,15 @@ test('公共回调 Host 被替换时拒绝换取凭据，并单次消费 state',
   try {
     const issued=await f.issue(),token=decodeURIComponent(new URL(issued.body.inviteUrl).hash.slice(8));
     const started=response();await f.auth.handlePublic(request('POST',paths.start,{body:`invite=${encodeURIComponent(token)}`}),started,
-      paths.start,new URL(origin+basePath+paths.start));
+      paths.start,new URL(origin+paths.start));
     assert.equal(started.status,303);
     const state=started.headers['Set-Cookie'].match(/=([^;]+)/u)[1];
     const wrongHost=request('GET','/api/lifecycle/calendar-auth/callback');
     wrongHost.headers.host='evil.example';wrongHost.headers.cookie=started.headers['Set-Cookie'].split(';')[0];
-    const blocked=response();assert.equal(await f.auth.handleCallback(wrongHost,blocked,new URL(`${callbackUrl}?state=${state}&code=mock`)),true);
+    const blocked=response();assert.equal(await f.auth.handleCallback(wrongHost,blocked,new URL(`${origin}${callbackPath}?state=${state}&code=mock`)),true);
     assert.equal(blocked.status,421);assert.equal(f.calls.length,0);
     const retry=request('GET','/api/lifecycle/calendar-auth/callback');retry.headers.cookie=wrongHost.headers.cookie;
-    assert.equal(await f.auth.handleCallback(retry,response(),new URL(`${callbackUrl}?state=${state}&code=mock`)),false);
+    assert.equal(await f.auth.handleCallback(retry,response(),new URL(`${origin}${callbackPath}?state=${state}&code=mock`)),false);
   } finally {await rm(f.dir,{recursive:true,force:true});}
 });
 
