@@ -1964,8 +1964,8 @@ async function readRecruitmentCalendar(cycle,{targetDate=''}={}) {
     seenPages.add(data.page_token);query.set('page_token',data.page_token);
   }
   const events = {};
-  let unverifiableTitles=0,undatedInterviews=0;
-  const unverifiableDates=new Set();
+  let unverifiableTitles=0,unconfirmedInterviews=0,undatedInterviews=0;
+  const unverifiableDates=new Set(),unconfirmedDates=new Set();
   items.forEach(item => {
     if(item?.status==='cancelled'||!/(面试|初试|复试|试播)/u.test(item?.summary||''))return;
     const fullSummary=String(item?.summary||'');
@@ -1976,6 +1976,12 @@ async function readRecruitmentCalendar(cycle,{targetDate=''}={}) {
     const endTimestamp = Number(item?.end_time?.timestamp || 0);
     const date = item?.start_time?.date || (timestamp ? new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(timestamp * 1000)) : '');
     if(recruitmentCycleMonthForDate(date)!==cycle.month){undatedInterviews+=1;return;}
+    // Only a confirmed Feishu event is an official interview. A tentative or
+    // unknown-status event on the target day must block the whole roster, not
+    // disappear while other confirmed interviews are still reminded.
+    if(item.status!=='confirmed'){
+      unconfirmedInterviews+=1;unconfirmedDates.add(date);return;
+    }
     if(fullSummary.length>500){unverifiableTitles+=1;unverifiableDates.add(date);return;}
     const time = timestamp ? new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(timestamp * 1000)) : '';
     const summary = fullSummary.trim();
@@ -1986,12 +1992,15 @@ async function readRecruitmentCalendar(cycle,{targetDate=''}={}) {
       endAt:endTimestamp>timestamp?new Date(endTimestamp*1000).toISOString():''});
   });
   const titleBlocked=unverifiableTitles>0&&(!targetDate||unverifiableDates.has(targetDate));
-  return {events,calendarIssueCount:unverifiableTitles+undatedInterviews,
+  const statusBlocked=unconfirmedInterviews>0&&(!targetDate||unconfirmedDates.has(targetDate));
+  return {events,calendarIssueCount:unverifiableTitles+unconfirmedInterviews+undatedInterviews,
     status:undatedInterviews
       ?`待核验：${undatedInterviews} 条正式面试日程日期无法归属，所有日期暂停提醒。`
+      :statusBlocked
+        ?`待核验：${unconfirmedInterviews} 条正式面试日程未确认或状态无法核验，目标日期暂停提醒。`
       :titleBlocked
         ?`待核验：${unverifiableTitles} 条正式日历标题超过 500 字或为空，未截断匹配候选人。`
-        :`已连接：正式面试日历已读取 ${Object.values(events).flat().length} 条详情事件${unverifiableTitles?`；另有 ${unverifiableTitles} 条其他日期标题待核验`:''}。`};
+        :`已连接：正式面试日历已读取 ${Object.values(events).flat().length} 条详情事件${unverifiableTitles?`；另有 ${unverifiableTitles} 条其他日期标题待核验`:''}${unconfirmedInterviews?`；另有 ${unconfirmedInterviews} 条其他日期状态待核验`:''}。`};
 }
 async function recruitmentCycleSnapshot(month,{
   fresh=false,recruitmentChat=null,calendarSource=null,previousRecruitmentChat=null,previousChatProvided=false,

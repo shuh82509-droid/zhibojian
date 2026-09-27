@@ -79,6 +79,45 @@ test('calendar date-scoped reminder isolates a later long title but never an und
   }
 });
 
+test('only confirmed interview events enter the reminder roster; uncertain statuses block their date',async()=>{
+  const source=await read('../server.js');
+  const start=source.indexOf('async function readRecruitmentCalendar(');
+  const end=source.indexOf('\nasync function recruitmentCycleSnapshot(',start);
+  assert.ok(start>=0&&end>start);
+  const cycle=recruitmentCycleRange('2026-10'),date='2026-09-28';
+  const confirmed={event_id:'evt_confirmed',summary:'周小雨面试',status:'confirmed',
+    start_time:{timestamp:String(Date.parse('2026-09-28T06:00:00.000Z')/1000)},
+    end_time:{timestamp:String(Date.parse('2026-09-28T07:00:00.000Z')/1000)}};
+  const other={event_id:'evt_uncertain',summary:'李小鱼面试',
+    start_time:{date},end_time:{date:'2026-09-29'}};
+  let items=[];
+  const context={recruitmentCalendarId:'calendar_official',recruitmentCycleMonthForDate,
+    recruitmentCalendarReader:{status:async()=>({authorized:true}),get:async()=>({items,has_more:false})},
+    URLSearchParams,Intl,Date,createHash};
+  const reader=vm.runInNewContext(`${source.slice(start,end)}\nreadRecruitmentCalendar`,context);
+  items=[confirmed];
+  const ready=await reader(cycle,{targetDate:date});
+  assert.match(ready.status,/^已连接：/u,'confirmed Feishu timestamp events must remain usable');
+  assert.equal(ready.events[date].length,1);
+  for(const status of ['tentative',undefined,'unknown']){
+    items=[confirmed,{...other,...(status===undefined?{}:{status})}];
+    const blocked=await reader(cycle,{targetDate:date});
+    assert.match(blocked.status,/^待核验：/u,`${String(status)} must block today's roster`);
+    assert.equal(blocked.calendarIssueCount,1);
+    assert.equal(blocked.events[date].length,1,'unconfirmed person must never be packaged as formal');
+    assert.equal(buildInterviewReminderPreview({calendarStatus:blocked.status},date).status,'pending');
+    items=[confirmed,{...other,status,start_time:{date:'2026-09-29'}}];
+    const otherDay=await reader(cycle,{targetDate:date});
+    assert.match(otherDay.status,/^已连接：/u,'an uncertain later day must not block today');
+    assert.equal(otherDay.events[date].length,1);
+  }
+  items=[confirmed,{...other,status:'cancelled'}];
+  const cancelled=await reader(cycle,{targetDate:date});
+  assert.match(cancelled.status,/^已连接：/u,'deleted events are excluded, not treated as pending interviews');
+  assert.equal(cancelled.calendarIssueCount,0);
+  assert.equal(cancelled.events[date].length,1);
+});
+
 test('calendar pagination requires an array, boolean has_more and unique continuation tokens',async()=>{
   const source=await read('../server.js');
   const start=source.indexOf('async function readRecruitmentCalendar(');
