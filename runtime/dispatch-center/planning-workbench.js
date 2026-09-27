@@ -101,14 +101,32 @@
     status.textContent = '正在只读核对正式总表的 52 个唯一身份与 30 个日期列…';
     try {
       const {data} = await requestPlanning('/api/planning/rest-statistics?month=2026-09');
+      const reasonLabels = {gray:'灰格',blank:'空白',leave:'请假／非班次',invalidShift:'班次时间异常',unknown:'未知标记'};
+      const reasons = Object.keys(reasonLabels);
+      const validBreakdown = (value, count) => value && reasons.every((reason) => Number.isInteger(value[reason]) && value[reason] >= 0) &&
+        reasons.reduce((sum, reason) => sum + value[reason], 0) === count;
       if (!data?.readOnly || data.writeBackAllowed !== false) throw new Error('休息统计未通过只读约束。');
       if (!data.available) { status.textContent = `${data.reason || '来源待核验'}；不展示人数或天数，也不会写回。`; return; }
-      if (data.personCount !== 52 || data.dateCount !== 30 || data.people?.length !== 52 ||
-          data.people.some((person) => person.explicitRestDays + person.explicitWorkDays + person.pendingDays !== 30)) {
+      if (data.personCount !== 52 || data.dateCount !== 30 || !Array.isArray(data.people) || data.people.length !== 52 ||
+          !data.totals || !validBreakdown(data.totals.pendingByReason, data.totals.pendingDays) ||
+          data.totals.explicitRestDays + data.totals.explicitWorkDays + data.totals.pendingDays !== 1560 ||
+          data.people.some((person) =>
+            !Number.isInteger(person.explicitRestDays) || !Number.isInteger(person.explicitWorkDays) ||
+            !Number.isInteger(person.pendingDays) ||
+            person.explicitRestDays + person.explicitWorkDays + person.pendingDays !== 30 ||
+            !validBreakdown(person.pendingByReason, person.pendingDays) ||
+            !Array.isArray(person.pendingCells) || person.pendingCells.length !== person.pendingDays ||
+            person.pendingCells.some((item) => !/^2026-09-(0[1-9]|[12][0-9]|30)$/.test(item.date) ||
+              !/^[A-Z]+[1-9]\d*$/.test(item.cell) || !reasons.includes(item.reason))) ||
+          ['explicitRestDays','explicitWorkDays','pendingDays'].some((key) =>
+            data.people.reduce((sum, person) => sum + person[key], 0) !== data.totals[key]) ||
+          reasons.some((reason) => data.people.reduce((sum, person) => sum + person.pendingByReason[reason], 0) !== data.totals.pendingByReason[reason])) {
         throw new Error('总表人员或日期统计不完整。');
       }
-      status.textContent = `${data.source?.mode === 'verified_backup' ? '只读备份，不代表当前正式表' : '正式原表'}版本 ${data.source?.revision ?? '待核验'} · ${data.personCount} 人 / ${data.dateCount} 日 · 读取 ${data.source?.checkedAt || '待核验'}。只读，不写回。`;
-      root.innerHTML = `<p>${pEsc(data.scopeNote || '')}</p><div class="monthly-rest-statistics-result"><table><thead><tr><th>姓名／来源行</th><th>部门</th><th>明确休息</th><th>明确工作</th><th>待核验</th></tr></thead><tbody>${data.people.map((person) => `<tr><td>${pEsc(person.name)} <small>第 ${pEsc(person.sourceRow)} 行</small></td><td>${pEsc(person.department)}</td><td>${pEsc(person.explicitRestDays)} 天</td><td>${pEsc(person.explicitWorkDays)} 天</td><td>${pEsc(person.pendingDays)} 天</td></tr>`).join('')}</tbody></table></div>`;
+      const totals = data.totals;
+      status.textContent = `${data.source?.mode === 'verified_backup' ? '只读备份，不代表当前正式表' : '正式原表'}版本 ${data.source?.revision ?? '待核验'} · ${data.personCount} 人 / ${data.dateCount} 日 · 读取 ${data.source?.checkedAt || '待核验'}。明确休息 ${totals.explicitRestDays}、明确工作 ${totals.explicitWorkDays}、待核验 ${totals.pendingDays} 人日；只读，不写回。`;
+      const breakdown = reasons.map((reason) => `${reasonLabels[reason]} ${totals.pendingByReason[reason]}`).join('、');
+      root.innerHTML = `<p>${pEsc(data.scopeNote || '')}</p><p class="rest-stat-breakdown">待核验分项：${pEsc(breakdown)}。展开人员行可查看每个待核验单元格的日期、坐标与原因。</p><div class="monthly-rest-statistics-result"><table><thead><tr><th>姓名／来源行</th><th>部门</th><th>明确休息</th><th>明确工作</th><th>待核验／单元格</th></tr></thead><tbody>${data.people.map((person) => `<tr><td>${pEsc(person.name)} <small>第 ${pEsc(person.sourceRow)} 行</small></td><td>${pEsc(person.department)}</td><td>${pEsc(person.explicitRestDays)} 天</td><td>${pEsc(person.explicitWorkDays)} 天</td><td>${pEsc(person.pendingDays)} 天${person.pendingCells.length ? `<details><summary>查看 ${pEsc(person.pendingCells.length)} 个坐标</summary><span>${person.pendingCells.map((item) => `${pEsc(item.date)} ${pEsc(item.cell)}（${pEsc(reasonLabels[item.reason])}）`).join('、')}</span></details>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
       root.hidden = false;
     } catch (error) { root.hidden = true; root.innerHTML = ''; status.textContent = `休息统计不可核验：${error.message}；不展示人员数据。`; }
     finally { button.disabled = false; }

@@ -9,7 +9,9 @@ const fs = require('fs/promises');
 const { constants: fsConstants } = require('fs');
 const path = require('path');
 const { createHash, randomUUID } = require('crypto');
-const { ROOM_PLANNING, SHIFT_TIMES, VERIFIED_ANCHOR_ROOMS, formatShiftCell, linkOvernightDrafts, syncDraftRestDays, generateDraft, generateMakeupDraft, parseMonthlyRestStatistics, parseRestSources, summarizeAnchorResources, summarizeAttendance, summarizeResourceAverages } = require('./planning-engine');
+const { ROOM_PLANNING, SHIFT_TIMES, VERIFIED_ANCHOR_ROOMS, formatShiftCell, linkOvernightDrafts, syncDraftRestDays, generateDraft, generateMakeupDraft, parseRestSources, summarizeAnchorResources, summarizeAttendance, summarizeResourceAverages } = require('./planning-engine');
+// The administrator's source-bound count is separate from legacy planning/rest balances.
+const { parseMonthlyRestStatistics } = require('./monthly-rest-statistics');
 const { buildOpeningPreview } = require('./notification-preview');
 
 const HOST = process.env.HOST || '0.0.0.0';

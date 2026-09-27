@@ -342,6 +342,9 @@ test('builds an exact total-schedule import preview and exposes unresolved names
   assert.equal(plan.resolvedCount, 2); assert.equal(plan.unresolved.length, 1); assert.equal(plan.ranges.length, 2); assert.equal(plan.overwrites.length, 0); assert.match(plan.expectedHash, /^[a-f0-9]{64}$/u); assert.equal(headerDateKey('9月2日', '2026'), '2026-09-02');
   assert.equal(plan.ranges[0].after.includes('R（06:30-15:30）'), true);
   assert.equal(formatShiftCell({shiftCode:'休',rest:true}), '休息');
+  const obsoleteRows = [['姓名','直播间','2026/9/1','2026/9/2'],['甲','优选','','']];
+  assert.throws(() => buildPlanningImportPlan(draft, obsoleteRows, 12, undefined, provenRole(draft)),
+    {code:'TOTAL_SCHEDULE_SCHEMA_MISMATCH'});
 });
 
 test('total-schedule preview uses the currently resolved spreadsheet target', () => {
@@ -1091,5 +1094,6 @@ test('monthly rest detail stays hidden until the server grants administrator cap
   assert.match(script, /restStatisticsCapability:\s*\{enabled:false\}/u);
   assert.match(script, /restStatisticsCapability\.enabled/u);
   assert.match(script, /\/api\/planning\/rest-statistics\?month=2026-09/u);
-  assert.match(script, /data\.people\?\.length !== 52/u);
+  assert.match(script, /!Array\.isArray\(data\.people\) \|\| data\.people\.length !== 52/u);
+  assert.match(script, /validBreakdown\(data\.totals\.pendingByReason, data\.totals\.pendingDays\)/u);
 });
