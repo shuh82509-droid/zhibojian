@@ -2228,7 +2228,7 @@ async function planningApi(request, response, requestUrl, auth) {
       return json(response,{ok:true,data:await planningImportGuardStatus()});
     }
     if (request.method === 'POST' && route === '/api/planning/import/reconcile') { validateWriteOrigin(request, auth); return json(response,await reconcilePlanningImport(await readJsonBody(request),auth)); }
-    if (request.method === 'POST' && route === '/api/planning/import/preview') { validateWriteOrigin(request, auth); const draft = normalizePlanningDraft((await readJsonBody(request)).draft || {}); const { plan } = await previewPlanningImport(draft); return json(response, { ok: true, plan }); }
+    if (request.method === 'POST' && route === '/api/planning/import/preview') { validateWriteOrigin(request, auth); assertPlanningManager(auth); const draft = normalizePlanningDraft((await readJsonBody(request)).draft || {}); const { plan } = await previewPlanningImport(draft); return json(response, { ok: true, plan }); }
     if (request.method === 'POST' && route === '/api/planning/import') { validateWriteOrigin(request, auth); assertPlanningManager(auth); return json(response, await commitPlanningImport(await readJsonBody(request), auth)); }
     return json(response, { error: 'Not found' }, 404);
   } catch (error) { return errorResponse(response, error, '排班工作台请求失败。'); }

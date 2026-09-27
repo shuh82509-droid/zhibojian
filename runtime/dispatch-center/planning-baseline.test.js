@@ -258,8 +258,8 @@ test('ordinary live-module member sees disabled capabilities and cannot persist 
   assert.equal(deniedRest.status,403);
   assert.equal((await deniedRest.json()).code,'PLANNING_ADMIN_REQUIRED');
   const before=fs.readFileSync(paths.storePath,'utf8');
-  for(const route of ['/api/planning/draft','/api/planning/rest-setting','/api/planning/rest-profile','/api/planning/makeup/draft','/api/planning/import']){
-    const response=await fetch(base+route,{method:'POST',headers:{origin:'https://hub.fandow.com','x-requested-with':'XMLHttpRequest','content-type':'application/json'},body:'{}'});
+  for(const route of ['/api/planning/draft','/api/planning/rest-setting','/api/planning/rest-profile','/api/planning/makeup/draft','/api/planning/import/preview','/api/planning/import']){
+    const response=await fetch(base+route,{method:'POST',headers:{origin:'https://hub.fandow.com','x-requested-with':'XMLHttpRequest','content-type':'application/json'},body:route.endsWith('/preview')?'{':'{}'});
     assert.equal(response.status,403,route);
     assert.equal((await response.json()).code,'PLANNING_ADMIN_REQUIRED',route);
   }
