@@ -9,13 +9,13 @@ import {
   linkRecruitmentCalendarAcrossBoundary,
   normalizeAnchorReport,
   parseLatestCoachSummary,
-  parseEmploymentMessages, parseRecruitmentMessages, activeChatMessages, readCompleteMessageReactions, buildInterviewReminderPreview, interviewReminderSourceFingerprint, reviewWeekFor, readVersionedCoachRankingRows, readVerifiedCoachInstances, coachCalendarFingerprint, assertCoachRankingRevision, parseWeeklyCoachRotation, countCoachReviews, coachReviewReminder, structuredAssessmentSummary, structuredAssessmentForCandidate, centralFeishuOpenId, isVerifiedLiveCenterContact, assessmentSubmissionFor, recruitmentCycleMonthForDate, recruitmentCycleRange, recruitmentBoundaryCycleRange, lifecycleReminderWindow, extractAnchorEvaluation, verifiedAnchorEvidence, feishuDocumentLink
+  parseEmploymentMessages, parseRecruitmentMessages, activeChatMessages, readCompleteMessageReactions, buildInterviewReminderPreview, interviewReminderSourceFingerprint, inspectableRecruitmentReminderChat, recruitmentChatSourceFingerprint, reviewWeekFor, readVersionedCoachRankingRows, readVerifiedCoachInstances, coachCalendarFingerprint, assertCoachRankingRevision, parseWeeklyCoachRotation, countCoachReviews, coachReviewReminder, structuredAssessmentSummary, structuredAssessmentForCandidate, centralFeishuOpenId, isVerifiedLiveCenterContact, assessmentSubmissionFor, recruitmentCycleMonthForDate, recruitmentCycleRange, recruitmentBoundaryCycleRange, lifecycleReminderWindow, extractAnchorEvaluation, verifiedAnchorEvidence, feishuDocumentLink
 } from './lifecycle-engine.mjs';
 import { frameHeadersForHub } from './frame-policy.mjs';
 import { createCalendarUserReader } from './calendar-user-reader.mjs';
 import { createReminderJournalLock } from './lifecycle-reminder-lock.mjs';
 import { writeDurableJsonAtomic } from './durable-journal.mjs';
-import {inspectInterviewPost, verifyInterviewBindingSources, projectInterviewBindings,
+import {inspectInterviewPost, verifyInterviewBindingSources, verifiedReadableContent, projectInterviewBindings,
   sanitizeRecruitmentOutcome, formalRecruitmentCalendarEvents} from './interview-binding.mjs';
 import { reminderScheduleConfig } from './reminder-gates.mjs';
 import { createCalendarAuthHandler } from './calendar-auth-http.mjs';
@@ -334,6 +334,32 @@ function messageResources(value) {
   return resources.slice(0, 20);
 }
 async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
+  function verifiedMessageContentShape(content, type) {
+    const record=value=>Boolean(value&&typeof value==='object'&&!Array.isArray(value));
+    if(!record(content))return false;
+    if(type==='text')return Object.keys(content).length===1 && typeof content.text==='string';
+    if(type!=='post')return false;
+    const keys=Object.keys(content);
+    const block=keys.length===1 && /^(?:zh_cn|zh-CN|en_us|en-US)$/u.test(keys[0]) ? content[keys[0]] : content;
+    if(!record(block) || !Object.keys(block).every(key=>['title','content'].includes(key))
+      || (block.title!==undefined&&typeof block.title!=='string')
+      || !Array.isArray(block.content))return false;
+    return block.content.every(line=>Array.isArray(line)&&line.every(node=>record(node)
+      && ['text','plain_text'].includes(node.tag) && typeof node.text==='string'
+      && Object.keys(node).every(key=>['tag','text','style'].includes(key))
+      && (node.style===undefined || (Array.isArray(node.style)
+        && node.style.every(style=>['bold','italic','underline','lineThrough'].includes(style))))));
+  }
+  function verifiedMessageContentText(content,type) {
+    if(type==='text')return content.text;
+    const keys=Object.keys(content);
+    const block=keys.length===1 && /^(?:zh_cn|zh-CN|en_us|en-US)$/u.test(keys[0]) ? content[keys[0]] : content;
+    // Feishu post nodes within one row are visually contiguous. The generic
+    // UI extractor inserts newlines between nodes and is not safe evidence for
+    // counting repeated submission templates split across style fragments.
+    return [...(block.title?[block.title]:[]),...block.content.map(row=>row.map(node=>node.text).join(''))]
+      .join('\n');
+  }
   function messageHasMediaOrResource(value) {
     let found = false;
     const visit = item => {
@@ -417,13 +443,24 @@ async function getChatMessages(sourceKey, limit = 20, timeRange = {}) {
       catch (error) { reactionStatus = error?.status===403 ? '待授权' : '待核验'; reactionFailure = String(error?.message || '表情读取失败'); }
     }
     const messages = activeItems.map(item => {
-      const content = parseMessageContent(item.body?.content);
-      const extractedText = messageText(content, 8001);
-      const reviewText = includeReviewText?messageText(content, 8001, false):'';
+      const rawContent=item.body?.content;
+      let parsedContent;let parseError=false;
+      if(typeof rawContent!=='string')parseError=true;
+      else try{parsedContent=JSON.parse(rawContent);}catch{parseError=true;}
+      // The ordinary UI may display a malformed raw body, but timed reminder
+      // evidence must never treat that fallback as a complete Feishu message.
+      const content=parseError
+        ? (includeReviewText?{}:parseMessageContent(rawContent)) : parsedContent;
+      const contentShapeVerified=!parseError&&verifiedMessageContentShape(parsedContent,item.msg_type);
+      const verifiedText=includeReviewText&&contentShapeVerified
+        ? verifiedMessageContentText(parsedContent,item.msg_type).slice(0,8001) : null;
+      const extractedText = verifiedText ?? messageText(content, 8001);
+      const reviewText = includeReviewText?(verifiedText ?? messageText(content, 8001, false)):'';
       return {
         messageId: item.message_id,
         chatId: item.chat_id,
         type: item.msg_type,
+        parseError,contentShapeVerified,
         text: extractedText.slice(0, 8000),
         textTruncated: extractedText.length > 8000,
         ...(includeReviewText?{reviewText:reviewText.slice(0, 8000),reviewTextTruncated:reviewText.length > 8000}:{}),
@@ -1877,9 +1914,10 @@ function completeRecruitmentChatSource(chat, cycle) {
     });
 }
 async function linkRecruitmentCalendarWithBoundary(candidates, parsed, chat, calendar, cycle, {
-  fresh=false,advanceStage=false,previousChat=null,previousChatProvided=false
+  fresh=false,advanceStage=false,previousChat=null,previousChatProvided=false,requireReminderProof=false
 }={}) {
-  const currentSourceReady=calendar.status.startsWith('已连接：') && completeRecruitmentChatSource(chat,cycle);
+  const currentSourceReady=calendar.status.startsWith('已连接：') && completeRecruitmentChatSource(chat,cycle)
+    && (!requireReminderProof || inspectableRecruitmentReminderChat(chat));
   const boundaryRange=recruitmentBoundaryCycleRange(cycle.month);
   const boundaryEvents=(calendar.events?.[boundaryRange.date] || []).filter(item=>item?.status==='calendar');
   let previousParsed=null,previousSourceReady=false,previousMessages=null,priorChat=null;
@@ -1887,8 +1925,9 @@ async function linkRecruitmentCalendarWithBoundary(candidates, parsed, chat, cal
     try {
       priorChat=previousChatProvided?previousChat
         :await getChatMessages('recruitment',1000,{...boundaryRange.previous,fresh,
-          includeReviewText:interviewBindingEnabled});
-      previousSourceReady=completeRecruitmentChatSource(priorChat,boundaryRange.previous);
+          includeReviewText:interviewBindingEnabled||requireReminderProof});
+      previousSourceReady=completeRecruitmentChatSource(priorChat,boundaryRange.previous)
+        && (!requireReminderProof || inspectableRecruitmentReminderChat(priorChat));
       if(previousSourceReady){
         previousParsed=parseRecruitmentMessages(priorChat.messages,{reviewerOpenId:recruitmentReviewerOpenId});
         previousMessages=priorChat.sourceMessageCount ?? priorChat.messages.length;
@@ -1901,6 +1940,7 @@ async function linkRecruitmentCalendarWithBoundary(candidates, parsed, chat, cal
   });
   return {...linked,previousChat:previousSourceReady?priorChat:null,
     boundary:{...linked.boundary,chatMessages:previousMessages,
+    chatSourceFingerprint:previousSourceReady?recruitmentChatSourceFingerprint(priorChat):'',
     sourceCycle:boundaryRange.previous.month}};
 }
 async function readRecruitmentCalendar(cycle,{targetDate=''}={}) {
@@ -1958,10 +1998,10 @@ async function recruitmentCycleSnapshot(month,{
   reminderDate=''
 }={}) {
   const cycle = recruitmentCycleRange(month);
-  const sourceFresh=fresh||interviewBindingEnabled;
+  const sourceFresh=fresh||interviewBindingEnabled||Boolean(reminderDate);
   const [chatResult, employmentResult, calendarResult] = await Promise.allSettled([
     recruitmentChat ? Promise.resolve(recruitmentChat) : getChatMessages('recruitment', 1000,
-      {...cycle,fresh:sourceFresh,includeReviewText:interviewBindingEnabled}),
+      {...cycle,fresh:sourceFresh,includeReviewText:interviewBindingEnabled||Boolean(reminderDate)}),
     getChatMessages('coaching', 1000, cycle),
     calendarSource ? Promise.resolve(calendarSource) : readRecruitmentCalendar(cycle,{targetDate:reminderDate}),
   ]);
@@ -1976,6 +2016,7 @@ async function recruitmentCycleSnapshot(month,{
     fresh:sourceFresh,advanceStage:Boolean(recruitmentReviewerOpenId) && chat.reactionStatus==='已核验'
       && employmentResult.status==='fulfilled' && !employmentResult.value.truncated,
     previousChat:previousRecruitmentChat,previousChatProvided,
+    requireReminderProof:Boolean(reminderDate),
   });
   const candidates=linked.candidates;
   const funnel = {...parsed.funnel,
@@ -2015,7 +2056,7 @@ async function recruitmentCycleSnapshot(month,{
     interviewEvents,
     submittedCount:parsed.submittedCount,
     unmappedCount:candidates.filter(item => item.stage === 'unmapped').length,
-    coverage:{chatMessages:chat.sourceMessageCount ?? chat.messages?.length ?? 0,deletedMessages:chat.deletedMessageCount ?? 0,capped:Boolean(chat.truncated),reactionStatus:recruitmentReviewerOpenId ? (chat.reactionStatus || '待核验') : '待配置审查人身份',reactionFailure:chat.reactionFailure || '',employmentStatus:employmentResult.status === 'fulfilled' ? '已读取' : '待授权',employmentMessages:employmentResult.status === 'fulfilled' ? employmentResult.value.sourceMessageCount ?? employmentResult.value.messages?.length ?? 0 : null,employmentCapped:employmentResult.status === 'fulfilled' ? Boolean(employmentResult.value.truncated) : null,employmentFailure:employmentResult.status === 'rejected' ? String(employmentResult.reason?.message || 'WIS直播战队日报读取失败') : ''}
+    coverage:{chatMessages:chat.sourceMessageCount ?? chat.messages?.length ?? 0,deletedMessages:chat.deletedMessageCount ?? 0,chatSourceFingerprint:recruitmentChatSourceFingerprint(chat),capped:Boolean(chat.truncated),reactionStatus:recruitmentReviewerOpenId ? (chat.reactionStatus || '待核验') : '待配置审查人身份',reactionFailure:chat.reactionFailure || '',employmentStatus:employmentResult.status === 'fulfilled' ? '已读取' : '待授权',employmentMessages:employmentResult.status === 'fulfilled' ? employmentResult.value.sourceMessageCount ?? employmentResult.value.messages?.length ?? 0 : null,employmentCapped:employmentResult.status === 'fulfilled' ? Boolean(employmentResult.value.truncated) : null,employmentFailure:employmentResult.status === 'rejected' ? String(employmentResult.reason?.message || 'WIS直播战队日报读取失败') : ''}
   };
   const verified=interviewBindingEnabled&&!reminderDate
     ?projectInterviewBindings(snapshot,chat,(await readRecruitmentInterviewJournal()).entries,{reviewerOpenId:recruitmentReviewerOpenId,
@@ -2023,7 +2064,8 @@ async function recruitmentCycleSnapshot(month,{
       previousChat:linked.previousChat})
     :snapshot;
   return sanitizeRecruitmentOutcome(verified,{trustedFreshCalendar:calendarResult.status==='fulfilled',
-    trustedFreshChat:completeRecruitmentChatSource(chat,cycle),
+    trustedFreshChat:completeRecruitmentChatSource(chat,cycle)
+      && (!reminderDate || inspectableRecruitmentReminderChat(chat)),
     trustedFreshBinding:interviewBindingEnabled&&!reminderDate,
     trustedFreshAssessment:Boolean(assessment.summary)&&completeRecruitmentChatSource(chat,cycle)});
 }
@@ -2606,13 +2648,6 @@ async function interviewBindingSources(month,{fresh=true}={}) {
 function interviewBindingOptions(snapshot,chat,previousChat=null) {
   const options=[];
   const knownNames=(snapshot.candidates||[]).map(item=>item.name).filter(Boolean);
-  const sourceReviewable=(item,{plainOnly=false}={})=>{
-    const body=String(item?.reviewText??item?.text??'');
-    const hasOriginalLink=/^https:\/\/applink\.feishu\.cn\/client\/chat\/open\?/u.test(String(item?.appLink||''));
-    return Boolean(item&&body.trim()&&body.length<=8000&&!item.textTruncated&&!item.reviewTextTruncated
-      &&(!plainOnly||!(item.hasMediaOrResource||item.resources?.length))
-      &&(hasOriginalLink||!(item.hasMediaOrResource||item.resources?.length)));
-  };
   for(const candidate of snapshot.candidates||[]) {
     if(!(candidate.inSubmissionCohort||candidate.boundaryCarryover)
       ||!candidate.submissionEvidence?.sourceId||!candidate.calendarEvidence?.eventId
@@ -2633,7 +2668,7 @@ function interviewBindingOptions(snapshot,chat,previousChat=null) {
         calendarId:recruitmentCalendarId,today:chinaDateFor(),previousChat});
       if(binding.status!=='ready')continue;
       const submission=submissionChat?.messages.find(item=>item.messageId===binding.submissionMessageId);
-      if(!sourceReviewable(submission)||!sourceReviewable(post,{plainOnly:true}))continue;
+      if(!verifiedReadableContent(submission)||!verifiedReadableContent(post))continue;
       options.push({candidateName:candidate.name,sourceCycleMonth:binding.sourceCycleMonth,
         submissionMessageId:binding.submissionMessageId,
         submissionDate:candidate.submissionEvidence.date,calendarEventId:binding.calendarEventId,
@@ -2666,17 +2701,10 @@ async function submitInterviewBinding(req,auth) {
       recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor(),
       previousChat});
     if(binding.status!=='ready')throw new FeishuError(binding.reason,409,'interview_binding_source_unverified');
-    const sourceReviewable=(item,{plainOnly=false}={})=>{
-      const body=String(item?.reviewText??item?.text??'');
-      const hasOriginalLink=/^https:\/\/applink\.feishu\.cn\/client\/chat\/open\?/u.test(String(item?.appLink||''));
-      return Boolean(item&&body.trim()&&body.length<=8000&&!item.textTruncated&&!item.reviewTextTruncated
-        &&(!plainOnly||!(item.hasMediaOrResource||item.resources?.length))
-        &&(hasOriginalLink||!(item.hasMediaOrResource||item.resources?.length)));
-    };
     const submissionChat=binding.sourceCycleMonth===cycleMonth?chat:previousChat;
     const submission=submissionChat?.messages.find(item=>item.messageId===binding.submissionMessageId);
     const post=chat.messages.find(item=>item.messageId===binding.postMessageId);
-    if(!sourceReviewable(submission)||!sourceReviewable(post,{plainOnly:true}))
+    if(!verifiedReadableContent(submission)||!verifiedReadableContent(post))
       throw new FeishuError('送审或面评来源含无法在此页完整核对的内容，请先在飞书原消息核验并重新读取。',409,'interview_binding_source_not_reviewable');
     if(payload.expectedSourceFingerprint!==binding.sourceFingerprint)
       throw new FeishuError('送审、日历或面评帖在打开页面后发生变化，请重新读取后核对。',409,'interview_binding_source_changed');

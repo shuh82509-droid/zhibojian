@@ -169,7 +169,8 @@ test('fresh refresh persists only sanitized recruitment data, and cycle read doe
     recruitmentReviewerOpenId:'ou_reviewer',interviewBindingEnabled:false,
     lifecycleSourceStatus:()=> 'current',recruitmentCalendarId:'calendar_official',
     readRecruitmentInterviewJournal:async()=>({entries:[]}),projectInterviewBindings:row=>row,
-    sanitizeRecruitmentOutcome,formalRecruitmentCalendarEvents,completeRecruitmentChatSource:()=>true,
+     sanitizeRecruitmentOutcome,formalRecruitmentCalendarEvents,completeRecruitmentChatSource:()=>true,
+     recruitmentChatSourceFingerprint:()=> 'a'.repeat(64),
     lifecycleSnapshotPath:()=> '/unused',writeJsonAtomic:async(_,value)=>{written=value;},
     chinaDateFor:()=>date,structuredClone,Date};
   const refreshStart=source.indexOf('async function refreshRecruitmentLifecycle(');

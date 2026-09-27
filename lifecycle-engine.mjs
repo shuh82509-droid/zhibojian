@@ -33,6 +33,75 @@ function findSubmissionNames(text) {
   return names;
 }
 
+const recruitmentReadableText = message => String(message?.reviewText ?? message?.text ?? '');
+
+/** A timed reminder cannot infer a unique applicant from an unreadable group
+ * body. Full, non-deduplicated text is required even when binding is OFF.
+ */
+export function inspectableRecruitmentReminderChat(chat) {
+  return Array.isArray(chat?.messages) && chat.messages.every(message =>
+    ['text','post'].includes(message?.type)
+    && message.contentShapeVerified === true && message.parseError === false
+    && typeof message?.reviewText === 'string' && message.reviewText.trim()
+    && typeof message?.text === 'string' && message.text === message.reviewText
+    && !message.textTruncated && !message.reviewTextTruncated
+    && !message.hasMediaOrResource && !message.resources?.length
+    // If a candidate template was split across lines or left incomplete,
+    // extracting fewer submissions than visible applicant markers is unsafe.
+    && [...message.reviewText.normalize('NFKC').replace(/\p{Cf}/gu,'')
+      .matchAll(/求\s*职\s*者/gu)].length
+      === findSubmissionNames(message.reviewText).length);
+}
+
+function canonicalSourceObjectValue(value) {
+  if(Array.isArray(value))return value.map(canonicalSourceObjectValue);
+  if(value && typeof value==='object')return Object.fromEntries(Object.keys(value).sort()
+    .map(key=>[key,canonicalSourceObjectValue(value[key])]));
+  return value;
+}
+
+function canonicalRecruitmentReactions(value) {
+  const reactions=canonicalSourceObjectValue(value||null);
+  if(!reactions || Array.isArray(reactions) || typeof reactions!=='object')return reactions;
+  // Feishu does not guarantee order for reaction records or aggregate rows.
+  // Keep every field and duplicate row: only collection order is immaterial.
+  for(const key of ['details','counts'])if(Array.isArray(reactions[key])){
+    reactions[key].sort((left,right)=>{
+      const a=JSON.stringify(left)??'',b=JSON.stringify(right)??'';
+      return a<b?-1:a>b?1:0;
+    });
+  }
+  return reactions;
+}
+
+/** Keep the entire source semantics in the pre-send CAS without persisting
+ * personal group text. Message and reaction collection order are irrelevant;
+ * any message/body/reaction change, including one outside the parsed candidate
+ * cohort, changes the hash.
+ */
+export function recruitmentChatSourceFingerprint(chat) {
+  if(!Array.isArray(chat?.messages))return '';
+  const messages=chat.messages.map(message=>({
+    id:String(message?.messageId||''),chatId:String(message?.chatId||''),
+    type:String(message?.type||''),sender:String(message?.sender?.id||''),
+    createdAt:String(message?.createdAt||''),updatedAt:String(message?.updatedAt||''),
+    contentFingerprint:String(message?.contentFingerprint||''),
+    text:String(message?.text||''),reviewText:String(message?.reviewText||''),
+    textTruncated:Boolean(message?.textTruncated),
+    reviewTextTruncated:Boolean(message?.reviewTextTruncated),
+    parseError:Boolean(message?.parseError),
+    contentShapeVerified:message?.contentShapeVerified===true,
+    hasMediaOrResource:Boolean(message?.hasMediaOrResource),
+    resources:message?.resources||[],reactions:canonicalRecruitmentReactions(message?.reactions),
+  })).sort((a,b)=>a.id.localeCompare(b.id));
+  return createHash('sha256').update(JSON.stringify({
+    key:String(chat.key||''),chatId:String(chat.chatId||''),
+    sourceMessageCount:chat.sourceMessageCount,deletedMessageCount:chat.deletedMessageCount,
+    truncated:Boolean(chat.truncated),paginationIssue:String(chat.paginationIssue||''),
+    reactionStatus:String(chat.reactionStatus||''),messages,
+  })).digest('hex');
+}
+
 function reviewerReaction(message, reviewerOpenId) {
   if (!reviewerOpenId) return null;
   const details = Array.isArray(message?.reactions?.details) ? message.reactions.details : [];
@@ -244,12 +313,14 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
   // Evaluate against the complete cycle, not only submissions seen earlier in
   // message order: a second candidate or a duplicate same-name submission may
   // arrive after a report. Neither may be attributed by name alone.
-  const submittedNames = new Set(ordered.flatMap(message => findSubmissionNames(message?.text)));
+  const submittedNames = new Set(ordered.flatMap(message => findSubmissionNames(recruitmentReadableText(message))));
   const submissionRecords = new Map(), unidentifiedSubmissions = new Map();
   const messageNames = new Map(), ambiguousNames = new Set();
   for (const message of ordered) {
-    const names = [...new Set(findSubmissionNames(message?.text))];
+    const rawNames = findSubmissionNames(recruitmentReadableText(message));
+    const names = [...new Set(rawNames)];
     if (!names.length) continue;
+    if(rawNames.length!==names.length)names.forEach(name=>ambiguousNames.add(name));
     const sourceId = String(message?.messageId || '').trim();
     const date = messageDate(message);
     const initialReview = reviewerReaction(message, reviewerOpenId)?.emoji || null;
@@ -267,8 +338,8 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
       const records = submissionRecords.get(name);
       const previous = records.get(sourceId);
       if (previous && (previous.date !== date || previous.initialReview !== initialReview
-        || previous.text !== String(message?.text || ''))) ambiguousNames.add(name);
-      else if (!previous) records.set(sourceId,{name,date,sourceId,initialReview,text:String(message?.text || '')});
+        || previous.text !== recruitmentReadableText(message))) ambiguousNames.add(name);
+      else if (!previous) records.set(sourceId,{name,date,sourceId,initialReview,text:recruitmentReadableText(message)});
     }
   }
   for (const [name,records] of submissionRecords) {
@@ -279,7 +350,7 @@ export function parseRecruitmentMessages(messages = [], {reviewerOpenId = RECRUI
     const date = messageDate(message);
     if (!date) continue;
     sourceDates.push(date);
-    const text = String(message?.text || '');
+    const text = recruitmentReadableText(message);
     for (const name of findSubmissionNames(text)) {
       const key = `${date}|${name}`;
       if (!submitted.has(key)) {
@@ -655,9 +726,13 @@ export function interviewReminderSourceFingerprint(snapshot, date) {
     .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   const submissionCounts = Object.entries(snapshot?.submissionMessageCounts || {})
     .sort(([a], [b]) => a.localeCompare(b));
-  return JSON.stringify({calendar, cohort, submissionCounts, capped:Boolean(snapshot?.coverage?.capped),
+  return JSON.stringify({calendar, cohort, submissionCounts,
+    chatSourceFingerprint:String(snapshot?.coverage?.chatSourceFingerprint||''),
+    chatMessages:snapshot?.coverage?.chatMessages,
+    deletedMessages:snapshot?.coverage?.deletedMessages,
+    capped:Boolean(snapshot?.coverage?.capped),
     reactionStatus:String(snapshot?.coverage?.reactionStatus || ''),
-    boundary:snapshot?.boundaryCarryover || null});
+    boundary:canonicalSourceObjectValue(snapshot?.boundaryCarryover || null)});
 }
 
 export function buildInterviewReminderPreview(snapshot, date) {
@@ -665,11 +740,14 @@ export function buildInterviewReminderPreview(snapshot, date) {
   if (!/^20\d{2}-\d{2}-\d{2}$/u.test(String(date || ''))) return pending('面试日期无效');
   if (!String(snapshot?.calendarStatus || '').startsWith('已连接：')) return pending('正式面试日历尚未接入');
   if (snapshot?.coverage?.capped || snapshot?.coverage?.reactionStatus !== '已核验') return pending('招聘群证据不完整');
+  if (!/^[a-f0-9]{64}$/u.test(String(snapshot?.coverage?.chatSourceFingerprint||'')))
+    return pending('招聘群完整消息来源尚未核验');
   const events = (snapshot?.interviewEvents?.[date] || []).filter(item => item?.status === 'calendar'
     && item?.source === '正式面试日历');
   if (!events.length) return pending('当天没有可核验的正式面试日程');
   const boundaryDate = recruitmentCycleRange(recruitmentCycleMonthForDate(date)).startDate;
-  if (date === boundaryDate && snapshot?.boundaryCarryover?.status !== 'verified')
+  if (date === boundaryDate && (snapshot?.boundaryCarryover?.status !== 'verified'
+    || !/^[a-f0-9]{64}$/u.test(String(snapshot?.boundaryCarryover?.chatSourceFingerprint||''))))
     return pending('跨周期招聘群来源与首日面试人尚未完整核验');
   if (date !== boundaryDate && !snapshot?.coverage?.chatMessages) return pending('招聘群证据不完整');
   const candidates = (snapshot?.candidates || []).filter(item => (item?.inSubmissionCohort ||
@@ -704,6 +782,7 @@ export function buildInterviewReminderPreview(snapshot, date) {
         || candidate.calendarEvidence?.title!==event.name
         || boundary?.date!==date || boundary.sourceCycle!==previousMonth
         || boundary.matchedCount!==events.length
+        || !/^[a-f0-9]{64}$/u.test(String(boundary.chatSourceFingerprint||''))
         || !Number.isSafeInteger(boundary.chatMessages) || boundary.chatMessages<1
         || candidate.submissionEvidence.date>=date)
         return pending('跨周期首日送审与正式面试日程来源未能完整核验');

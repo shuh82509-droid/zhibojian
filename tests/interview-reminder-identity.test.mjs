@@ -5,8 +5,8 @@ import {buildInterviewReminderPreview} from '../lifecycle-engine.mjs';
 const date='2026-09-25';
 const source=events=>({
   calendarStatus:'已连接：正式面试日历已读取详情事件。',
-  coverage:{chatMessages:2,capped:false,reactionStatus:'已核验'},
-  boundaryCarryover:{status:'verified',date,submissionMessageCounts:{}},
+  coverage:{chatMessages:2,capped:false,reactionStatus:'已核验',chatSourceFingerprint:'a'.repeat(64)},
+  boundaryCarryover:{status:'verified',date,submissionMessageCounts:{},chatSourceFingerprint:'b'.repeat(64)},
   interviewEvents:{[date]:events},
   candidates:[
     {name:'测试甲',inSubmissionCohort:true,

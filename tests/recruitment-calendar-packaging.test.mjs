@@ -60,7 +60,7 @@ test('calendar date-scoped reminder isolates a later long title but never an und
     submissionEvidence:{name:'周小雨',sourceId:'om_submission',date:'2026-09-25',initialReview:'OK'}};
   const linked=linkVerifiedRecruitmentCalendar([candidate],day26.events,{周小雨:1},{sourceReady:true});
   const reminderSnapshot={cycle,calendarStatus:day26.status,
-    coverage:{capped:false,chatMessages:1,reactionStatus:'已核验'},
+    coverage:{capped:false,chatMessages:1,reactionStatus:'已核验',chatSourceFingerprint:'a'.repeat(64)},
     candidates:linked.candidates,submissionMessageCounts:{周小雨:1},interviewEvents:day26.events};
   const preview=buildInterviewReminderPreview(reminderSnapshot,'2026-09-26');
   assert.equal(preview.status,'preview',preview.reason);
@@ -163,7 +163,7 @@ test('same-name daily report arrival cannot promote a current-cycle submitted ca
       boundary:{status:'verified'}}),
     recruitmentReviewerOpenId:'ou_reviewer',recruitmentCalendarId:'calendar_official',
     chinaDateFor:()=> '2026-09-24',structuredClone,Date,sanitizeRecruitmentOutcome,
-    completeRecruitmentChatSource:()=>true,
+     completeRecruitmentChatSource:()=>true,recruitmentChatSourceFingerprint:()=> 'a'.repeat(64),
   };
   const snapshot=vm.runInNewContext(`${source.slice(start,end)}\nrecruitmentCycleSnapshot`,context);
   const result=await snapshot('2026-09');

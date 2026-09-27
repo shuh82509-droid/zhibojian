@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
-import {parseRecruitmentMessages, recruitmentBoundaryCycleRange, linkVerifiedRecruitmentCalendar} from './lifecycle-engine.mjs';
+import {parseRecruitmentMessages, recruitmentBoundaryCycleRange, linkVerifiedRecruitmentCalendar,
+  inspectableRecruitmentReminderChat} from './lifecycle-engine.mjs';
 
 const messageId = value => /^om_[A-Za-z0-9_]+$/u.test(String(value || ''));
 const eventId = value => typeof value === 'string' && value.length > 0 && value.length <= 300 && !/[\s\u0000-\u001f]/u.test(value);
@@ -22,6 +23,26 @@ const completeRecruitmentChat = (chat, recruitmentChatId, cycle) =>
     && Number.isFinite(Date.parse(item?.createdAt||''))
     && Date.parse(item.createdAt)/1000>=cycle.startTime
     && Date.parse(item.createdAt)/1000<cycle.endTime+1);
+
+const nonBodyMessageTypes=new Set(['system','notice','reaction']);
+
+/** A signed interview result may use only the complete, shape-checked source
+ * body returned by a fresh Feishu read. A link to an opaque body is not proof
+ * that the machine can rule out another person or a later changed outcome.
+ */
+export function verifiedReadableContent(item) {
+  const body=item?.reviewText;
+  return Boolean(item&&['text','post'].includes(item.type)
+    && item.parseError===false&&item.contentShapeVerified===true
+    && typeof body==='string'&&body.trim()&&body.length<=8000
+    && typeof item.text==='string'&&item.text===body
+    && !item.textTruncated&&!item.reviewTextTruncated
+    && !item.hasMediaOrResource&&!item.resources?.length
+    && inspectableRecruitmentReminderChat({messages:[item]}));
+}
+
+const verifiedReadableRecruitmentChat=chat=>Array.isArray(chat?.messages)
+  && chat.messages.every(item=>nonBodyMessageTypes.has(item?.type)||verifiedReadableContent(item));
 
 export const formalRecruitmentCalendarEvents = events => Object.fromEntries(
   Object.entries(events && typeof events==='object' ? events : {}).map(([date,items])=>[date,
@@ -174,7 +195,7 @@ export function sanitizeRecruitmentOutcome(snapshot,{
  */
 export function inspectInterviewPost(message, candidateName, knownNames = []) {
   const text = String(message?.reviewText ?? message?.text ?? '').replace(/\r/gu,'');
-  if (message?.type !== 'post' || !text || text.length > 8000
+  if (message?.type !== 'post' || !verifiedReadableContent(message) || !text || text.length > 8000
     || message?.textTruncated || message?.reviewTextTruncated
     || message?.hasMediaOrResource || message?.resources?.length)
     return pending('本人面评必须是完整、可核验的招聘群富文本帖');
@@ -249,7 +270,7 @@ export function verifyInterviewBindingSources(snapshot, chat, payload, {
     || snapshot?.coverage?.capped || snapshot?.coverage?.reactionStatus!=='已核验')
     return pending('招聘周期、表情或正式日历来源尚未完整核验');
   const cycle=snapshot.cycle;
-  if(!completeRecruitmentChat(chat,recruitmentChatId,cycle))
+  if(!completeRecruitmentChat(chat,recruitmentChatId,cycle)||!verifiedReadableRecruitmentChat(chat))
     return pending('招聘群当前周期消息不完整');
   const matches=(snapshot.candidates||[]).filter(item=>
     (item?.inSubmissionCohort||item?.boundaryCarryover)&&item.name===name);
@@ -268,7 +289,8 @@ export function verifyInterviewBindingSources(snapshot, chat, payload, {
       || snapshot.boundaryCarryover?.sourceCycle!==previousCycle.month
       || candidate.boundaryCarryoverDate!==cycle.startDate
       || candidate.calendarEvidence?.date!==cycle.startDate
-      || !completeRecruitmentChat(previousChat,recruitmentChatId,previousCycle))
+      || !completeRecruitmentChat(previousChat,recruitmentChatId,previousCycle)
+      || !verifiedReadableRecruitmentChat(previousChat))
       return pending('跨周期首日的上周期招聘群、正式日历或本人身份来源不完整');
     const prior=parseRecruitmentMessages(previousChat.messages.map(item=>
       ({...item,text:item.reviewText??item.text})),{reviewerOpenId});
@@ -296,10 +318,7 @@ export function verifyInterviewBindingSources(snapshot, chat, payload, {
     return pending('同一送审消息对应多个候选人');
   if(carry){
     const selected=rawSubmissions[0];
-    if(!['text','post'].includes(selected?.type)||selected?.textTruncated
-      ||selected?.reviewTextTruncated||selected?.hasMediaOrResource
-      ||selected?.resources?.length||!String(selected?.text||'').trim()
-      ||!String(selected?.reviewText??selected?.text??'').trim())
+    if(!verifiedReadableContent(selected))
       return pending('上周期送审原文含截断或不可核验内容，跨周期绑定待人工核验');
     // Any unreadable group message could conceal a second submission, even
     // when it was sent by a recruiter other than the reviewer.
@@ -330,6 +349,8 @@ export function verifyInterviewBindingSources(snapshot, chat, payload, {
   if(posts.length!==1||posts[0].sender?.id!==reviewerOpenId||posts[0].chatId!==recruitmentChatId
     ||Date.parse(posts[0].createdAt)<endAt||sourceDate(posts[0].createdAt)>today)
     return pending('面评帖并非倪梦萍本人在面试后发布于指定招聘群');
+  if(!verifiedReadableContent(rawSubmissions[0])||!verifiedReadableContent(posts[0]))
+    return pending('送审或本人面评原文不能完整核验');
   const post=inspectInterviewPost(posts[0],name,(snapshot.candidates||[]).map(item=>item.name));
   if(post.status!=='ready')return post;
   if(carry&&chat.messages.some(item=>item?.messageId!==postId

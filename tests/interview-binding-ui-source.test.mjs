@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import vm from 'node:vm';
+import {verifiedReadableContent} from '../interview-binding.mjs';
 
 const reviewer='ou_verified_reviewer';
 const chatId='oc_recruitment';
@@ -11,10 +12,10 @@ const html=await readFile(new URL('../exports/recruitment-pool/recruitment-dashb
 const submissionText='候选人：周小雨\n'+('送审说明与确认信息。'.repeat(30));
 const postText='面试结果：周小雨\n'+('具体面试评价与待改善事项。'.repeat(30))+'\n结论：不通过';
 function fixture(){
-  const submission={messageId:'om_submission',chatId,type:'text',text:submissionText,
-    sender:{id:'ou_recruiter'},resources:[],appLink:''};
-  const post={messageId:'om_post',chatId,type:'post',text:postText,
-    sender:{id:reviewer},resources:[],appLink:''};
+  const submission={messageId:'om_submission',chatId,type:'text',text:submissionText,reviewText:submissionText,
+    sender:{id:'ou_recruiter'},resources:[],appLink:'',parseError:false,contentShapeVerified:true};
+  const post={messageId:'om_post',chatId,type:'post',text:postText,reviewText:postText,
+    sender:{id:reviewer},resources:[],appLink:'',parseError:false,contentShapeVerified:true};
   const snapshot={cycle:{month:'2026-09'},interviewBindings:[],candidates:[{
     name:'周小雨',inSubmissionCohort:true,
     submissionEvidence:{sourceId:submission.messageId,date:'2026-09-23'},
@@ -32,6 +33,7 @@ function optionsFor(snapshot,chat){
       calendarEventId:'evt_one',calendarDate:'2026-09-24',postMessageId:'om_post',
       postDate:'2026-09-24',outcome:'fail',sourceFingerprint:'fingerprint'}),
     recruitmentReviewerOpenId:reviewer,recruitmentCalendarId:'cal_one',
+    verifiedReadableContent,
     feishuChats:{recruitment:{chatId}},chinaDateFor:()=> '2026-09-25',
   })(snapshot,chat);
 }
@@ -49,6 +51,7 @@ function submitFor(snapshot,chat){
       submissionMessageId:'om_submission',calendarId:'cal_one',calendarEventId:'evt_one',
       postMessageId:'om_post',postDate:'2026-09-24',outcome:'fail',sourceFingerprint:'fingerprint'}),
     feishuChats:{recruitment:{chatId}},recruitmentCalendarId:'cal_one',chinaDateFor:()=> '2026-09-25',
+    verifiedReadableContent,
     readRecruitmentInterviewJournal:async()=>({entries:[]}),
     writeDurableJsonAtomic:async()=>{writes+=1},
     interviewBindingPath:'/candidate-only',randomUUID:()=> 'record-one',URL,
@@ -95,6 +98,20 @@ test('面评帖媒体即使有原帖链接也不能证明机器读到了完整�
   assert.equal(optionsFor(snapshot,chat).length,0);
 });
 
+test('非法 JSON 或隐藏可见节点的来源不能展示面评选项，也不能绕过页面签署',async()=>{
+  for(const targetName of ['submission','post'])for(const degraded of [
+    {parseError:true,contentShapeVerified:false},
+    {parseError:false,contentShapeVerified:false},
+  ]){
+    const entry=fixture();
+    Object.assign(entry[targetName],degraded);
+    assert.equal(optionsFor(entry.snapshot,entry.chat).length,0);
+    const attempt=submitFor(entry.snapshot,entry.chat);
+    await assert.rejects(attempt.submit(attempt.req,{}),error=>error.status===409);
+    assert.equal(attempt.writes(),0);
+  }
+});
+
 test('飞书富文本中的媒体标签与资源键均标记；非本人 GET 在取源前清空选项',()=>{
   const code=source.slice(source.indexOf('  function messageHasMediaOrResource('),source.indexOf('  const source = feishuChats[sourceKey];'));
   const hasMedia=vm.runInNewContext(`${code}\nmessageHasMediaOrResource`);
@@ -118,8 +135,10 @@ test('审阅文本保留重复段落与原始换行，不静默去重或截断�
   assert.equal(extract(rich,8001,false),'标题\n同一句\n\n同一句\n');
   const {snapshot,chat,submission}=fixture();
   submission.reviewText='完整第一段\n完整第二段';
+  submission.text=submission.reviewText;
   assert.equal(optionsFor(snapshot,chat)[0].submissionText,submission.reviewText);
   submission.reviewText='超长'.repeat(4001);
+  submission.text=submission.reviewText;
   assert.equal(optionsFor(snapshot,chat).length,0);
 });
 

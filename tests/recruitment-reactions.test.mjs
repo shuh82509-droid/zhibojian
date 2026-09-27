@@ -5,7 +5,8 @@ import {createHash} from 'node:crypto';
 import vm from 'node:vm';
 import {activeChatMessages,readCompleteMessageReactions,linkVerifiedRecruitmentCalendar,
   linkRecruitmentCalendarAcrossBoundary,recruitmentCycleMonthForDate,recruitmentCycleRange,
-  recruitmentBoundaryCycleRange,parseRecruitmentMessages,buildInterviewReminderPreview} from '../lifecycle-engine.mjs';
+  recruitmentBoundaryCycleRange,parseRecruitmentMessages,buildInterviewReminderPreview,
+  inspectableRecruitmentReminderChat} from '../lifecycle-engine.mjs';
 import {formalRecruitmentCalendarEvents,sanitizeRecruitmentOutcome} from '../interview-binding.mjs';
 
 const reaction=(operator_id,emoji_type,index)=>({operator:{operator_id},emoji_type,action_time:String(1700000000000+index)});
@@ -240,8 +241,9 @@ test('service reads the exact previous full cycle only for a first-day formal in
   const context={feishuChats:{recruitment:{chatId:'oc_recruitment'}},recruitmentBoundaryCycleRange,
     getChatMessages:async(key,limit,window)=>{calls.push({key,limit,window});return prior;},
     parseRecruitmentMessages:()=>priorParsed,recruitmentReviewerOpenId:'ou_reviewer',
-    interviewBindingEnabled:false,
-     linkRecruitmentCalendarAcrossBoundary,formalRecruitmentCalendarEvents};
+     interviewBindingEnabled:false,inspectableRecruitmentReminderChat,
+       linkRecruitmentCalendarAcrossBoundary,formalRecruitmentCalendarEvents,
+      recruitmentChatSourceFingerprint:()=> 'b'.repeat(64)};
   const link=vm.runInNewContext(`${serverSource.slice(start,end)}\nlinkRecruitmentCalendarWithBoundary`,context);
   const options={fresh:true,advanceStage:true};
   const verified=await link([], {submissionMessageCounts:{}},current,calendar,recruitmentCycleRange('2026-10'),options);
@@ -269,9 +271,28 @@ test('service reads the exact previous full cycle only for a first-day formal in
   }
   prior={...current,messages:[previousMessage],sourceMessageCount:1};
   const badCurrent=await link([], {submissionMessageCounts:{}},{...current,truncated:true},calendar,
-    recruitmentCycleRange('2026-10'),options);
+     recruitmentCycleRange('2026-10'),options);
   assert.equal(badCurrent.boundary.status,'pending');
   assert.equal(badCurrent.pendingCount,null,'an unreadable current source must not be converted to zero pending');
+  const originalText='求职者【周小雨】是否符合【主播】的邀约标准';
+  const inspectedPrevious={...previousMessage,type:'text',text:originalText,reviewText:originalText,
+    parseError:false,contentShapeVerified:true};
+  prior={...current,messages:[inspectedPrevious],sourceMessageCount:1};
+  calls=[];
+  const strictOptions={...options,requireReminderProof:true};
+  const strict=await link([], {submissionMessageCounts:{}},current,calendar,
+    recruitmentCycleRange('2026-10'),strictOptions);
+  assert.equal(strict.boundary.status,'verified');
+  assert.equal(calls[0].window.includeReviewText,true,'timed proof reads undeduplicated text');
+  prior={...current,messages:[inspectedPrevious,{...inspectedPrevious,messageId:'om_hidden',
+    type:'image',text:'',reviewText:''}],sourceMessageCount:2};
+  assert.equal((await link([], {submissionMessageCounts:{}},current,calendar,
+    recruitmentCycleRange('2026-10'),strictOptions)).boundary.status,'pending');
+  prior={...current,messages:[inspectedPrevious],sourceMessageCount:1};
+  const opaqueCurrent={...current,messages:[{...inspectedPrevious,messageId:'om_current_hidden',
+    createdAt:'2026-09-25T01:00:00.000Z',type:'image',text:'',reviewText:''}],sourceMessageCount:1};
+  assert.equal((await link([], {submissionMessageCounts:{}},opaqueCurrent,calendar,
+    recruitmentCycleRange('2026-10'),strictOptions)).boundary.status,'pending');
   calls=[];
   await link([], {submissionMessageCounts:{}},current,{status:calendar.status,events:{}},recruitmentCycleRange('2026-10'),options);
   assert.equal(calls.length,0,'without a first-day event there is no prior-cycle chat request');
@@ -495,8 +516,8 @@ test('first-day report for a prior-cycle candidate stays unique and appears in t
   assert.equal(result.candidates[0].stage,'pending_feedback');
   assert.equal(result.candidates[0].evaluationEvidence.sourceId,'om_current_review');
   const preview=buildInterviewReminderPreview({cycle:recruitmentCycleRange('2026-10'),
-    candidates:result.candidates,boundaryCarryover:{...result.boundary,chatMessages:1},
-    calendarStatus:'已连接：正式面试日历',coverage:{capped:false,reactionStatus:'已核验',chatMessages:1},
+    candidates:result.candidates,boundaryCarryover:{...result.boundary,chatMessages:1,chatSourceFingerprint:'b'.repeat(64)},
+    calendarStatus:'已连接：正式面试日历',coverage:{capped:false,reactionStatus:'已核验',chatMessages:1,chatSourceFingerprint:'a'.repeat(64)},
     submissionMessageCounts:current.submissionMessageCounts,
     interviewEvents:{'2026-09-25':[calendarEvent('周小雨面试','cal_one')]}},'2026-09-25');
   assert.equal(preview.status,'preview',preview.reason);

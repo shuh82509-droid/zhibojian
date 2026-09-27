@@ -119,7 +119,7 @@ test('interview reminder requires a verified calendar and exact candidate match'
   const date = '2026-09-23';
   const snapshot = {
     calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',
-    coverage:{capped:false,chatMessages:12,reactionStatus:'已核验'},
+    coverage:{capped:false,chatMessages:12,reactionStatus:'已核验',chatSourceFingerprint:'a'.repeat(64)},
     candidates:[{name:'周小雨',inSubmissionCohort:true,
       submissionEvidence:{sourceId:'om_zhou',date:'2026-09-22',initialReview:'OK'},
       calendarEvidence:{eventId:'e1',date}}],
@@ -144,7 +144,7 @@ test('interview reminder requires a verified calendar and exact candidate match'
 });
 
 test('interview title does not mistake a Chinese name prefix for another candidate', () => {
-  const date='2026-09-24',snapshot={calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',coverage:{capped:false,chatMessages:1,reactionStatus:'已核验'},
+  const date='2026-09-24',snapshot={calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',coverage:{capped:false,chatMessages:1,reactionStatus:'已核验',chatSourceFingerprint:'a'.repeat(64)},
     candidates:[{name:'王丽',inSubmissionCohort:true,submissionEvidence:{sourceId:'om_wangli',date:'2026-09-23',initialReview:'OK'},
       calendarEvidence:{eventId:'e1',date}}],submissionMessageCounts:{王丽:1},
     interviewEvents:{[date]:[{name:'王丽娜面试 · 14:00',status:'calendar',source:'正式面试日历',eventId:'e1'}]}};
@@ -176,9 +176,9 @@ test('17:00 first-day preview includes only fully verified prior-cycle carryover
     submissionEvidence:{name:'周小雨',date:'2026-09-23',sourceId:'om_sep23',initialReview:'OK'},
     calendarEvidence:{date,eventId:'cal_one',title:'周小雨面试 · 14:00'}};
   const snapshot={cycle:{month:'2026-10'},calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',
-    coverage:{capped:false,chatMessages:0,reactionStatus:'已核验'},
+     coverage:{capped:false,chatMessages:0,reactionStatus:'已核验',chatSourceFingerprint:'a'.repeat(64)},
     candidates:[candidate],submissionMessageCounts:{},
-    boundaryCarryover:{status:'verified',date,sourceCycle:'2026-09',chatMessages:386,matchedCount:1,
+     boundaryCarryover:{status:'verified',date,sourceCycle:'2026-09',chatMessages:386,matchedCount:1,chatSourceFingerprint:'b'.repeat(64),
       submissionMessageCounts:{周小雨:1}},
     interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',source:'正式面试日历',eventId:'cal_one'}]}};
   const carried=buildInterviewReminderPreview(snapshot,date);
@@ -222,9 +222,9 @@ test('17:00 first-day preview includes a verified mixed current and prior-cycle 
   assert.equal(linked.boundary.status,'verified');
   assert.equal(linked.boundary.matchedCount,2,'the real linker counts all first-day events, not just carryovers');
   const snapshot={cycle:recruitmentCycleRange('2026-10'),calendarStatus:'已连接：正式面试日历已读取 2 条详情事件。',
-    coverage:{capped:false,chatMessages:1,reactionStatus:'已核验'},
+     coverage:{capped:false,chatMessages:1,reactionStatus:'已核验',chatSourceFingerprint:'a'.repeat(64)},
     candidates:linked.candidates,submissionMessageCounts:{林小满:1},interviewEvents:events,
-    boundaryCarryover:{...linked.boundary,chatMessages:1}};
+     boundaryCarryover:{...linked.boundary,chatMessages:1,chatSourceFingerprint:'b'.repeat(64)}};
   const result=buildInterviewReminderPreview(snapshot,date);
   assert.equal(result.status,'preview',result.reason);
   assert.deepEqual(result.matches,[{name:'林小满',eventId:'cal_current'},{name:'周小雨',eventId:'cal_prior'}]);
@@ -250,9 +250,9 @@ test('17:00 first-day carryover stays verified despite an unrelated later ambigu
   assert.equal(linked.boundary.matchedCount,1);
   assert.ok(linked.pendingCount>0,'the later ambiguous event must remain pending');
   const snapshot={cycle:recruitmentCycleRange('2026-10'),calendarStatus:'已连接：正式面试日历已读取 2 条详情事件。',
-    coverage:{capped:false,chatMessages:1,reactionStatus:'已核验'},
+     coverage:{capped:false,chatMessages:1,reactionStatus:'已核验',chatSourceFingerprint:'a'.repeat(64)},
     candidates:linked.candidates,submissionMessageCounts:{王丽娜:1},interviewEvents:events,
-    boundaryCarryover:{...linked.boundary,chatMessages:1}};
+     boundaryCarryover:{...linked.boundary,chatMessages:1,chatSourceFingerprint:'b'.repeat(64)}};
   const firstDayPreview=buildInterviewReminderPreview(snapshot,firstDay);
   assert.equal(firstDayPreview.status,'preview',firstDayPreview.reason);
   assert.deepEqual(firstDayPreview.matches,[{name:'周小雨',eventId:'cal_prior'}]);
