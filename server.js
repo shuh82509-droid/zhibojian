@@ -20,6 +20,7 @@ import {inspectInterviewPost, verifyInterviewBindingSources, projectInterviewBin
 import { reminderScheduleConfig } from './reminder-gates.mjs';
 import { createCalendarAuthHandler } from './calendar-auth-http.mjs';
 import { createCoachCalendarAuth } from './coach-calendar-auth.mjs';
+import { createCoachCalendarInviteStore } from './coach-calendar-invites.mjs';
 
 const port = Number(process.env.PORT || 3000);
 const recoveryReadOnly = process.env.RECOVERY_READ_ONLY === '1';
@@ -197,11 +198,17 @@ const recruitmentCalendarReader = createCalendarUserReader({appId,appSecret,cale
   encryptionKey:process.env.RECRUITMENT_CALENDAR_OAUTH_KEY || ''});
 const calendarAuth = createCalendarAuthHandler({reader:recruitmentCalendarReader,basePath,readOnly:recoveryReadOnly,json});
 const coachCalendarAuthEnabled = !recoveryReadOnly && process.env.COACH_CALENDAR_USER_AUTH_ENABLED === 'true';
+const coachCalendarPublicConsentEnabled = !recoveryReadOnly && process.env.COACH_CALENDAR_PUBLIC_CONSENT_ENABLED === 'true';
+const coachCalendarRedirectUri = process.env.RECRUITMENT_CALENDAR_OAUTH_REDIRECT_URI || '';
+const coachCalendarInvitations = createCoachCalendarInviteStore({
+  path:join(lifecycleDir,'coach-calendar-invites.json'),
+  signingKey:process.env.RECRUITMENT_CALENDAR_OAUTH_KEY || '',
+});
 const coachCalendarReaders = Object.fromEntries(Object.keys(coachNames).map(room => [room,createCalendarUserReader({
   appId,appSecret,calendarId:coachCalendarIds[room],expectedOpenId:verifiedCoachOpenIds[room],ownerLabel:coachNames[room],
   requireOwnPrimaryCalendar:true,
   allowInstanceView:true,
-  redirectUri:process.env.RECRUITMENT_CALENDAR_OAUTH_REDIRECT_URI || '',
+  redirectUri:coachCalendarRedirectUri,
   storePath:join(lifecycleDir,`coach-calendar-${room}.json`),
   encryptionKey:process.env.RECRUITMENT_CALENDAR_OAUTH_KEY || '',
 })]));
@@ -209,6 +216,8 @@ const coachCalendarAuth = createCoachCalendarAuth({
   readers:coachCalendarReaders,coachNames,employeeNos:verifiedCoachEmployeeNos,openIds:verifiedCoachOpenIds,
   basePath,enabled:coachCalendarAuthEnabled,readOnly:recoveryReadOnly,json,
   verifyActor:async(room,openId,name,employeeNo) => verifiedLiveCenterPerson(openId,name,employeeNo),
+  invitations:coachCalendarInvitations,publicEnabled:coachCalendarPublicConsentEnabled,publicCallbackUrl:coachCalendarRedirectUri,
+  authorizeIssuer:async auth => Boolean(auth?.ok && auth.mode==='central' && !auth.degraded && auth.permissions?.super_admin),
 });
 const communicationProductSources = Object.freeze({
   '水润面膜': [
@@ -2907,7 +2916,21 @@ async function serveStatic(res, pathname) {
   if (requestPath === '/') requestPath = '/index.html';
   const filePath = normalize(join(publicDir, requestPath));
   if (!filePath.startsWith(publicDir)) { res.writeHead(403); return res.end(); }
-  try { const info=await stat(filePath); const target=info.isDirectory()?join(filePath,'index.html'):filePath; const extension=extname(target).toLowerCase(); const content=await readFile(target); const headers={'Content-Type':mime[extension] || 'application/octet-stream','X-Content-Type-Options':'nosniff'}; if(['.html','.css','.js'].includes(extension))headers['Cache-Control']='no-store';if(requestPath==='/index.html')Object.assign(headers, frameHeaders); res.writeHead(200, headers); res.end(extension==='.html' ? withRecoveryBanner(content) : content); } catch { res.writeHead(404, {'Content-Type':'text/plain; charset=utf-8'}); res.end('Not found'); }
+  try {
+    const info=await stat(filePath),target=info.isDirectory()?join(filePath,'index.html'):filePath;
+    const extension=extname(target).toLowerCase(),content=await readFile(target);
+    const rendered=extension==='.html' ? withRecoveryBanner(content) : content;
+    const headers={'Content-Type':mime[extension] || 'application/octet-stream','X-Content-Type-Options':'nosniff'};
+    if(['.html','.css','.js'].includes(extension))headers['Cache-Control']='no-store';
+    if(requestPath==='/index.html')Object.assign(headers,frameHeaders);
+    if(requestPath==='/coach-calendar-admin.html') {
+      const scriptHashes=[...String(rendered).matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/giu)]
+        .map(match=>`'sha256-${createHash('sha256').update(match[1]).digest('base64')}'`);
+      Object.assign(headers,{'X-Frame-Options':'SAMEORIGIN','Referrer-Policy':'no-referrer',
+        'Content-Security-Policy':`default-src 'none'; script-src ${scriptHashes.join(' ')}; style-src 'unsafe-inline'; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'`});
+    }
+    res.writeHead(200,headers);res.end(rendered);
+  } catch { res.writeHead(404, {'Content-Type':'text/plain; charset=utf-8'}); res.end('Not found'); }
 }
 async function serveIndex(res, auth) {
   try {
@@ -2954,6 +2977,7 @@ async function handleRequest(req, res) {
     if(await coachCalendarAuth.handleCallback(req,res,url))return;
     return calendarAuth(req,res,url,routePath,null);
   }
+  if(await coachCalendarAuth.handlePublic(req,res,routePath,url))return;
   if (routePath === '/auth/login' || routePath === '/auth/callback') return redirect(res, marketingHubUrl);
   const auth = await authorizeCentral(req);
   if (!auth.ok) {
@@ -2986,7 +3010,7 @@ async function handleRequest(req, res) {
   if (routePath.startsWith('/api/anchor-development')) return anchorDevelopmentApi(req,res,routePath,auth);
   if (routePath.startsWith('/api/lifecycle/calendar-auth/')) return calendarAuth(req,res,url,routePath,auth);
   if (routePath.startsWith('/api/lifecycle/coach-calendar-auth/')) {
-    if(await coachCalendarAuth.handleApi(req,res,routePath,auth))return;
+    if(await coachCalendarAuth.handleApi(req,res,routePath,auth,url))return;
   }
   if (routePath.startsWith('/api/lifecycle/')) return lifecycleApi(req,res,url,routePath,auth);
   if (routePath === '/modules/tasks' || routePath.startsWith('/modules/tasks/')) return proxyCollaboration(req,res,routePath,url.search);

@@ -12,6 +12,7 @@ COPY server.js ./
 COPY calendar-user-reader.mjs ./
 COPY calendar-auth-http.mjs ./
 COPY coach-calendar-auth.mjs ./
+COPY coach-calendar-invites.mjs ./
 COPY frame-policy.mjs ./
 COPY lifecycle-engine.mjs ./
 COPY interview-binding.mjs ./

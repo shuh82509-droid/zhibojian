@@ -12,6 +12,7 @@ import {createCalendarUserReader} from './calendar-user-reader.mjs';
 const names={'官旗':'曾泳淇','优选':'李爽'};
 const numbers={'官旗':'FD-024035','优选':'FD-028493'};
 const openIds={'官旗':'ou_guanqi','优选':'ou_youxuan'};
+const callbackUrl='https://hub.fandow.com/modules/live-room-management/api/lifecycle/calendar-auth/callback';
 function response(){
   return {headers:{},status:0,body:null,setHeader(k,v){this.headers[k]=v;},writeHead(status,headers){this.status=status;Object.assign(this.headers,headers);},end(body){this.body=body;}};
 }
@@ -71,12 +72,12 @@ test('共享回调仅消费自身 state 和 HttpOnly cookie，未匹配状态留
   await f.auth.handleApi(f.req('官旗'),started,'/api/lifecycle/coach-calendar-auth/start',f.person('官旗'));
   const state=started.headers['Set-Cookie'].match(/=([^;]+)/)[1];
   const unknown=response();
-  assert.equal(await f.auth.handleCallback({method:'GET',headers:{cookie:`live_coach_calendar_oauth_state=${state}`}},unknown,new URL('https://hub.fandow.com/callback?state=interview-state&code=ok')),false);
+  assert.equal(await f.auth.handleCallback({method:'GET',headers:{cookie:`live_coach_calendar_oauth_state=${state}`}},unknown,new URL(`${callbackUrl}?state=interview-state&code=ok`)),false);
   const result=response();
-  assert.equal(await f.auth.handleCallback({method:'GET',headers:{cookie:`live_coach_calendar_oauth_state=${state}`}},result,new URL(`https://hub.fandow.com/callback?state=${state}&code=ok`)),true);
+  assert.equal(await f.auth.handleCallback({method:'GET',headers:{cookie:`live_coach_calendar_oauth_state=${state}`}},result,new URL(`${callbackUrl}?state=${state}&code=ok`)),true);
   assert.equal(result.status,200);assert.match(result.body,/本人日历授权完成/);
   assert.deepEqual(f.calls,[{room:'官旗',code:'ok',state,cookieState:state}]);
-  assert.equal(await f.auth.handleCallback({method:'GET',headers:{}},response(),new URL(`https://hub.fandow.com/callback?state=${state}&code=ok`)),false);
+  assert.equal(await f.auth.handleCallback({method:'GET',headers:{}},response(),new URL(`${callbackUrl}?state=${state}&code=ok`)),false);
 });
 test('跨站发起、错误 cookie、候选只读和功能关闭均不保存授权',async()=>{
   const f=fixture(),bad=f.req('官旗');bad.headers.origin='https://evil.example';
@@ -84,7 +85,7 @@ test('跨站发起、错误 cookie、候选只读和功能关闭均不保存授�
   assert.equal(denied.status,403);
   const started=response();await f.auth.handleApi(f.req('优选'),started,'/api/lifecycle/coach-calendar-auth/start',f.person('优选'));
   const state=started.headers['Set-Cookie'].match(/=([^;]+)/)[1];
-  const mismatched=response();await f.auth.handleCallback({method:'GET',headers:{cookie:'live_coach_calendar_oauth_state=wrong'}},mismatched,new URL(`https://hub.fandow.com/callback?state=${state}&code=ok`));
+  const mismatched=response();await f.auth.handleCallback({method:'GET',headers:{cookie:'live_coach_calendar_oauth_state=wrong'}},mismatched,new URL(`${callbackUrl}?state=${state}&code=ok`));
   assert.equal(mismatched.status,400);assert.equal(f.calls.length,1);
   for(const option of [{enabled:false},{readOnly:true}]){
     const locked=fixture(option),res=response();await locked.auth.handleApi(locked.req('官旗'),res,'/api/lifecycle/coach-calendar-auth/start',locked.person('官旗'));

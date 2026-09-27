@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>教练本人授权邀请 · WIS 直播中心</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f6faf8;color:#173c30;font:15px/1.7 system-ui,"Microsoft YaHei",sans-serif}main{max-width:780px;margin:40px auto;padding:0 20px}.card{background:white;border:1px solid #d9e8df;border-radius:18px;padding:28px}h1{font-size:25px;margin:0 0 8px}p,.hint{color:#526b5e}.status{margin:18px 0;border:1px solid #e0eae2;border-radius:12px;padding:14px;background:#f8fbf9}label{display:block;font-weight:700;margin:16px 0 8px}select,textarea{width:100%;border:1px solid #c9ddd0;border-radius:8px;padding:10px;font:inherit;background:#fff;color:#173c30}textarea{min-height:80px;overflow-wrap:anywhere;resize:vertical}button{border:0;border-radius:9px;padding:11px 18px;background:#176147;color:white;font-weight:700;cursor:pointer;margin-top:14px}button:disabled{opacity:.5;cursor:not-allowed}.hint{font-size:13px}
+</style></head><body><main><section class="card"><h1>教练本人日历授权邀请</h1>
+<p>此入口仅供已登录中枢的超级管理员签发四位已核验教练的一次性只读授权链接；签发不会替教练授权，也不会自动发送消息。</p>
+<div class="status" id="status" role="status" aria-live="polite">正在核验管理员权限……</div>
+<label for="room">直播间</label><select id="room" disabled><option value="官旗">官旗 · 曾泳淇</option><option value="品牌精选">品牌精选 · 梁瑜涵</option><option value="优选">优选 · 李爽</option><option value="王鸥美肤">王鸥美肤 · 鲍敏纳</option></select>
+<button id="issue" type="button" disabled>签发十分钟一次性邀请</button>
+<div id="result" hidden><label for="invite">本人邀请链接（仅对应教练本人可完成授权）</label><textarea id="invite" readonly spellcheck="false"></textarea><p id="expiry" class="hint"></p><p class="hint">仅在已批准的一对一飞书会话中发给上方对应教练本人；不要发群、不要转给其他人。链接仅可使用一次，若过期需重新签发。请在教练本人完成飞书授权后核验状态。</p></div>
+</section></main><script>
+const root=location.pathname.replace(/coach-calendar-admin\.html$/,'');
+const status=document.getElementById('status'),room=document.getElementById('room'),issue=document.getElementById('issue'),result=document.getElementById('result'),invite=document.getElementById('invite'),expiry=document.getElementById('expiry');
+async function init(){try{const response=await fetch(root+'api/session',{credentials:'same-origin',cache:'no-store'}),data=await response.json();if(!response.ok||!data.permissions?.super_admin)throw Error('仅已核验的中枢超级管理员可签发邀请。');status.textContent='管理员权限已核验。签发前请选择正确的直播间。';room.disabled=false;issue.disabled=false}catch(error){status.textContent=error.message||'管理员权限核验失败。'}}
+issue.onclick=async()=>{issue.disabled=true;result.hidden=true;invite.value='';expiry.textContent='';status.textContent='正在核验教练在职身份并签发邀请……';try{const response=await fetch(root+'api/lifecycle/coach-calendar-auth/invite?room='+encodeURIComponent(room.value),{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'X-Requested-With':'XMLHttpRequest','Content-Type':'application/json'},body:'{}'}),data=await response.json();if(!response.ok)throw Error(data.error||'邀请签发失败');const link=new URL(data.inviteUrl);if(link.protocol!=='https:'||link.hostname!=='hub.fandow.com'||!link.pathname.endsWith('/api/lifecycle/coach-calendar-auth/consent')||!link.hash.startsWith('#invite='))throw Error('邀请地址未通过校验');invite.value=link.href;expiry.textContent='请一对一发给 '+data.coachName+'；链接有效期至 '+new Date(data.expiresAt).toLocaleString('zh-CN')+'。';result.hidden=false;status.textContent='一次性邀请已签发；当前页面未发送任何消息。';invite.focus();invite.select()}catch(error){status.textContent=error.message||'邀请签发失败。'}finally{issue.disabled=false}};
+init();
+</script></body></html>

@@ -14,6 +14,7 @@
   <button data-page="tasks">协同中心<span>实时违规 · 运营配置</span></button>
   <button data-page="materials">素材中心<span>内容物料 · 归档上传</span></button>
   <button data-page="coach-calendar">教练日历授权<span>四间负责人 · 本人只读授权</span></button>
+  <button data-page="coach-calendar-admin" hidden>教练授权邀请<span>仅中枢超级管理员 · 一次性本人链接</span></button>
  </nav><div class="spacer"></div><div class="user" aria-label="当前登录账号" aria-live="polite"><span class="user-avatar" id="platformAvatar">—</span><span class="user-copy"><b id="platformUserName">正在校验账号</b><small id="platformUserRole">中枢权限同步中</small></span></div></aside><main class="main"><header class="top"><div class="top-left"><b id="title">WIS直播中心总览</b><div class="module-tabs" id="lifeTabs"><button data-module="recruitment" class="active">招聘池</button><button data-module="anchors">主播档案</button></div></div><span class="badge">LIVE CENTER</span></header><section id="content"></section></main></div>
 <script id="platformSessionData" type="application/json">__PLATFORM_SESSION__</script>
 <script>
@@ -25,7 +26,7 @@ const platformAvatar=document.getElementById('platformAvatar');
 const platformUserName=document.getElementById('platformUserName');
 const platformUserRole=document.getElementById('platformUserRole');
 const basePath=location.pathname.endsWith('/')?location.pathname:location.pathname+'/';
-const pages={overview:['WIS直播中心总览',new URL('../data-center/?view=overview',location.href).href],business:['各直播间数据',new URL('../data-center/?view=data',location.href).href],recruitment:['主播全生命周期管理 · 招聘池',basePath+'modules/recruitment/recruitment-dashboard.html?embed=1&v=20260907a'],anchors:['主播全生命周期管理 · 主播档案',basePath+'modules/anchors/recruitment-dashboard.html?embed=1&v=20260907a'],schedule:['调度中心',new URL('../dispatch-center/?view=current',location.href).href],materials:['素材中心',basePath+'modules/materials/material-center.html?embed=1&v=20260907a'],tasks:['协同中心',basePath+'modules/tasks/'], 'coach-calendar':['教练本人日历授权',basePath+'coach-calendar.html']};
+const pages={overview:['WIS直播中心总览',new URL('../data-center/?view=overview',location.href).href],business:['各直播间数据',new URL('../data-center/?view=data',location.href).href],recruitment:['主播全生命周期管理 · 招聘池',basePath+'modules/recruitment/recruitment-dashboard.html?embed=1&v=20260907a'],anchors:['主播全生命周期管理 · 主播档案',basePath+'modules/anchors/recruitment-dashboard.html?embed=1&v=20260907a'],schedule:['调度中心',new URL('../dispatch-center/?view=current',location.href).href],materials:['素材中心',basePath+'modules/materials/material-center.html?embed=1&v=20260907a'],tasks:['协同中心',basePath+'modules/tasks/'], 'coach-calendar':['教练本人日历授权',basePath+'coach-calendar.html'],'coach-calendar-admin':['教练本人授权邀请',basePath+'coach-calendar-admin.html']};
 const placeholders={schedule:['调度中心','统一排班、资源位与规则预设'],materials:['素材中心','沟通稿、话术库与直播素材'],tasks:['协同中心','任务、提醒与审批协同']};
 const embeddedCss=`
   .app-shell > .sidebar,.ops-shell > .ops-sidebar,.layout > .side{display:none!important}
@@ -44,7 +45,7 @@ function openPage(key){lifeTabs.classList.remove('show');document.querySelectorA
 nav.onclick=e=>{const b=e.target.closest('button');if(b)openPage(b.dataset.page)};
 lifeTabs.onclick=e=>{const b=e.target.closest('button');if(b)openLifecycle(b.dataset.module)};
 window.addEventListener('message',event=>{const frame=content.querySelector('iframe');if(event.origin!==location.origin||event.source!==frame?.contentWindow)return;if(event.data?.type==='wis-live-navigate'&&event.data?.page==='schedule')openPage('schedule')});
-function renderPlatformSession(payload){const name=String(payload.user?.name||'已授权成员').trim();platformUserName.textContent=name;platformUserRole.textContent=payload.user?.role||'已授权成员';platformAvatar.textContent=[...name][0]||'用'}
+function renderPlatformSession(payload){const name=String(payload.user?.name||'已授权成员').trim();platformUserName.textContent=name;platformUserRole.textContent=payload.user?.role||'已授权成员';platformAvatar.textContent=[...name][0]||'用';nav.querySelector('[data-page="coach-calendar-admin"]').hidden=!payload.permissions?.super_admin}
 async function loadPlatformSession(){try{const embedded=String(document.getElementById('platformSessionData')?.textContent||'').trim();if(embedded&&embedded!=='__PLATFORM_SESSION__'){renderPlatformSession(JSON.parse(embedded));return}const response=await fetch(basePath+'api/session',{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(payload.error||'中枢账号校验失败');renderPlatformSession(payload)}catch(error){platformUserName.textContent='账号校验失败';platformUserRole.textContent=error.message||'请重新进入中枢'}}
 loadPlatformSession();
 const initial=(location.hash.slice(1)||'overview');if(initial==='lifecycle-anchors')openLifecycle('anchors');else if(initial==='lifecycle-recruitment'||initial==='recruitment'||initial==='anchors')openLifecycle(initial==='anchors'?'anchors':'recruitment');else openPage(initial==='morning'?'overview':initial==='data'?'business':initial);
