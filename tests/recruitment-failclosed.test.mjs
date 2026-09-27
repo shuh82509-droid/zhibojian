@@ -228,7 +228,7 @@ test('fresh, cycle, stored, status, refresh-failure and reminder-preview routes 
   assert.match(source,/module==='recruitment' \? sanitizeRecruitmentOutcome\(storedPrevious\)/u);
   assert.match(source,/snapshotStatus\(sanitizeRecruitmentOutcome\(recruitment\)\)/u);
   assert.match(source,/data:sanitizeRecruitmentOutcome\(stored\)/u);
-  assert.match(source,/buildInterviewReminderPreview\(await recruitmentCycleSnapshot\(cycleMonth\), date\)/u);
+  assert.match(source,/recruitmentCycleSnapshot\(cycleMonth,\{fresh:true,reminderDate:date\}\)/u);
   assert.match(source,/source:'正式面试日历',eventId:/u);
 });
 

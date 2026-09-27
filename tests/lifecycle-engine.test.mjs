@@ -7,7 +7,7 @@ import {
   parseLatestCoachSummary,
   parseEmploymentMessages,
   parseRecruitmentMessages,
-  buildInterviewReminderPreview, interviewReminderSourceFingerprint, reviewWeekFor, readVersionedCoachRankingRows, readVerifiedCoachInstances, coachCalendarFingerprint, assertCoachRankingRevision, parseWeeklyCoachRotation, countCoachReviews, coachReviewReminder, structuredAssessmentSummary, structuredAssessmentForCandidate, assessmentSubmissionKey, centralFeishuOpenId, isVerifiedLiveCenterContact, assessmentSubmissionFor, recruitmentCycleMonthForDate, recruitmentCycleRange, lifecycleReminderWindow
+  buildInterviewReminderPreview, interviewReminderSourceFingerprint, linkRecruitmentCalendarAcrossBoundary, reviewWeekFor, readVersionedCoachRankingRows, readVerifiedCoachInstances, coachCalendarFingerprint, assertCoachRankingRevision, parseWeeklyCoachRotation, countCoachReviews, coachReviewReminder, structuredAssessmentSummary, structuredAssessmentForCandidate, assessmentSubmissionKey, centralFeishuOpenId, isVerifiedLiveCenterContact, assessmentSubmissionFor, recruitmentCycleMonthForDate, recruitmentCycleRange, lifecycleReminderWindow
 } from '../lifecycle-engine.mjs';
 
 test('timed reminders send only inside their one-hour China-time windows',()=>{
@@ -169,28 +169,101 @@ test('17:00 interview source fingerprint is order independent but detects calend
   assert.notEqual(first,interviewReminderSourceFingerprint({...base,submissionMessageCounts:{王丽:2}},date));
 });
 
-test('17:00 first-day preview needs verified prior-cycle carryover and binds its source fingerprint',()=>{
+test('17:00 first-day preview includes only fully verified prior-cycle carryover and binds its source fingerprint',()=>{
   const date='2026-09-25';
   const candidate={name:'周小雨',inSubmissionCohort:false,boundaryCarryover:true,
+    boundaryCarryoverDate:date,boundarySourceCycle:'2026-09',
     submissionEvidence:{name:'周小雨',date:'2026-09-23',sourceId:'om_sep23',initialReview:'OK'},
-    calendarEvidence:{date,eventId:'cal_one'}};
-  const snapshot={calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',
+    calendarEvidence:{date,eventId:'cal_one',title:'周小雨面试 · 14:00'}};
+  const snapshot={cycle:{month:'2026-10'},calendarStatus:'已连接：正式面试日历已读取 1 条详情事件。',
     coverage:{capped:false,chatMessages:0,reactionStatus:'已核验'},
     candidates:[candidate],submissionMessageCounts:{},
-    boundaryCarryover:{status:'verified',date,sourceCycle:'2026-09',chatMessages:386,
+    boundaryCarryover:{status:'verified',date,sourceCycle:'2026-09',chatMessages:386,matchedCount:1,
       submissionMessageCounts:{周小雨:1}},
     interviewEvents:{[date]:[{name:'周小雨面试 · 14:00',status:'calendar',source:'正式面试日历',eventId:'cal_one'}]}};
   const carried=buildInterviewReminderPreview(snapshot,date);
-  assert.equal(carried.status,'pending');
-  assert.match(carried.reason,/跨周期首日候选人/u);
-  const currentCycle={...snapshot,candidates:[{...candidate,inSubmissionCohort:true,boundaryCarryover:false}],
+  assert.equal(carried.status,'preview');
+  assert.equal(carried.sourceReady,true);
+  assert.match(carried.text,/周小雨/u);
+  const currentCycle={...snapshot,candidates:[{name:'周小雨',inSubmissionCohort:true,
+    submissionEvidence:{name:'周小雨',date,sourceId:'om_current',initialReview:'OK'},
+    calendarEvidence:{date,eventId:'cal_one',title:'周小雨面试 · 14:00'}}],
     submissionMessageCounts:{周小雨:1}};
   assert.equal(buildInterviewReminderPreview(currentCycle,date).status,'preview');
+  assert.equal(buildInterviewReminderPreview({...snapshot,cycle:{month:'2026-09'}},date).status,'pending');
+  assert.equal(buildInterviewReminderPreview({...snapshot,candidates:[{...candidate,boundarySourceCycle:'2026-08'}]},date).status,'pending');
+  assert.equal(buildInterviewReminderPreview({...snapshot,candidates:[{...candidate,calendarEvidence:{...candidate.calendarEvidence,date:'2026-09-24'}}]},date).status,'pending');
+  assert.equal(buildInterviewReminderPreview({...snapshot,boundaryCarryover:{...snapshot.boundaryCarryover,matchedCount:0}},date).status,'pending');
+  assert.equal(buildInterviewReminderPreview({...snapshot,boundaryCarryover:{...snapshot.boundaryCarryover,chatMessages:0}},date).status,'pending');
   assert.equal(buildInterviewReminderPreview({...snapshot,boundaryCarryover:{...snapshot.boundaryCarryover,status:'pending'}},date).status,'pending');
   assert.equal(buildInterviewReminderPreview({...snapshot,boundaryCarryover:{...snapshot.boundaryCarryover,submissionMessageCounts:{周小雨:2}}},date).status,'pending');
   assert.equal(buildInterviewReminderPreview({...snapshot,coverage:{...snapshot.coverage,reactionStatus:'待核验'}},date).status,'pending');
   const first=interviewReminderSourceFingerprint(snapshot,date);
   assert.notEqual(first,interviewReminderSourceFingerprint({...snapshot,candidates:[{...candidate,submissionEvidence:{...candidate.submissionEvidence,sourceId:'om_changed'}}]},date));
+});
+
+test('17:00 first-day preview includes a verified mixed current and prior-cycle roster',()=>{
+  const date='2026-09-25';
+  const current={name:'林小满',stage:'initial_pass',inSubmissionCohort:true,
+    submissionEvidence:{name:'林小满',date,sourceId:'om_current',initialReview:'OK'}};
+  const previous={name:'周小雨',stage:'initial_pass',inSubmissionCohort:true,
+    submissionEvidence:{name:'周小雨',date:'2026-09-23',sourceId:'om_prior',initialReview:'OK'}};
+  const events={
+    [date]:[
+      {name:'林小满面试 · 13:00',eventId:'cal_current',status:'calendar',source:'正式面试日历'},
+      {name:'周小雨面试 · 14:00',eventId:'cal_prior',status:'calendar',source:'正式面试日历'},
+    ],
+  };
+  const linked=linkRecruitmentCalendarAcrossBoundary([current],
+    {candidates:[previous],submissionMessageCounts:{周小雨:1}},events,{林小满:1},{
+      boundaryDate:date,previousCycle:recruitmentCycleRange('2026-09'),
+      currentSourceReady:true,previousSourceReady:true,
+    });
+  assert.equal(linked.boundary.status,'verified');
+  assert.equal(linked.boundary.matchedCount,2,'the real linker counts all first-day events, not just carryovers');
+  const snapshot={cycle:recruitmentCycleRange('2026-10'),calendarStatus:'已连接：正式面试日历已读取 2 条详情事件。',
+    coverage:{capped:false,chatMessages:1,reactionStatus:'已核验'},
+    candidates:linked.candidates,submissionMessageCounts:{林小满:1},interviewEvents:events,
+    boundaryCarryover:{...linked.boundary,chatMessages:1}};
+  const result=buildInterviewReminderPreview(snapshot,date);
+  assert.equal(result.status,'preview',result.reason);
+  assert.deepEqual(result.matches,[{name:'林小满',eventId:'cal_current'},{name:'周小雨',eventId:'cal_prior'}]);
+  assert.equal(buildInterviewReminderPreview({...snapshot,boundaryCarryover:{...snapshot.boundaryCarryover,matchedCount:1}},date).status,'pending');
+});
+
+test('17:00 first-day carryover stays verified despite an unrelated later ambiguous interview',()=>{
+  const firstDay='2026-09-25',later='2026-09-30';
+  const previous={name:'周小雨',stage:'initial_pass',inSubmissionCohort:true,
+    submissionEvidence:{name:'周小雨',date:'2026-09-23',sourceId:'om_prior',initialReview:'OK'}};
+  const current={name:'王丽娜',stage:'initial_pass',inSubmissionCohort:true,
+    submissionEvidence:{name:'王丽娜',date:'2026-09-26',sourceId:'om_current',initialReview:'OK'}};
+  const events={
+    [firstDay]:[{name:'周小雨面试 · 14:00',eventId:'cal_prior',status:'calendar',source:'正式面试日历'}],
+    [later]:[{name:'王丽娜、李小鱼面试',eventId:'cal_ambiguous',status:'calendar',source:'正式面试日历'}],
+  };
+  const linked=linkRecruitmentCalendarAcrossBoundary([current],
+    {candidates:[previous],submissionMessageCounts:{周小雨:1}},events,{王丽娜:1},{
+      boundaryDate:firstDay,previousCycle:recruitmentCycleRange('2026-09'),
+      currentSourceReady:true,previousSourceReady:true,
+    });
+  assert.equal(linked.boundary.status,'verified');
+  assert.equal(linked.boundary.matchedCount,1);
+  assert.ok(linked.pendingCount>0,'the later ambiguous event must remain pending');
+  const snapshot={cycle:recruitmentCycleRange('2026-10'),calendarStatus:'已连接：正式面试日历已读取 2 条详情事件。',
+    coverage:{capped:false,chatMessages:1,reactionStatus:'已核验'},
+    candidates:linked.candidates,submissionMessageCounts:{王丽娜:1},interviewEvents:events,
+    boundaryCarryover:{...linked.boundary,chatMessages:1}};
+  const firstDayPreview=buildInterviewReminderPreview(snapshot,firstDay);
+  assert.equal(firstDayPreview.status,'preview',firstDayPreview.reason);
+  assert.deepEqual(firstDayPreview.matches,[{name:'周小雨',eventId:'cal_prior'}]);
+  assert.equal(buildInterviewReminderPreview(snapshot,later).status,'pending');
+  const ambiguousFirstDay={...events,[firstDay]:[{...events[firstDay][0],name:'周小雨、李小鱼面试'}]};
+  const rejected=linkRecruitmentCalendarAcrossBoundary([current],
+    {candidates:[previous],submissionMessageCounts:{周小雨:1}},ambiguousFirstDay,{王丽娜:1},{
+      boundaryDate:firstDay,previousCycle:recruitmentCycleRange('2026-09'),
+      currentSourceReady:true,previousSourceReady:true,
+    });
+  assert.equal(rejected.boundary.status,'pending','ambiguity on the first day itself remains fail-closed');
 });
 
 test('Wednesday to Tuesday review week uses last week Q:U rotation, not the old current room', () => {

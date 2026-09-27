@@ -477,7 +477,7 @@ test('a new-cycle first-day interview cannot inherit a previous-cycle outcome or
   assert.equal(independent.candidates[0].stage,'pending_feedback');
 });
 
-test('first-day current-cycle report for a prior-cycle candidate does not duplicate or re-remind that person',()=>{
+test('first-day report for a prior-cycle candidate stays unique and appears in the full interview reminder',()=>{
   const range=recruitmentBoundaryCycleRange('2026-10');
   const reviewer='ou_reviewer';
   const prior=parseRecruitmentMessages([{messageId:'om_prior',createdAt:'2026-09-24T01:00:00.000Z',
@@ -494,11 +494,13 @@ test('first-day current-cycle report for a prior-cycle candidate does not duplic
   assert.equal(result.candidates.filter(item=>item.name==='周小雨').length,1);
   assert.equal(result.candidates[0].stage,'pending_feedback');
   assert.equal(result.candidates[0].evaluationEvidence.sourceId,'om_current_review');
-  const preview=buildInterviewReminderPreview({candidates:result.candidates,boundaryCarryover:result.boundary,
+  const preview=buildInterviewReminderPreview({cycle:recruitmentCycleRange('2026-10'),
+    candidates:result.candidates,boundaryCarryover:{...result.boundary,chatMessages:1},
     calendarStatus:'已连接：正式面试日历',coverage:{capped:false,reactionStatus:'已核验',chatMessages:1},
     submissionMessageCounts:current.submissionMessageCounts,
     interviewEvents:{'2026-09-25':[calendarEvent('周小雨面试','cal_one')]}},'2026-09-25');
-  assert.equal(preview.status,'pending');
+  assert.equal(preview.status,'preview',preview.reason);
+  assert.deepEqual(preview.matches,[{name:'周小雨',eventId:'cal_one'}]);
   assert.equal(preview.readyForSend,false);
 });
 

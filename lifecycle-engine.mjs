@@ -553,7 +553,10 @@ export function linkRecruitmentCalendarAcrossBoundary(currentCandidates = [], pr
   const firstDayLinked = linked.candidates.filter(item => item.calendarEvidence?.date === boundaryDate);
   const eventIds = firstDayEvents.map(item => String(item.eventId || ''));
   const linkedIds = firstDayLinked.map(item => String(item.calendarEvidence.eventId || ''));
-  if (linked.pendingCount !== 0 || firstDayLinked.length !== firstDayEvents.length
+  // Later dates keep their own pendingCount. An unrelated ambiguous calendar
+  // event later in this recruitment cycle must not erase a fully verified
+  // first-day carryover; every first-day event still has to match exactly once.
+  if (firstDayLinked.length !== firstDayEvents.length
     || eventIds.some(id => !id || linkedIds.filter(value => value === id).length !== 1))
     return pending('跨周期送审与首日正式面试日程无法唯一匹配');
   const current = linked.candidates.slice(0, currentWithoutReports.length);
@@ -562,7 +565,7 @@ export function linkRecruitmentCalendarAcrossBoundary(currentCandidates = [], pr
     .map(item => ({...item,inSubmissionCohort:false,boundaryCarryover:true,
       ...(reports.has(item.name)?{evaluationEvidence:reports.get(item.name).evaluationEvidence,
         stage:'pending_feedback',status:'首日跨周期面评待本人绑定'}:{})}));
-  return {candidates:[...current,...carryCandidates],matchedCount:linked.matchedCount,pendingCount:0,
+  return {candidates:[...current,...carryCandidates],matchedCount:linked.matchedCount,pendingCount:linked.pendingCount,
     boundary:{status:'verified',date:boundaryDate,sourceCycle:previousCycle.month,
       matchedCount:firstDayLinked.length,submissionMessageCounts:previousParsed.submissionMessageCounts || {}},
     carryCandidates};
@@ -684,11 +687,27 @@ export function buildInterviewReminderPreview(snapshot, date) {
       || !/^20\d{2}-\d{2}-\d{2}$/u.test(String(candidate?.submissionEvidence?.date || ''))
       || candidate.submissionEvidence.date > date || candidate.calendarEvidence?.eventId !== event.eventId)
       return pending('面试日程与唯一送审候选人无法一一核对');
-    // Cross-cycle self-binding is a separate human action after the interview.
-    // This full-day 17:00 roster has not independently verified every prior
-    // source and signed binding; never turn a linked calendar row into a send.
-    if (candidate.boundaryCarryover)
-      return pending('跨周期首日候选人的提醒尚未完成独立的双周期来源及本人绑定验收，17:00 不发送');
+    // On a recruitment-cycle first day, an interview may belong to a unique
+    // submission from the previous cycle. The linked boundary must prove both
+    // complete group sources and a one-to-one formal-calendar match; the
+    // reminder asks the reviewer to write feedback, so a later self-binding
+    // cannot be a prerequisite for this 17:00 roster.
+    if (candidate.boundaryCarryover) {
+      const boundary=snapshot.boundaryCarryover;
+      const cycleMonth=recruitmentCycleMonthForDate(date);
+      const previousMonth=recruitmentBoundaryCycleRange(cycleMonth).previous.month;
+      if (date !== boundaryDate || snapshot.cycle?.month !== cycleMonth
+        || candidate.inSubmissionCohort===true
+        || candidate.boundaryCarryoverDate!==date
+        || candidate.boundarySourceCycle!==previousMonth
+        || candidate.calendarEvidence?.date!==date
+        || candidate.calendarEvidence?.title!==event.name
+        || boundary?.date!==date || boundary.sourceCycle!==previousMonth
+        || boundary.matchedCount!==events.length
+        || !Number.isSafeInteger(boundary.chatMessages) || boundary.chatMessages<1
+        || candidate.submissionEvidence.date>=date)
+        return pending('跨周期首日送审与正式面试日程来源未能完整核验');
+    }
     matches.push({name:candidate.name,eventId:event.eventId || ''});
   }
   const unique = [...new Set(matches.map(item => item.name))];

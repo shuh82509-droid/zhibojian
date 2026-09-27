@@ -1894,7 +1894,9 @@ async function linkRecruitmentCalendarWithBoundary(candidates, parsed, chat, cal
     boundary:{...linked.boundary,chatMessages:previousMessages,
     sourceCycle:boundaryRange.previous.month}};
 }
-async function readRecruitmentCalendar(cycle) {
+async function readRecruitmentCalendar(cycle,{targetDate=''}={}) {
+  if(targetDate && recruitmentCycleMonthForDate(targetDate)!==cycle.month)
+    throw new Error('面试提醒日期与招聘周期不一致，正式日历保持待核验。');
   if (!recruitmentCalendarId) return {events:{},status:'待配置：正式面试日历来源尚未配置，当前群聊记录不冒充正式日历。'};
   const authorization=await recruitmentCalendarReader.status();
   if(!authorization.authorized)return {events:{},status:`待授权：${authorization.reason}；当前群聊记录不冒充正式日历。`};
@@ -1902,35 +1904,49 @@ async function readRecruitmentCalendar(cycle) {
   const items=[],seenPages=new Set();
   for(let page=0;page<20;page++){
     const data=await recruitmentCalendarReader.get(`/calendar/v4/calendars/${encodeURIComponent(recruitmentCalendarId)}/events?${query}`);
-    items.push(...materialArray(data.items));
-    if(!data.has_more)break;
-    if(page===19||!data.page_token||seenPages.has(data.page_token))throw new Error('正式面试日历未能完整翻页，已停止统计，不能以截断结果展示人数。');
+    if(!data || !Array.isArray(data.items) || typeof data.has_more!=='boolean'
+      || data.items.some(item=>!item||typeof item!=='object'||Array.isArray(item)
+        || Object.prototype.toString.call(item)!=='[object Object]'))
+      throw new Error('正式面试日历分页结构无法核验，已停止统计。');
+    items.push(...data.items);
+    if(data.has_more===false)break;
+    if(page===19||typeof data.page_token!=='string'||!data.page_token.trim()||seenPages.has(data.page_token))
+      throw new Error('正式面试日历未能完整翻页，已停止统计，不能以截断结果展示人数。');
     seenPages.add(data.page_token);query.set('page_token',data.page_token);
   }
   const events = {};
-  let unverifiableTitles=0;
+  let unverifiableTitles=0,undatedInterviews=0;
+  const unverifiableDates=new Set();
   items.forEach(item => {
     if(item?.status==='cancelled'||!/(面试|初试|复试|试播)/u.test(item?.summary||''))return;
     const fullSummary=String(item?.summary||'');
-    if(fullSummary.length>500){unverifiableTitles+=1;return;}
-    const timestamp = Number(item?.start_time?.timestamp || 0);
+    const rawTimestamp=item?.start_time?.timestamp;
+    const timestamp=Number(rawTimestamp || 0);
+    if(rawTimestamp!==undefined&&rawTimestamp!==null&&rawTimestamp!==''
+      &&(!Number.isSafeInteger(timestamp)||timestamp<=0)){undatedInterviews+=1;return;}
     const endTimestamp = Number(item?.end_time?.timestamp || 0);
     const date = item?.start_time?.date || (timestamp ? new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(timestamp * 1000)) : '');
-    if (!/^20\d{2}-\d{2}-\d{2}$/u.test(String(date))) return;
+    if(recruitmentCycleMonthForDate(date)!==cycle.month){undatedInterviews+=1;return;}
+    if(fullSummary.length>500){unverifiableTitles+=1;unverifiableDates.add(date);return;}
     const time = timestamp ? new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(timestamp * 1000)) : '';
     const summary = fullSummary.trim();
-    if(!summary){unverifiableTitles+=1;return;}
+    if(!summary){unverifiableTitles+=1;unverifiableDates.add(date);return;}
     (events[date] ||= []).push({name:`${summary}${time ? ` · ${time}` : ''}`,status:'calendar',source:'正式面试日历',eventId:String(item?.event_id || ''),
       summaryFingerprint:createHash('sha256').update(fullSummary).digest('hex'),
       startAt:timestamp>0?new Date(timestamp*1000).toISOString():'',
       endAt:endTimestamp>timestamp?new Date(endTimestamp*1000).toISOString():''});
   });
-  return {events,status:unverifiableTitles
-    ?`待核验：${unverifiableTitles} 条正式日历标题超过 500 字或为空，未截断匹配候选人。`
-    :`已连接：正式面试日历已读取 ${Object.values(events).flat().length} 条详情事件。`};
+  const titleBlocked=unverifiableTitles>0&&(!targetDate||unverifiableDates.has(targetDate));
+  return {events,calendarIssueCount:unverifiableTitles+undatedInterviews,
+    status:undatedInterviews
+      ?`待核验：${undatedInterviews} 条正式面试日程日期无法归属，所有日期暂停提醒。`
+      :titleBlocked
+        ?`待核验：${unverifiableTitles} 条正式日历标题超过 500 字或为空，未截断匹配候选人。`
+        :`已连接：正式面试日历已读取 ${Object.values(events).flat().length} 条详情事件${unverifiableTitles?`；另有 ${unverifiableTitles} 条其他日期标题待核验`:''}。`};
 }
 async function recruitmentCycleSnapshot(month,{
-  fresh=false,recruitmentChat=null,calendarSource=null,previousRecruitmentChat=null,previousChatProvided=false
+  fresh=false,recruitmentChat=null,calendarSource=null,previousRecruitmentChat=null,previousChatProvided=false,
+  reminderDate=''
 }={}) {
   const cycle = recruitmentCycleRange(month);
   const sourceFresh=fresh||interviewBindingEnabled;
@@ -1938,7 +1954,7 @@ async function recruitmentCycleSnapshot(month,{
     recruitmentChat ? Promise.resolve(recruitmentChat) : getChatMessages('recruitment', 1000,
       {...cycle,fresh:sourceFresh,includeReviewText:interviewBindingEnabled}),
     getChatMessages('coaching', 1000, cycle),
-    calendarSource ? Promise.resolve(calendarSource) : readRecruitmentCalendar(cycle),
+    calendarSource ? Promise.resolve(calendarSource) : readRecruitmentCalendar(cycle,{targetDate:reminderDate}),
   ]);
   if (chatResult.status === 'rejected') throw chatResult.reason;
   const chat = chatResult.value;
@@ -1972,7 +1988,7 @@ async function recruitmentCycleSnapshot(month,{
     sourceDate:[parsed.sourceDate, employment.sourceDate].filter(Boolean).sort().at(-1) || '',
     status:recruitmentReviewerOpenId && !chat.truncated && chat.reactionStatus === '已核验'
       && employmentResult.status === 'fulfilled' && !employmentResult.value.truncated
-      && calendar.status.startsWith('已连接：') && linked.pendingCount === 0
+      && calendar.status.startsWith('已连接：') && !calendar.calendarIssueCount && linked.pendingCount === 0
       && employmentFacts.length===0
       && linked.boundary.status !== 'pending' ? 'current' : 'partial',
     calendarStatus:calendar.status,
@@ -1992,14 +2008,14 @@ async function recruitmentCycleSnapshot(month,{
     unmappedCount:candidates.filter(item => item.stage === 'unmapped').length,
     coverage:{chatMessages:chat.sourceMessageCount ?? chat.messages?.length ?? 0,deletedMessages:chat.deletedMessageCount ?? 0,capped:Boolean(chat.truncated),reactionStatus:recruitmentReviewerOpenId ? (chat.reactionStatus || '待核验') : '待配置审查人身份',reactionFailure:chat.reactionFailure || '',employmentStatus:employmentResult.status === 'fulfilled' ? '已读取' : '待授权',employmentMessages:employmentResult.status === 'fulfilled' ? employmentResult.value.sourceMessageCount ?? employmentResult.value.messages?.length ?? 0 : null,employmentCapped:employmentResult.status === 'fulfilled' ? Boolean(employmentResult.value.truncated) : null,employmentFailure:employmentResult.status === 'rejected' ? String(employmentResult.reason?.message || 'WIS直播战队日报读取失败') : ''}
   };
-  const verified=interviewBindingEnabled
+  const verified=interviewBindingEnabled&&!reminderDate
     ?projectInterviewBindings(snapshot,chat,(await readRecruitmentInterviewJournal()).entries,{reviewerOpenId:recruitmentReviewerOpenId,
       recruitmentChatId:feishuChats.recruitment.chatId,calendarId:recruitmentCalendarId,today:chinaDateFor(),
       previousChat:linked.previousChat})
     :snapshot;
   return sanitizeRecruitmentOutcome(verified,{trustedFreshCalendar:calendarResult.status==='fulfilled',
     trustedFreshChat:completeRecruitmentChatSource(chat,cycle),
-    trustedFreshBinding:interviewBindingEnabled,
+    trustedFreshBinding:interviewBindingEnabled&&!reminderDate,
     trustedFreshAssessment:Boolean(assessment.summary)&&completeRecruitmentChatSource(chat,cycle)});
 }
 
@@ -2172,7 +2188,7 @@ async function runLifecycleReminders(now = new Date()) {
     if (lifecycleInterviewReminderEnabled && interviewWindow === 'open') {
       try {
         const cycleMonth=recruitmentCycleMonthForDate(date);
-        const source=await recruitmentCycleSnapshot(cycleMonth,{fresh:true});
+        const source=await recruitmentCycleSnapshot(cycleMonth,{fresh:true,reminderDate:date});
         const preview=buildInterviewReminderPreview(source,date);
         gates.interview=preview.sourceReady ? (recruitmentReviewerOpenId ? '已具备发送条件' : '收件人 open_id 待核验') : preview.reason;
         if (preview.sourceReady && recruitmentReviewerOpenId) {
@@ -2180,7 +2196,7 @@ async function runLifecycleReminders(now = new Date()) {
           await deliverLifecycleReminder({key:`interview-feedback:${date}:${recruitmentReviewerOpenId}`,date,kind:'interview_feedback',recipientId:recruitmentReviewerOpenId,recipientName:'倪梦萍',text:preview.text,
             verifyBeforePost:async()=>{
               if (chinaDateFor() !== date || lifecycleReminderWindow('interview',chinaMinutes(new Date())) !== 'open') throw new Error('面评提醒已错过当日发送窗口。');
-              const latestSource=await recruitmentCycleSnapshot(cycleMonth,{fresh:true});
+              const latestSource=await recruitmentCycleSnapshot(cycleMonth,{fresh:true,reminderDate:date});
               const latestPreview=buildInterviewReminderPreview(latestSource,date);
               if(!latestPreview.sourceReady||latestPreview.text!==preview.text||interviewReminderSourceFingerprint(latestSource,date)!==expectedSource)
                 throw new Error('正式面试日历或招聘送审名单在通知前发生变化，已停止发送并等待下一轮重查。');
@@ -2685,7 +2701,8 @@ async function lifecycleApi(req, res, url, routePath, auth) {
       if (!/^20\d{2}-\d{2}-\d{2}$/u.test(date)) return json(res, 400, {ok:false,error:'请提供 YYYY-MM-DD 格式的面试日期。'});
       const cycleMonth = recruitmentCycleMonthForDate(date);
       if (!cycleMonth) return json(res,400,{ok:false,error:'面试日期无效。'});
-      return json(res, 200, {ok:true,preview:buildInterviewReminderPreview(await recruitmentCycleSnapshot(cycleMonth), date)});
+      return json(res, 200, {ok:true,preview:buildInterviewReminderPreview(
+        await recruitmentCycleSnapshot(cycleMonth,{fresh:true,reminderDate:date}), date)});
     }
     if(routePath==='/api/lifecycle/interview-binding'){
       if(req.method==='GET'){
