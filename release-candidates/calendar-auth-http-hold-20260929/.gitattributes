@@ -1,0 +1,2 @@
+# Keep pinned source payloads byte-stable across Windows and Linux checkouts.
+* text eol=lf

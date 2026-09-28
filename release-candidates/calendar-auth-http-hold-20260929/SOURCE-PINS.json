@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "scope": "synthetic_http_durable_hold_consumption",
+  "productionApproved": false,
+  "formalHttpSha256": "0dfdeee60cce1e553127d889d67e35e5cba14da124771a5e078b0b6bea95c9d4",
+  "candidateHttpSha256": "d8705f422394926bc001351d2f622502cb3df087ac44267c8b974d9b3dbe3d4c",
+  "frozenReaderSha256": "9cbc9be0152abace6365d3f0dadef864dc9402e4b055e26a9d19424c09597912",
+  "tests": 96,
+  "suiteCounts": { "original": 4, "readerHttpIntegration": 25, "independentIncludingOriginalAssertions": 67 },
+  "testCountIsNotUniqueBusinessCoverage": true,
+  "files": [
+    { "path": "calendar-auth-http.mjs", "sha256": "d8705f422394926bc001351d2f622502cb3df087ac44267c8b974d9b3dbe3d4c", "bytes": 7841 },
+    { "path": "calendar-auth-http.original.mjs", "sha256": "0dfdeee60cce1e553127d889d67e35e5cba14da124771a5e078b0b6bea95c9d4", "bytes": 2957 },
+    { "path": "calendar-auth-http.test.mjs", "sha256": "c89b91262cf03a950bd7d7fffa3be91e88dd8d98d2d1b838e1bdb9dec264ddc7", "bytes": 2780 },
+    { "path": "calendar-user-reader.mjs", "sha256": "9cbc9be0152abace6365d3f0dadef864dc9402e4b055e26a9d19424c09597912", "bytes": 28803 },
+    { "path": "reader-http-integration.test.mjs", "sha256": "2803ce4df5b7731f942264bb3feacedcf685e566ee33fe7936f89529e207d11c", "bytes": 7999 },
+    { "path": "calendar-http-hold-independent.test.mjs", "sha256": "ddf18a4ae6d90bbab301e749f3d5930dc46a9120ec2f7bedcdc714990b96801d", "bytes": 17172 },
+    { "path": "scope-check.mjs", "sha256": "785432ee4ce7fc99e29daa6a8373eb805bf436f43a42429518fd17de4ff8077a", "bytes": 3962 },
+    { "path": "qa-entry.mjs", "sha256": "7ea86978267407fcd107e4a5ecc9b12753dcaf8d068698173b88c79c46e1e7b0", "bytes": 3696 }
+  ]
+}
