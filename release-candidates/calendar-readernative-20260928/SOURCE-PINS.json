@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "purpose": "frozen_source_only_synthetic_qa",
+  "productionApproved": false,
+  "expectedTests": 415,
+  "expectedScopeChecks": 16,
+  "baseReaderSha256": "173e639ee6719c00871b2606fe9661b9587a4a2a25222981882c3d3f4b1fd257",
+  "formalReaderBaseSha256": "75067a7fd85d827d43d6f439a6c5a81f156f1358a64defec13a75d45b68be630",
+  "previousReaderBaseSha256": "a2dc5930d00b37113c98c515dbe9e43682e0ec49b0280f8dc76095720f5e7f97",
+  "nativeReaderSha256": "61bb609a713da635eab0e03c60b2f862f3846131c0176c11cebef423061947aa",
+  "nativeSourceSha256": "ef2bf28096e2bc503c7aa07776c19e8734904839ad84a804872abb1f571a57cd",
+  "testMatrix": [
+    [
+      "base/refresh-safe.test.mjs",
+      99
+    ],
+    [
+      "pure/native-calendar-source.test.mjs",
+      94
+    ],
+    [
+      "native-reader/native-reader.test.mjs",
+      34
+    ],
+    [
+      "audit-refresh/refresh-independent.test.mjs",
+      63
+    ],
+    [
+      "audit-native-source/native-independent.test.mjs",
+      66
+    ],
+    [
+      "audit-native-reader/native-independent.test.mjs",
+      59
+    ]
+  ],
+  "files": [
+    {
+      "path": "base/calendar-user-reader.mjs",
+      "sha256": "173e639ee6719c00871b2606fe9661b9587a4a2a25222981882c3d3f4b1fd257"
+    },
+    {
+      "path": "base/calendar-user-reader.original.mjs",
+      "sha256": "a2dc5930d00b37113c98c515dbe9e43682e0ec49b0280f8dc76095720f5e7f97"
+    },
+    {
+      "path": "base/calendar-user-reader.formal.mjs",
+      "sha256": "75067a7fd85d827d43d6f439a6c5a81f156f1358a64defec13a75d45b68be630"
+    },
+    {
+      "path": "base/refresh-safe.test.mjs",
+      "sha256": "e4e97d19661777b30afa018f6924d5253a134c13f230ae137208b42f9c6a8c1f"
+    },
+    {
+      "path": "pure/native-calendar-source.mjs",
+      "sha256": "ef2bf28096e2bc503c7aa07776c19e8734904839ad84a804872abb1f571a57cd"
+    },
+    {
+      "path": "pure/native-calendar-source.test.mjs",
+      "sha256": "00421f9af36808fe125cd6196359daeddfca3f2085fab7380addbda4cfbc50d0"
+    },
+    {
+      "path": "native-reader/calendar-user-reader.mjs",
+      "sha256": "61bb609a713da635eab0e03c60b2f862f3846131c0176c11cebef423061947aa"
+    },
+    {
+      "path": "native-reader/native-calendar-source.mjs",
+      "sha256": "ef2bf28096e2bc503c7aa07776c19e8734904839ad84a804872abb1f571a57cd"
+    },
+    {
+      "path": "native-reader/native-reader.test.mjs",
+      "sha256": "c29c50d1111f1b160d2d02f1c2547ffe839c3abc0f9d9262ac41a2568c70a759"
+    },
+    {
+      "path": "audit-refresh/refresh-independent.test.mjs",
+      "sha256": "2902680e011efda9af1da309eb2e05da3f2be023f6770a7e7c58a3524a9bb499"
+    },
+    {
+      "path": "audit-refresh/crash-worker.mjs",
+      "sha256": "11fc7d1973d22741b87477612f9708d8823ae36ebea2371eb2f50ce02fc01599"
+    },
+    {
+      "path": "audit-refresh/source-scope.mjs",
+      "sha256": "2b9084c1173bd156530eb8019492f838f7413d1a872fd01a374fba766808317c"
+    },
+    {
+      "path": "audit-refresh/current-baseline-scope.mjs",
+      "sha256": "60e37bebc603665e9016fadc6bb017befb1e820f9ea53ff0cfcb1410de8f028b"
+    },
+    {
+      "path": "audit-native-source/native-independent.test.mjs",
+      "sha256": "33615b7868e2e60378c767ef5ff32c8381b2be5213d61096d4b3f33c5f18b886"
+    },
+    {
+      "path": "audit-native-reader/native-independent.test.mjs",
+      "sha256": "f64290b2ba968962b4397c0c72ad13b5d191f6e32b0e59a5c2df3a1aeb314d38"
+    },
+    {
+      "path": "qa-entry.mjs",
+      "sha256": "a8b053655cc61f67a911ce038ad4427447d3207cbd2b4c8056a15b32982a12d0"
+    }
+  ]
+}
