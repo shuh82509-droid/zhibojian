@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+<title>考核私聊授权 · WIS 直播中心</title>
+<style>
+:root{color-scheme:light;--ink:#173c30;--muted:#60766b;--line:#dbe5df;--green:#176147}*{box-sizing:border-box}body{margin:0;background:#f6f8f4;color:var(--ink);font:15px/1.75 "PingFang SC","Microsoft YaHei",sans-serif}main{max-width:840px;margin:50px auto;padding:0 28px}.eyebrow{font-size:12px;letter-spacing:.14em;color:var(--green)}h1{font-size:30px;line-height:1.35;margin:12px 0}header p{margin:0;color:var(--muted);max-width:650px}.participants{display:flex;align-items:center;gap:16px;margin:30px 0 24px;padding:20px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.person{display:flex;align-items:center;gap:10px}.avatar{width:42px;height:42px;display:grid;place-items:center;background:#e4eddd;border-radius:50%;font-weight:700}.person small{display:block;font-size:12px;color:var(--muted)}.connector{color:#91a397;margin:0 10px}.status{background:white;border:1px solid var(--line);border-left:4px solid var(--green);padding:18px 20px;margin:24px 0}.status b{display:block;font-size:16px}.status p{margin:6px 0 0;color:var(--muted)}.actions{display:flex;flex-wrap:wrap;gap:10px}button{font:inherit;font-weight:600;border:1px solid var(--green);padding:10px 18px;border-radius:7px;cursor:pointer;background:var(--green);color:#fff}button.secondary{background:transparent;color:var(--green);border-color:#c9d8cf}button:disabled{opacity:.45;cursor:not-allowed}button:focus-visible,a:focus-visible{outline:3px solid #b9d15b;outline-offset:3px}.details{margin-top:30px;color:var(--muted);font-size:13px}.details p{margin:9px 0}.details strong{color:var(--ink)}.note{padding-top:20px;border-top:1px solid var(--line);margin-top:22px!important}a{color:var(--green)}@media(max-width:540px){main{margin:28px auto;padding:0 18px}h1{font-size:25px}.participants{gap:8px}.connector{margin:0}.person{gap:7px}.avatar{width:34px;height:34px}.actions button{width:100%}}
+</style></head><body><main>
+<header><span class="eyebrow">WIS LIVE HUB / 招聘考核</span><h1>考核私聊只读授权</h1><p>由倪梦萍或刘慧迅本人授权，连接两人之间的考核沟通记录。</p></header>
+<div class="participants" aria-label="指定会话参与人"><div class="person"><span class="avatar" aria-hidden="true">倪</span><div><strong>倪梦萍</strong><small>招聘与考核</small></div></div><span class="connector" aria-hidden="true">↔</span><div class="person"><span class="avatar" aria-hidden="true">刘</span><div><strong>刘慧迅</strong><small>直播中心负责人</small></div></div></div>
+<div class="status" role="status" aria-live="polite"><b id="statusTitle">正在核验本人身份</b><p id="statusText">请稍候……</p></div>
+<div class="actions"><button id="authorize" disabled>使用本人飞书账号授权</button><button id="verify" class="secondary" disabled>核验会话读取</button><button id="refresh" class="secondary">刷新状态</button></div>
+<div class="details"><p><strong>如何完成：</strong>先使用本人 OA 账号登录，再点击授权按钮，在飞书页面确认本人账号并同意只读授权。</p><p><strong>读取范围：</strong>飞书授权项为用户消息读取；本系统将会话限定为倪梦萍与刘慧迅两人。完成授权时，只抽取近七天最多一条消息核验可读性，不在页面展示或保存消息正文。</p><p><strong>授权结果：</strong>凭证加密保存在服务器；授权成功不会自动修改候选人考核结论。可在飞书的应用授权管理中撤销授权。</p><p class="note">如果飞书提示权限未开通，请联系应用管理员开通用户身份的会话读取、消息读取、单聊读取及离线访问权限。加入应用协作者不等于完成本人授权。</p></div>
+</main><script>
+const root=location.pathname.replace(/private-chat\.html$/,'');
+const endpoint=root+'api/lifecycle/private-chat-auth/';
+const title=document.getElementById('statusTitle'),text=document.getElementById('statusText');
+const authorize=document.getElementById('authorize'),verify=document.getElementById('verify'),refresh=document.getElementById('refresh');
+let active=false;
+function show(heading,detail){title.textContent=heading;text.textContent=detail}
+async function request(action,method='GET'){
+ const r=await fetch(endpoint+action,{method,credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json',...(method==='POST'?{'X-Requested-With':'XMLHttpRequest'}:{})}});
+ const data=await r.json();if(!r.ok)throw Error(data.error||'服务暂时不可用');return data;
+}
+async function load(){if(active)return;authorize.disabled=verify.disabled=true;try{const data=await request('status');if(!data.eligible){show('请当事人使用本人账号登录',data.reason);return}
+ const state=data.authorization||{};show(state.authorized?'本人私聊授权有效':'等待本人飞书授权',`${data.name}：${state.authorized?'两人会话读取权限已在授权时核验。':state.reason||'请点击下方按钮完成授权。'}${data.enabled?'':' 授权入口暂未开放。'}`);
+ authorize.disabled=!data.enabled||!state.configured;authorize.textContent=state.authorized?'重新授权':'使用本人飞书账号授权';verify.disabled=!data.enabled||!state.authorized;
+}catch(e){show('暂时无法核验',e.message)}}
+authorize.onclick=async()=>{if(active)return;active=true;authorize.disabled=verify.disabled=refresh.disabled=true;show('正在发起本人授权','请在即将打开的飞书页面确认本人账号。');try{const data=await request('start','POST');const url=new URL(data.authorizeUrl);if(url.origin!=='https://accounts.feishu.cn')throw Error('授权地址未通过校验');window.top.location.assign(url.href)}catch(e){show('授权未发起',e.message);active=false;refresh.disabled=false;authorize.disabled=false}};
+verify.onclick=async()=>{if(active)return;active=true;authorize.disabled=verify.disabled=refresh.disabled=true;show('正在核验两人会话','只核验指定私聊的读取权限，消息正文不会展示或保存。');try{const data=await request('verify','POST');show('指定私聊读取核验成功',data.verification.sampleAvailable?'已确认能够读取两人近期会话。':'读取权限有效，近七天未返回消息。')}catch(e){show('会话读取待核验',e.message)}finally{active=false;refresh.disabled=false;authorize.disabled=false;verify.disabled=false}};
+refresh.onclick=load;load();
+</script></body></html>

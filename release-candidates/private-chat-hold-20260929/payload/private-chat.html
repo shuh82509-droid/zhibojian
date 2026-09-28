@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+<title>考核私聊授权 · WIS 直播中心</title>
+<style>
+:root{color-scheme:light;--ink:#173c30;--muted:#60766b;--line:#dbe5df;--green:#176147}*{box-sizing:border-box}body{margin:0;background:#f6f8f4;color:var(--ink);font:15px/1.75 "PingFang SC","Microsoft YaHei",sans-serif}main{max-width:840px;margin:50px auto;padding:0 28px}.eyebrow{font-size:12px;letter-spacing:.14em;color:var(--green)}h1{font-size:30px;line-height:1.35;margin:12px 0}header p{margin:0;color:var(--muted);max-width:650px}.participants{display:flex;align-items:center;gap:16px;margin:30px 0 24px;padding:20px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.person{display:flex;align-items:center;gap:10px}.avatar{width:42px;height:42px;display:grid;place-items:center;background:#e4eddd;border-radius:50%;font-weight:700}.person small{display:block;font-size:12px;color:var(--muted)}.connector{color:#91a397;margin:0 10px}.status{background:white;border:1px solid var(--line);border-left:4px solid var(--green);padding:18px 20px;margin:24px 0}.status b{display:block;font-size:16px}.status p{margin:6px 0 0;color:var(--muted)}.actions{display:flex;flex-wrap:wrap;gap:10px}button{font:inherit;font-weight:600;border:1px solid var(--green);padding:10px 18px;border-radius:7px;cursor:pointer;background:var(--green);color:#fff}button.secondary{background:transparent;color:var(--green);border-color:#c9d8cf}button:disabled{opacity:.45;cursor:not-allowed}button:focus-visible,a:focus-visible{outline:3px solid #b9d15b;outline-offset:3px}.details{margin-top:30px;color:var(--muted);font-size:13px}.details p{margin:9px 0}.details strong{color:var(--ink)}.note{padding-top:20px;border-top:1px solid var(--line);margin-top:22px!important}a{color:var(--green)}@media(max-width:540px){main{margin:28px auto;padding:0 18px}h1{font-size:25px}.participants{gap:8px}.connector{margin:0}.person{gap:7px}.avatar{width:34px;height:34px}.actions button{width:100%}}
+</style></head><body><main>
+<header><span class="eyebrow">WIS LIVE HUB / 招聘考核</span><h1>考核私聊只读授权</h1><p>由倪梦萍或刘慧迅本人授权，连接两人之间的考核沟通记录。</p></header>
+<div class="participants" aria-label="指定会话参与人"><div class="person"><span class="avatar" aria-hidden="true">倪</span><div><strong>倪梦萍</strong><small>招聘与考核</small></div></div><span class="connector" aria-hidden="true">↔</span><div class="person"><span class="avatar" aria-hidden="true">刘</span><div><strong>刘慧迅</strong><small>直播中心负责人</small></div></div></div>
+<div class="status" role="status" aria-live="polite"><b id="statusTitle">正在核验本人身份</b><p id="statusText">请稍候……</p></div>
+<div class="actions"><button id="authorize" disabled>使用本人飞书账号授权</button><button id="verify" class="secondary" disabled>核验会话读取</button><button id="refresh" class="secondary">刷新状态</button></div>
+<div class="details"><p><strong>如何完成：</strong>先使用本人 OA 账号登录，再点击授权按钮，在飞书页面确认本人账号并同意只读授权。</p><p><strong>读取范围：</strong>飞书授权项为用户消息读取；本系统将会话限定为倪梦萍与刘慧迅两人。完成授权时，只抽取近七天最多一条消息核验可读性，不在页面展示或保存消息正文。</p><p><strong>授权结果：</strong>凭证加密保存在服务器；授权成功不会自动修改候选人考核结论。可在飞书的应用授权管理中撤销授权。</p><p class="note">如果飞书提示权限未开通，请联系应用管理员开通用户身份的会话读取、消息读取、单聊读取及离线访问权限。加入应用协作者不等于完成本人授权。</p></div>
+</main><script>
+const root=location.pathname.replace(/private-chat\.html$/,'');
+const endpoint=root+'api/lifecycle/private-chat-auth/';
+const title=document.getElementById('statusTitle'),text=document.getElementById('statusText');
+const authorize=document.getElementById('authorize'),verify=document.getElementById('verify'),refresh=document.getElementById('refresh');
+const names=Object.freeze({'倪梦萍':'倪梦萍','刘慧迅':'刘慧迅'});
+const states=Object.freeze({
+ unconfigured:Object.freeze([false,false,false,false]),unauthorized:Object.freeze([true,false,false,true]),
+ authorized:Object.freeze([true,true,false,true]),recovery_required:Object.freeze([true,false,true,false]),busy:Object.freeze([true,false,false,false])
+});
+const heldDetail='本人私聊授权正在处理或结果待核验，已停止授权与会话读取。请勿重复授权或核验；请管理员独立核验后恢复。';
+const unknownDetail='结果暂时无法安全核验，授权与会话读取已停止。请仅刷新只读状态；请勿重复授权或核验。';
+let active=false,generation=0;
+function show(heading,detail){title.textContent=heading;text.textContent=detail}
+function disable(){authorize.disabled=verify.disabled=true}
+function object(value){if(!value||typeof value!=='object'||Array.isArray(value))throw Error('unsafe response');return value}
+function field(value,key){object(value);const descriptor=Object.getOwnPropertyDescriptor(value,key);if(!descriptor)return undefined;if(!Object.hasOwn(descriptor,'value'))throw Error('unsafe response');return descriptor.value}
+function authorization(value){
+ const configured=field(value,'configured'),authorized=field(value,'authorized'),status=field(value,'status');
+ const recoveryRequired=field(value,'recoveryRequired'),retryAllowed=field(value,'retryAllowed');
+ if(typeof status!=='string'||!Object.hasOwn(states,status)||![configured,authorized,recoveryRequired,retryAllowed].every(item=>typeof item==='boolean'))throw Error('unsafe status');
+ const expected=states[status];if(![configured,authorized,recoveryRequired,retryAllowed].every((item,index)=>item===expected[index]))throw Error('inconsistent status');
+ return {configured,authorized,status,recoveryRequired,retryAllowed};
+}
+function stopSignal(data,permitDisabled=false){
+ const retry=field(data,'retryAllowed'),recovery=field(data,'recoveryRequired'),status=field(data,'status'),code=field(data,'code');
+ for(const key of ['eligible','enabled']){const value=field(data,key);if(value!==undefined&&typeof value!=='boolean')throw Error('unsafe response');if(value===false&&!(permitDisabled&&key==='enabled'))return 'unknown'}
+ if(retry!==undefined&&typeof retry!=='boolean'||recovery!==undefined&&typeof recovery!=='boolean'||status!==undefined&&(typeof status!=='string'||!Object.hasOwn(states,status))||code!==undefined&&typeof code!=='string')throw Error('unsafe response');
+ if(recovery===true||status==='recovery_required'||status==='busy'||code==='private_chat_authorization_held'||code==='private_chat_authorization_busy')return 'held';
+ return retry===false?'unknown':null;
+}
+function stopped(kind,heading){disable();show(kind==='held'?'本人私聊授权待核验':heading,kind==='held'?heldDetail:unknownDetail)}
+async function request(action,method='GET'){
+ const controller=new AbortController();let timer;
+ const work=(async()=>{const response=await fetch(endpoint+action,{method,credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{Accept:'application/json',...(method==='POST'?{'X-Requested-With':'XMLHttpRequest'}:{})}});return {ok:response.ok,data:await response.json()}})();
+ const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('request unavailable'))},15000)});
+ try{return await Promise.race([work,timeout])}finally{clearTimeout(timer)}
+}
+async function load(){
+ if(active)return;const turn=++generation;disable();show('正在核验本人身份','正在读取只读授权状态，请稍候……');
+ try{
+  const result=await request('status');if(turn!==generation||active)return;
+  const data=object(result.data),ok=field(data,'ok'),eligible=field(data,'eligible'),enabled=field(data,'enabled');
+  if(typeof ok!=='boolean'||typeof result.ok!=='boolean')throw Error('unsafe response');
+  if(!result.ok||!ok){stopped(stopSignal(data),'暂时无法核验');return}
+  if(typeof eligible!=='boolean'||typeof enabled!=='boolean')throw Error('unsafe response');
+  if(!eligible){show('请当事人使用本人账号登录','仅倪梦萍或刘慧迅本人可管理指定两人私聊授权。');return}
+  const name=field(data,'name');if(typeof name!=='string'||!Object.hasOwn(names,name))throw Error('unsafe identity');
+  const state=authorization(field(data,'authorization'));
+  if(state.status==='recovery_required'||state.status==='busy'){stopped('held','本人私聊授权待核验');return}
+  const topSignal=stopSignal(data,true);if(topSignal){stopped(topSignal,'暂时无法核验');return}
+  const detail=state.status==='unconfigured'?'本人私聊用户授权配置不完整。':state.authorized?'两人会话读取权限已在授权时核验。':'请点击下方按钮完成本人飞书只读授权。';
+  show(state.authorized?'本人私聊授权有效':state.configured?'等待本人飞书授权':'本人私聊授权尚未配置',names[name]+'：'+detail+(enabled?'':' 授权入口暂未开放。'));
+  authorize.textContent=state.authorized?'重新授权':'使用本人飞书账号授权';
+  authorize.disabled=!enabled||!state.configured||!state.retryAllowed;verify.disabled=!enabled||!state.authorized||!state.retryAllowed;
+ }catch{if(turn===generation&&!active)stopped(null,'暂时无法核验')}
+}
+function operationResult(result,action){
+ const data=object(result.data),ok=field(data,'ok');if(typeof ok!=='boolean'||typeof result.ok!=='boolean')throw Error('unsafe response');
+ const signal=stopSignal(data);if(signal||!result.ok||!ok)return {signal:signal||'unknown'};
+ const value=field(data,'authorization');if(value!==undefined){const state=authorization(value);if(state.status==='recovery_required'||state.status==='busy')return {signal:'held'};if(!state.configured||!state.retryAllowed||action==='verify'&&!state.authorized)return {signal:'unknown'}}
+ return {data};
+}
+authorize.onclick=async()=>{
+ if(active||authorize.disabled)return;active=true;++generation;disable();refresh.disabled=true;show('正在发起本人授权','请在即将打开的飞书页面确认本人账号。');
+ try{
+  const result=operationResult(await request('start','POST'),'start');if(result.signal){stopped(result.signal,'授权结果待核验');return}
+  const destination=field(result.data,'authorizeUrl');if(typeof destination!=='string'||destination.length>8192||/[\u0000-\u0020\u007f]/u.test(destination)||destination.includes('#')||destination.includes('\\')||!/^https:\/\/accounts\.feishu\.cn\/open-apis\/authen\/v1\/authorize(?:\?|$)/u.test(destination))throw Error('unsafe destination');
+  const url=new URL(destination);if(url.origin!=='https://accounts.feishu.cn'||url.username||url.password||url.port||url.hash||url.pathname!=='/open-apis/authen/v1/authorize')throw Error('unsafe destination');
+  window.top.location.assign(url.href);
+ }catch{stopped(null,'授权结果待核验')}finally{active=false;refresh.disabled=false;disable()}
+};
+verify.onclick=async()=>{
+ if(active||verify.disabled)return;active=true;++generation;disable();refresh.disabled=true;show('正在核验两人会话','只核验指定私聊的读取权限，消息正文不会展示或保存。');
+ try{
+  const result=operationResult(await request('verify','POST'),'verify');if(result.signal){stopped(result.signal,'会话读取待核验');return}
+  const verification=field(result.data,'verification'),verified=field(verification,'verified'),sampleAvailable=field(verification,'sampleAvailable');
+  if(verified!==true||typeof sampleAvailable!=='boolean')throw Error('unverified response');
+  show('指定私聊读取核验成功',sampleAvailable?'已确认能够读取两人近期会话；如需继续操作，请刷新只读状态。':'读取权限有效，近七天未返回消息；如需继续操作，请刷新只读状态。');
+ }catch{stopped(null,'会话读取待核验')}finally{active=false;refresh.disabled=false;disable()}
+};
+refresh.onclick=load;load();
+</script></body></html>

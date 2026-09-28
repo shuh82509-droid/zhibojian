@@ -1,0 +1,15 @@
+# Private authorization durable hold: source-only paired candidate
+
+Not deployed. Not real OA/private-message/calendar/business acceptance. The broader Calendar server and all previously archived candidates are unchanged.
+
+The paired reader, HTTP adapter and actual private-auth page were assembled from byte-verified production source references into a 14-file source-only payload. The reader preserves the original four scopes, fixed two-person peer, AES-GCM v2 context and JSON v2 code/refresh endpoint. Unknown one-use exchanges, identity verification, save/readback and cleanup retain durable intent/lock quarantine. The HTTP/page consume strict held/busy/normal states and do not suggest blind retries or reopen actions after unknown results. No reset/unlock/hold-clearing/provider-retry endpoint is added.
+
+Actual frozen Windows regression: 335/335, zero fail/cancel/skip/todo. This comprises 82 independent reader VM descriptions, 157 HTTP descriptions (including four preserved original unsafe observations), 91 synthetic page descriptions, and five paired native-filesystem/toy-provider descriptions. Eight original reader source-comparison groups are separate, not counted as TAP cases. Parameter-matrix assertions are not 335 real business scenarios.
+
+Actual isolated Linux amd64 regression: 335/335, zero fail/cancel/skip/todo, selected formal CAS equal before/after at 2026-09-28 19:22:01–19:22:19 UTC. Only the exact new payload was mounted read-only; no network, production data volume or default service/healthcheck. Runtime environment was cleared, non-root UID and dropped capabilities used. Config.Env credential-key presence was zero and declared volumes absent; this is not a scan of arbitrary baked image layers. Native filesystem tests validate the Linux fsync code path with synthetic stores, not actual crash/power-loss durability.
+
+SOURCE-PINS.json SHA256: `0373e6f5227dec5e78bbcda7074ec7653b3f1f8984cfd7f03bfa95d42176a539`. Candidate reader `9b74ac93`, HTTP `3a690ac4`, page `5f720fd6`. Original page HTML/CSS outside its script is byte-identical. The one impeccable detector pass degraded to regex due to missing HTML/CSS parser dependencies, reporting the retained original side-border; no visual or contrast acceptance is claimed.
+
+Message/pagination shape gaps and the existing span-vs-age predicate remain unchanged and are not authoritative assessment evidence. Persistent disk repair can fail across processes under continuing faults. Fresh-instance synchronous begin() may construct a URL but does not clear a hold: paired HTTP and reader complete() remain required. Recovery needs separately verified operations, not repeated consent or deletion.
+
+Full production cutover still requires fresh complete CAS, source/recipient checks, dormant same-volume RW isolation, stopped complete backup plus tested restore/latest-data rollback, true OA and old-link validation, and real owners' five-stage receipts. This archive contains no deployment recipe, full server, runtime source snapshot/logs, real grant/token/identity IDs, message data or backup. Run `node payload/qa-entry.mjs` for the exact source regression.
