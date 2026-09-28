@@ -1,0 +1,14 @@
+{
+  "checkedAtUtcApprox": "2026-09-28T13:28:25Z",
+  "skill": "computer-use",
+  "operation": "cua.getState inventory only",
+  "apps": 0,
+  "browsers": 0,
+  "error": "Unable to load browser request-header policy. Retry the browser command.",
+  "retryThisRound": false,
+  "barrierBypassed": false,
+  "nativeBrowserFallbackAfterPolicyFailure": false,
+  "realLoggedInPageAccepted": false,
+  "businessUiActionTaken": false,
+  "scope": "only UI acceptance lane remains held; independent code implementation continues"
+}

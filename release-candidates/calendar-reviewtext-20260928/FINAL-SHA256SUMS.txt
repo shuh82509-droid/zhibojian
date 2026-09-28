@@ -1,0 +1,18 @@
+Frozen candidate: H:/codex输出/直播五环节工作流-20260923/calendar-reviewtext-exact-20260928/candidate-2042
+Final independent Windows run: 495/495 pass; 0 fail/cancelled/skipped/todo.
+Read-only target hashes checked after the final run.
+
+9ce6e04ac89d8ccfb4b6f2781d4a97408c904876e9a59cc458567b42d3eeebe6  FALLBACK-INDEPENDENT-REVIEW.test.mjs
+d81e899a6814f489d14ea6a6bc0eb774dacd05058d9526b2ea602a0080897dcd  IDENTITY-INDEPENDENT.test.mjs
+e69b601880ce45a98c7b670ba9b73bdeb1a42f7688cc38a91fdbc6ae5f247db9  initial-identity-root.test.mjs
+f3e8907158a6dd264ff2833b3815cc13ae1d4e5e46e94541df063b02bb3faf39  oa-fallback.test.mjs
+51207c2acf1564f8d2712464ee074f5d8c49d3c55a0203f068fbea69bd491a02  oa-identity-readback.test.mjs
+55a5fc7a68526a08550cc7cd52edb7a4dd6912e0f6e36bd7037b31b86500f608  projection-review.test.mjs
+a5570ca29f50b183298824e7b7336c104c24aca50e9f001ab696649243618b1e  REVIEWTEXT-INDEPENDENT.test.mjs
+9747694237116059e69380df5612839cf20106afc97ea85673881df15c9efd41  reviewtext-root.test.mjs
+
+edb7ceabc33cb8758ea0a0072cd2d08ae53700ca8f629b42a878d6994f9c5a5e  recruitment-content.mjs
+fa30f7895774f856527d5e07025edeffb927978a9d2b46146049811648ed06d3  lifecycle-engine.mjs
+2590ce6d3f8ded1b8eebcaaa26f7e77fe5b424b56a64ad2334bb81ab50b9ad5f  server.js
+bd8e6dbd81056caccac4d723c8296ae50499d1a6313242d2b9b1cb425099e15b  SOURCE-PINS.json
+1f5b093a44556a8b0df616f2a731655f416ac62db4e0d6186cf5275b2ddd1b8f  IDENTITY-ADAPTATION.md

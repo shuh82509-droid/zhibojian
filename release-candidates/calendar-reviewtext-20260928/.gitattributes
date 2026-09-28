@@ -1,0 +1,4 @@
+* text eol=lf
+*.js -text whitespace=cr-at-eol
+*.mjs -text whitespace=cr-at-eol
+*.sh -text whitespace=cr-at-eol
