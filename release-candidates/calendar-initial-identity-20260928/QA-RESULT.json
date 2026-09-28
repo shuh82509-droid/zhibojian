@@ -1,0 +1,18 @@
+{
+  "candidateEngineSha256": "54271b172fdf96b903fab2187bc717244422ac02184da45ccb926cf068d95954",
+  "candidateServerSha256": "e345f9f11ff3bd14bd6417b011e9bc584dbcb676efd2acc82d162c0257adc39c",
+  "local": {"tests": 260, "pass": 260, "fail": 0, "skip": 0, "cancelled": 0},
+  "linux": {"tests": 260, "pass": 260, "fail": 0, "skip": 0, "cancelled": 0},
+  "linuxEvidenceSha256": "b3d2c1fe262cc17bee81fb00f51c8d7eb446cc76f11d8c578760644fbcae1727",
+  "composition": {"priorOaRegression": 179, "rootNew": 25, "independentNew": 56},
+  "independentReviewTests": 235,
+  "reviewSha256": "31baa4298427a3ed66b8ef5d697a2604b4fdabb72fde334c1944326e447364af",
+  "linuxImageUsedOnlyAsNodeRunner": "sha256:c9f28e58dbc60568307386769f9dc815267c36038fee33a89708feeb19a1af01",
+  "network": "none",
+  "formalDataVolumeMounted": false,
+  "defaultServerStarted": false,
+  "productionChanged": false,
+  "imageBuilt": false,
+  "realBusinessAcceptancePassed": false,
+  "releaseDecision": "NO-GO; pure-source narrow regression only"
+}
