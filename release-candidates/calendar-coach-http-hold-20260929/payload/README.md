@@ -1,0 +1,15 @@
+# 教练本人日历持久隔离状态消费候选
+
+Source-only release candidate, not a production image or deployment. Requires the exact previously reviewed durable reader 9cbc9be0 plus this coach HTTP wrapper and page together. Installing the wrapper alone against production reader 75067a7f does not implement persistent ambiguity isolation.
+
+The actual production wrapper and page were captured 2026-09-29 01:47 Shanghai under equal before/after selected container/gateway/source metadata: wrapper b4da4dfc (5586 bytes, 65 CRLF + 3 LF), page e8007e50. The whole raw wrapper is preserved; normalization is reversible and proven. Callback HTML/CSP, cookie/route paths, same-origin guard and all bytes outside the page script remain unchanged.
+
+This bounded candidate adds person-field consistency and frozen identity mapping, asynchronous 1500ms identity/status preflights, single-read public status projection, per-person durable-hold handling on start and matched callbacks, fixed own error messages, strict authorized=true success, and fail-closed page buttons/generation checks. No recovery/unlock/consent invitation or expanded identity, calendar, OAuth scope or private-chat route. Async deadlines do not preempt synchronous JavaScript, cancel the underlying read, or make preflights atomic. The reader's lock and durable intent are authoritative.
+
+Run `node qa-entry.mjs` for the explicit SHA-verified tests only. There is no server listener or default application launch. All provider/filesystem/DOM fixtures are synthetic. The entry checks every frozen file, then executes scope, independently authored HTTP and DOM tests and the exact durable-reader integration tests. It does not assert real OA visual acceptance, real OAuth or production runtime integration.
+
+Historical coach-calendar-auth.test.mjs 960441df was preserved unmodified outside this source-only package. Against exact current production source/reader it has 4 pass / 3 fail: one matching-realName/conflicting-name defect; two legacy token fixtures only accept v3 while actual production code exchange already uses v2. These are not removed or rewritten into passing assertions. New independent identity tests cover the real conflict, and actual frozen-reader integration tests exercise v2 PKCE/encrypted storage and durable ambiguity boundaries. This package cannot be described as every historical test passing.
+
+Separate current private-chat reader/wrapper/page audit has 10 checks with 2 positive passes / 8 safety-contract failures. This coach package does not repair private-chat durable rotation, consumer or page. Recruitment 502/96 checks from other frozen candidates are not counted here.
+
+Production deployment remains gated on current complete baseline CAS, real sources/recipients, dormant same-volume writer isolation, fresh stopped backups and verified latest-data-preserving rollback, real OA and old-notification links, and the independent private-chat fix. No production data, grant, source table or notification is written by these files. Real five-stage business completion must remain independently evidenced by the responsible people; tests or sent messages are not completion.
