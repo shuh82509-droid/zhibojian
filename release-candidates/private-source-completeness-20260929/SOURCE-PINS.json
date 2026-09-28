@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "productionDeployable": false,
+  "files": {
+    ".gitattributes": {
+      "bytes": 8,
+      "sha256": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da"
+    },
+    "private-chat-reader.mjs": {
+      "bytes": 27884,
+      "sha256": "0940c0b81b4ae7d17e73962eda36b5b527f86de7211314ea6c68901d304f5272"
+    },
+    "private-source-author.test.mjs": {
+      "bytes": 12019,
+      "sha256": "f0c997ceddd4a7e1a77ef0edf0f93bc789af5001b6dba70922db5a9a31f6decf"
+    },
+    "private-source-counterexamples.test.mjs": {
+      "bytes": 12039,
+      "sha256": "c73e733dd4897e64edf854ad5c5f8fecb709538321be5519eda9b742b3e48536"
+    },
+    "private-source-independent.test.mjs": {
+      "bytes": 17042,
+      "sha256": "fb54b47d43b079729c8d402c63281c6539378cee919406b78e6eb373622e18fa"
+    },
+    "qa-entry.mjs": {
+      "bytes": 5975,
+      "sha256": "1372efb87710ffe51030f9a7c7baf1a28bd29ed1463f65a6085dcd07ec4ee631"
+    },
+    "README.md": {
+      "bytes": 3702,
+      "sha256": "4a7c48e55afe3fd8178f62e2f601c2f51998477053719f97c04eccd1f77cc7dc"
+    }
+  }
+}
