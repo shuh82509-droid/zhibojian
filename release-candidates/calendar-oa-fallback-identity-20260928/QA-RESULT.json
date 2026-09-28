@@ -1,0 +1,52 @@
+{
+  "kind": "isolated-synthetic-source-qa-not-production",
+  "fixtureSnapshotStatus": "final root independently verified all seven source/fixture SHA and Linux179 using frozen reviewerf4dd8a83; earlier174 and first failure evidence retained",
+  "finalReviewerFixtureSha256Expected": "f4dd8a83970732c9aae3e62dd28433abaa0efb0fbb49a73f5ded51362d95b734",
+  "imageUsedOnlyAsNodeRunner": "sha256:c9f28e58dbc60568307386769f9dc815267c36038fee33a89708feeb19a1af01",
+  "platform": "linux/amd64",
+  "nodeVersion": "v22.23.2",
+  "defaultServerEntrypointExecuted": false,
+  "sourceQaDirectory": "/home/brand-marketing/fandow-apps/fd-026222/runtime/calendar-oa-fallback-source-20260928.bGbkRD",
+  "recipe": "run-isolated-qa.sh",
+  "serverSha256": "e345f9f11ff3bd14bd6417b011e9bc584dbcb676efd2acc82d162c0257adc39c",
+  "engineSha256": "d90bbca1858b1131dfdaa8a7d6a81c7a17f305bd51e6a912105cad755b544133",
+  "fixtures": {
+    "oa-fallback.test.mjs": {"sha256":"55a22c5034fac65d58e66e57405d3119b068a404892e31a85733bd55b5eab6e8","tests":66},
+    "oa-identity-readback.test.mjs": {"sha256":"1b3f1769621727c8eeb8044530f20ed28812d917ad2f7c3b1bdcca003764888f","tests":50},
+    "FALLBACK-INDEPENDENT-REVIEW.test.mjs": {"sha256":"f4dd8a83970732c9aae3e62dd28433abaa0efb0fbb49a73f5ded51362d95b734","tests":63}
+  },
+  "tests":179,
+  "pass":179,
+  "fail":0,
+  "skipped":0,
+  "firstAttempt": {"tests":170,"pass":169,"fail":1,"retainedEvidence":"QA-FIRST-FAILURE.txt"},
+  "rootFinalIndependentQa": {
+    "strictSevenFileShaVerifiedBeforeRun":true,
+    "reviewerFixtureSha256":"f4dd8a83970732c9aae3e62dd28433abaa0efb0fbb49a73f5ded51362d95b734",
+    "tests":179,"pass":179,"fail":0,"skipped":0,"cancelled":0,
+    "evidence":"ROOT-LINUX-179-TAP.txt",
+    "evidenceSha256":"ac5f8dd6c858a7b1be417b14dcec05f889e6afa2dd400f1b10d15aa2a81936fd",
+    "previousShaMismatchAttempt":"blocked with exit66 before tests; no completed QA claim"
+  },
+  "priorSuccessfulQaSnapshots": [
+    {"runner":"implementation agent","tests":174,"pass":174,"fail":0,"reviewerFixtureSha256":"41a36ee09bb18274ef34e431492260936737337593c4759e8f407f0a36144b57","evidence":"QA-LINUX-TAP.txt"},
+    {"runner":"root independent","tests":174,"pass":174,"fail":0,"reviewerFixtureSha256":"ba46e0a7355e50cb5aa608de23e04b481b3776f6f9794d5d1115d4f2ee0ffc4c","evidence":"ROOT-LINUX-FINAL-TAP.txt","evidenceSha256":"ca57ed3520a71af003db7e39360b474bbabde0f6b7e6794e15a44e2d56c1a757"}
+  ],
+  "isolation": {
+    "network":"none",
+    "readOnlyRootfs":true,
+    "user":"10001:10001",
+    "capabilities":"ALL dropped",
+    "noNewPrivileges":true,
+    "binds":"this independent QA directory, read-only only",
+    "tmpfs":"empty /tmp only",
+    "formalVolumesOrCredentialsOrSocketMounted":false,
+    "remindersEnv":"false",
+    "schedulerEnv":"0"
+  },
+  "candidateImageBuilt":false,
+  "deployed":false,
+  "gitWritten":false,
+  "realFeishuOrOauthOrUserDataAccessed":false,
+  "productionReleaseDecision":"NO-GO"
+}

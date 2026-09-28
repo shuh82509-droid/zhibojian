@@ -1,0 +1,25 @@
+{
+  "checkedAtUtc": "2026-09-28T10:44:56Z",
+  "resolvedAlias": "live-routes-r6",
+  "runningAliasOwnerCount": 1,
+  "containerId": "3e42689cb3536ab8e541eb5e12d3a02579f65cb76bd00e0fb5aabc5e85ab94d4",
+  "imageId": "sha256:c9f28e58dbc60568307386769f9dc815267c36038fee33a89708feeb19a1af01",
+  "startedAt": "2026-09-28T09:24:34.5305765Z",
+  "running": true,
+  "health": "healthy",
+  "flagsObserved": {
+    "LIFECYCLE_REMINDERS_ENABLED": "false",
+    "LIFECYCLE_REMINDER_LEADER": "false",
+    "LIFECYCLE_SCHEDULER_ENABLED": "0"
+  },
+  "originalServerSha256": "4d1942968455c1f2ad4ed5f0a359802b3036677495cc90b441405c6efb0bf1ef",
+  "originalEngineSha256": "5880b010e1a780dea100ab8b3447fb8603d534901df998ce8abbfa9ade4e9cf0",
+  "candidateServerSha256": "e345f9f11ff3bd14bd6417b011e9bc584dbcb676efd2acc82d162c0257adc39c",
+  "candidateEngineSha256": "d90bbca1858b1131dfdaa8a7d6a81c7a17f305bd51e6a912105cad755b544133",
+  "postQaCheckedAtUtc": "2026-09-28T10:57:41Z",
+  "remoteQaDirectory": "/home/brand-marketing/fandow-apps/fd-026222/runtime/calendar-oa-fallback-source-20260928.bGbkRD",
+  "candidateImageBuilt": false,
+  "productionChanged": false,
+  "gitChanged": false,
+  "feishuOrOauthRequestsMade": false
+}

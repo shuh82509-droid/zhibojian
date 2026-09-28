@@ -1,0 +1,8 @@
+* text eol=lf
+server.js -text
+server.original.js -text
+lifecycle-engine.mjs -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+lifecycle-engine.original.mjs -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+oa-fallback.test.mjs -text
+oa-identity-readback.test.mjs -text
+FALLBACK-INDEPENDENT-REVIEW.test.mjs -text
