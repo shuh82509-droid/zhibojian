@@ -1,0 +1,4 @@
+# Raw source references are evidence, not editable runtime code.
+* text eol=lf
+/base/calendar-user-reader.formal.mjs -text -diff -merge
+/base/calendar-user-reader.original.mjs -text -diff -merge
